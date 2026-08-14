@@ -1,0 +1,3 @@
+APP_NAME = "AdvanCore"
+APP_VERSION = "0.1"
+APP_TITLE = f"{APP_NAME} Platform v{APP_VERSION}"
