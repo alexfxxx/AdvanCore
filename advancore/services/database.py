@@ -2,6 +2,7 @@ import os
 
 from dotenv import load_dotenv
 from sqlalchemy import create_engine, text
+from advancore.models import Base
 
 
 load_dotenv()
@@ -24,3 +25,6 @@ def test_database_connection() -> bool:
         return True
     except Exception:
         return False
+
+def initialize_database() -> None:
+    Base.metadata.create_all(bind=engine)
