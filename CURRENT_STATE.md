@@ -6,10 +6,12 @@ Status date: 2026-08-20
 AdvanCore is currently a small platform-foundation repository rather than a full ERP implementation.
 
 ## Current technology stack
-- Python
-- Streamlit UI
-- SQLAlchemy ORM
-- PostgreSQL target database through DATABASE_URL
+- Python 3.10.9
+- Streamlit 1.61.1
+- SQLAlchemy 2.0.52
+- python-dotenv 1.2.2
+- psycopg 3.3.4
+- PostgreSQL 16 target database through DATABASE_URL
 - Docker local environment
 - GitHub version control
 
@@ -41,9 +43,9 @@ Current SQLAlchemy models include:
 ## Existing repository support
 - Docker compose configuration exists.
 - requirements.txt exists.
-- tests/ exists but appears minimal at this stage.
-- docs/ exists but is effectively empty before the agent-control foundation.
-- .agents and .claude skill directories exist for Streamlit development assistance.
+- tests/ exists but contains only an empty `tests/_init_.py` with a non-standard filename; pytest is not installed in `.venv`.
+- docs/ exists but contains only README placeholders in each subdirectory.
+- `.agents/skills/developing-with-streamlit` is a symlink into `.venv` and points to the Streamlit package's bundled skill.
 
 ## Current maturity assessment
 FACT: This is an early foundation (v0.1 / Gate 0 direction), not yet a transport ERP.
@@ -55,12 +57,14 @@ INFERENCE: Test coverage should be strengthened before agents are allowed to mak
 ## Immediate risks
 1. Autonomous agents could over-expand scope if given open-ended requests.
 2. Schema growth without migrations could become difficult to control.
-3. Minimal tests reduce confidence in automated refactoring.
+3. **No real tests exist** (`tests/_init_.py` is empty and misnamed), reducing confidence in automated refactoring.
 4. Business and compliance rules are not yet represented in a structured approved knowledge system.
+5. `docker-compose.yml` contains a hard-coded local password; production deployments must use injected secrets, not this file.
+6. No migration framework is in place; schema changes currently rely on `Base.metadata.create_all()`.
 
 ## Recommended next sequence
-1. Complete repository audit (TASK-001).
-2. Record architecture map and gaps.
+1. Review and approve the repository audit (TASK-001).
+2. Fix the test package name (`tests/__init__.py`) and install pytest in `.venv`.
 3. Establish migration strategy and baseline tests.
 4. Define core entities and shared conventions.
 5. Implement business modules one bounded task at a time.
