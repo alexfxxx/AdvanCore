@@ -2,34 +2,29 @@
 
 ## Purpose
 
-Prove that the local Agent Runner created in TASK-005 can safely plan a bounded
-worker task and return to the human/reviewer approval gate without committing,
-pushing, merging, or expanding scope.
+Prove that the local Agent Runner created in TASK-005 can safely launch Kimi for one bounded task and return to the human/reviewer approval gate without committing, pushing, merging, or expanding scope.
 
-This is a validation run, not a product-feature task.
+This was a validation run, not a product-feature task.
 
 ## Preconditions
 
-- TASK-005 implemented the `advancore.agent_runner` package on the
-  `agent-control-foundation` branch.
-- The current branch is not `main`.
-- The working tree was clean before the validation artifacts were created; it
-  becomes dirty as soon as the new files are written, which is expected because
-  TASK-006 forbids committing until review.
-- Kimi Code CLI is installed locally and supports the bounded `--prompt`
-  invocation mode validated in TASK-005.
-- The validation task file `tasks/TASK-006-agent-runner-e2e-validation.md`
-  exists and has status `READY`.
+- TASK-005 implemented the `advancore.agent_runner` package on the `agent-control-foundation` branch.
+- The current branch was not `main`.
+- The working tree was clean before execution.
+- Kimi Code CLI was installed locally and supported the bounded `--prompt` invocation mode validated in TASK-005.
+- `tasks/TASK-006-agent-runner-e2e-validation.md` existed locally with status `READY`.
 
 ## Runner invocation
 
-The runner was invoked in dry-run/planning mode for TASK-006 to demonstrate the
-orchestration path and generated worker instruction without triggering a
-recursive worker launch:
+The validation was performed in two stages.
+
+First, planning mode was run:
 
 ```bash
-.venv/bin/python -m advancore.agent_runner plan TASK-006
+.venv/bin/python -m advancore.agent_runner plan TASK-006 --worker kimi
 ```
+
+The runner discovered TASK-006, verified the branch and clean working tree, confirmed `READY` status, generated the bounded worker instruction, and stopped without launching Kimi.
 
 The generated worker instruction was:
 
@@ -43,142 +38,76 @@ Do not commit or push until explicitly approved.
 Stop with the completion report and git status.
 ```
 
-To exercise the Kimi worker adapter boundary, the equivalent execute command
-would be:
+Second, the actual worker path was executed:
 
 ```bash
-.venv/bin/python -m advancore.agent_runner plan TASK-006 --execute --worker kimi
+.venv/bin/python -m advancore.agent_runner plan TASK-006 --worker kimi --execute
 ```
 
-That command is intentionally not run during this supervised validation because
-it would spawn a nested Kimi process with the same task prompt. The plan output
-below confirms the runner reaches the worker boundary safely and stops at the
-approval gate.
+The Agent Runner launched Kimi itself using the bounded worker instruction. Alex did not manually open Kimi or paste the task prompt into a Kimi session.
 
-### Plan output
-
-```text
-================================================================
-AdvanCore Local Agent Runner — Execution Plan
-================================================================
-Task:         TASK-006
-Title:        Agent Runner End-to-End Validation
-Status:       READY
-File:         tasks/TASK-006-agent-runner-e2e-validation.md
-Branch:       agent-control-foundation
-Repo root:    /Users/alex/Documents/GitHub/AdvanCore
-Working tree: dirty
-Uncommitted changes:
-  ?? docs/validation/
-  ?? tests/test_agent_runner_e2e_artifact.py
-----------------------------------------------------------------
-Validation:
-  n/a
-----------------------------------------------------------------
-Worker instruction:
-  Read AGENTS.md.
-
-  Execute tasks/TASK-006-agent-runner-e2e-validation.md completely.
-
-  Do not commit or push until explicitly approved.
-
-  Stop with the completion report and git status.
-----------------------------------------------------------------
-Worker:       dry-run
-Command:      (none)
-----------------------------------------------------------------
-Allowed automatic actions:
-  - Read approved repository files
-  - Parse task metadata
-  - Inspect git status / branch
-  - Generate worker prompt
-Gated actions (require explicit approval):
-  - Commit, push, merge
-  - Destructive Git operations (reset, force push, history rewrite)
-  - Production / destructive database actions
-  - Secret / credential access
-  - Compliance / commercial rule changes
-----------------------------------------------------------------
-Messages:
-  PASS: current branch 'agent-control-foundation' is not 'main'
-  FAIL: working tree has uncommitted changes
-  PASS: task status 'READY' is executable
-  Execution blocked: safety validation failed.
-----------------------------------------------------------------
-Result status: failed
-================================================================
-```
+Kimi completed TASK-006, created the required validation artifact and test, ran the full pytest suite, and stopped without committing or pushing. The outer Agent Runner process then returned control to the normal shell with exit code `0`.
 
 ## Worker boundary
 
-- The worker adapter is `KimiWorkerAdapter`, which builds the command
-  `kimi --prompt <instruction>`.
-- No autonomous flags such as `--auto` or `--yolo` are appended.
-- The worker is asked only to read `AGENTS.md`, execute the single task file,
-  refrain from committing or pushing until explicitly approved, and stop with a
-  completion report and `git status`.
-- Commit, push, merge, destructive Git operations, production/destructive
-database actions, secret access, and compliance/commercial changes remain gated
-and outside the worker's automatic authority.
+- The worker adapter was `KimiWorkerAdapter`, which builds `kimi --prompt <instruction>` using an argument array.
+- No autonomous flags such as `--auto` or `--yolo` were appended.
+- The worker was asked only to read `AGENTS.md`, execute the single task file, refrain from committing or pushing until explicitly approved, and stop with a completion report and `git status`.
+- Commit, push, merge, destructive Git operations, production/destructive database actions, secret access, and compliance/commercial changes remained gated and outside the runner's automatic authority.
 
 ## Validation result
 
-- Task discovery: TASK-006 was found in `tasks/`.
-- Status gate: TASK-006 is `READY`, so execution is allowed.
-- Branch gate: current branch is `agent-control-foundation`, not `main`.
-- Working-tree gate: the runner correctly detected the new uncommitted
-  validation artifacts and blocked automatic launch, demonstrating fail-closed
-  behavior.
-- The runner generated the canonical bounded worker instruction.
-- The full pytest suite passed.
-- No commits, pushes, merges, or destructive actions were performed.
-- The actual TASK-006 work was executed under direct operator supervision; the
-  worker (Kimi) stopped at the human/reviewer approval gate as instructed.
+- Task discovery: PASS — TASK-006 was found in `tasks/`.
+- Status gate: PASS — TASK-006 was `READY`.
+- Branch gate: PASS — current branch was `agent-control-foundation`, not `main`.
+- Working-tree gate before execution: PASS — working tree was clean.
+- Dry-run planning: PASS — worker instruction was generated and Kimi was not launched.
+- Execute path: PASS — the Agent Runner launched Kimi itself with `--execute --worker kimi`.
+- Worker implementation: PASS — Kimi created only the bounded TASK-006 artifacts.
+- Test suite: PASS — `63 passed`.
+- Commit/push gate during worker execution: PASS — Kimi stopped with no commit or push.
+- Outer runner completion: PASS — process returned to the normal shell with exit code `0`.
+- Human-gated commit/push: PASS — only after review did Alex manually commit and push the three TASK-006 files to `agent-control-foundation`.
+
+The first ChatGPT-to-Kimi relay step was therefore successfully automated:
+
+`GitHub READY task -> Local Agent Runner -> Kimi -> implementation/tests -> human/reviewer gate`
 
 ## Safety observations
 
-- The runner defaults to dry-run; the worker is not launched unless the operator
-  explicitly passes `--execute --worker kimi`.
+- The runner defaults to dry-run; worker execution requires explicit `--execute --worker kimi`.
 - `main` is rejected as an execution branch.
-- A dirty working tree blocks launch planning.
+- A dirty working tree blocks a new worker launch.
 - Only tasks with status `READY` or `REWORK` are executable.
-- The worker instruction references the task file by path instead of embedding
-  the full task specification.
-- The validation artifact and its test are deterministic and do not depend on
-  Kimi being installed or on repository state beyond the documented
-  preconditions.
+- Task-file content is treated as metadata/instructions rather than executable shell code.
+- Kimi honored the no-commit/no-push boundary in this supervised run.
+- The outer runner's final approval-state presentation was not sufficiently obvious in the captured terminal output. Although the process returned exit code `0`, a future hardening task should make post-worker status and Git-state verification explicit and durable.
 
 ## Facts
 
 - TASK-005 established a fail-closed local Agent Runner.
-- The runner is dry-run by default.
-- Kimi execution requires explicit `--execute --worker kimi`.
-- Commit, push, merge, destructive Git operations, production/destructive
-database actions, secret access, compliance/commercial changes, and autonomous
-approval remain gated.
+- TASK-006 actually exercised both planning mode and the real Kimi execute path.
+- The runner launched Kimi without Alex manually transferring the task prompt.
+- Kimi completed the task and `63` tests passed.
+- Kimi did not commit or push during worker execution.
+- The outer runner returned exit code `0`.
+- The subsequent TASK-006 commit/push was performed manually after review.
 
 ## Assumptions
 
-- The locally installed Kimi Code CLI continues to support the bounded
-  `--prompt` invocation validated in TASK-005.
-- The operator launching `--execute --worker kimi` supervises the run and
-  reviews the worker output before approving any commit or push.
+- The locally installed Kimi Code CLI continues to support bounded `--prompt` invocation.
+- Until stronger technical enforcement is added, Kimi must continue to honor the no-commit/no-push instruction.
 
 ## Risks / unresolved issues
 
-- The runner's safety depends on the worker honoring the no-commit/no-push
-  instruction. A future task may add an explicit pre- or post-execution Git-state
-  verification step.
-- Worker execution is local and interactive-terminal dependent. Long-running or
-  multi-turn worker sessions are not yet addressed.
-- No audit log of runner invocations exists outside the terminal output.
-- The `IN_PROGRESS` task status is parsed but not executable; the runner does
-  not currently update task status itself.
+- The runner currently depends partly on the worker honoring the no-commit/no-push instruction.
+- Post-worker Git state is not yet independently re-verified and surfaced as a first-class approval artifact.
+- No persistent audit log of runner invocations exists outside terminal output and repository/task records.
+- Final runner state such as `AWAITING_APPROVAL` should be made more explicit in operator-visible output.
+- Long-running or multi-turn worker sessions are not yet addressed.
+- The runner does not yet retrieve/sync new READY tasks from GitHub automatically.
+- Commit/push to the controlled review branch is still manual.
 
 ## Recommended next step
 
-After independent review of TASK-006, use the evidence from this validation run
-to define the next runner hardening step rather than immediately granting broader
-autonomy. Candidate next steps include adding a post-worker Git-state
-verification step or an explicit task-status transition helper, each behind its
-own approval gate.
+Create a bounded runner-hardening task that adds post-worker Git-state verification, a durable local audit record, and explicit approval-state output while keeping commit, push, merge, task-status mutation, production access, secrets, and destructive operations gated.
