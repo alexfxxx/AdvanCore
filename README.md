@@ -61,3 +61,22 @@ The project uses `pytest`. Run the test suite from the repository root with:
 ```
 
 Tests are intentionally isolated: model tests inspect SQLAlchemy metadata without touching a database, and database service tests mock the engine so no real credentials or data are required.
+
+## Database migrations
+
+AdvanCore uses Alembic to version PostgreSQL schema changes. Configuration and workflow details are documented in [`docs/architecture/MIGRATIONS.md`](docs/architecture/MIGRATIONS.md).
+
+Common commands:
+
+```bash
+# Create a migration after changing models
+.venv/bin/alembic revision --autogenerate -m "describe the change"
+
+# Apply migrations
+.venv/bin/alembic upgrade head
+
+# Check current revision
+.venv/bin/alembic current
+```
+
+`DATABASE_URL` is read from the environment (and `.env` in development) so credentials are never committed.
