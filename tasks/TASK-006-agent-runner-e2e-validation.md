@@ -1,6 +1,6 @@
 # TASK-006 — Agent Runner End-to-End Validation
 
-STATUS: READY
+STATUS: APPROVED
 
 ## Purpose
 
@@ -40,20 +40,22 @@ This is a validation task, not a product-feature task.
 - Do not modify database models, migrations, database configuration, ERP modules, or production code.
 - Do not access secrets or credentials.
 - Do not perform network, production, deployment, or destructive actions.
-- Do not commit or push.
+- Do not commit or push during worker execution.
 - Do not merge or modify `main`.
 - Do not create another task.
 - Do not broaden this into an Agent Runner redesign.
 
 ## Acceptance criteria
 
-- `docs/validation/AGENT_RUNNER_E2E.md` exists with all required sections.
-- `tests/test_agent_runner_e2e_artifact.py` exists and passes.
-- Full existing test suite passes.
-- No Agent Runner implementation code changed.
-- No database/model/migration files changed.
-- No commit or push occurred.
-- Worker stops at the human/reviewer approval gate.
+- [x] `docs/validation/AGENT_RUNNER_E2E.md` exists with all required sections.
+- [x] `tests/test_agent_runner_e2e_artifact.py` exists and passes.
+- [x] Full existing test suite passes.
+- [x] No Agent Runner implementation code changed.
+- [x] No database/model/migration files changed.
+- [x] No commit or push occurred during worker execution.
+- [x] Worker stopped at the human/reviewer approval gate.
+- [x] Agent Runner actually launched Kimi through `--execute --worker kimi`.
+- [x] Outer runner returned control to the normal shell with exit code `0`.
 
 ## Reasoning labels
 
@@ -67,33 +69,40 @@ The locally installed Kimi CLI continues to support the bounded `--prompt` invoc
 
 ### INFERENCE
 
-If this task completes through the Agent Runner without manual prompt transfer into Kimi, the first part of the Alex-to-Kimi relay has been successfully automated.
+Because this task completed through the Agent Runner without manual prompt transfer into Kimi, the first part of the Alex-to-Kimi relay has been successfully automated.
 
 ### PROPOSAL
 
-After successful independent review, use the evidence from TASK-006 to define the next runner hardening step rather than immediately granting broader autonomy.
+Use the evidence from TASK-006 to harden post-worker verification and auditability before granting broader autonomy.
 
 ## Completion report
 
 ### Implemented
 
-- Created `docs/validation/AGENT_RUNNER_E2E.md` recording the supervised TASK-006
-  validation run with all required sections.
-- Added `tests/test_agent_runner_e2e_artifact.py` with deterministic tests that
-  verify the validation document exists and contains the required headings.
-- Ran the local Agent Runner in dry-run/planning mode for TASK-006 to confirm
-  task discovery, safety validation, and canonical worker instruction generation.
-- Observed the runner fail closed when the working tree became dirty after
-  creating the new validation files.
-- Executed TASK-006 under direct operator supervision; the worker stopped at the
-  human/reviewer approval gate without committing, pushing, merging, or
-  performing destructive actions.
+- Created `docs/validation/AGENT_RUNNER_E2E.md`.
+- Added `tests/test_agent_runner_e2e_artifact.py`.
+- Ran the Agent Runner first in dry-run mode:
+
+```bash
+.venv/bin/python -m advancore.agent_runner plan TASK-006 --worker kimi
+```
+
+- Then ran the actual worker path:
+
+```bash
+.venv/bin/python -m advancore.agent_runner plan TASK-006 --worker kimi --execute
+```
+
+- The Agent Runner launched Kimi itself. Alex did not manually open Kimi or paste the task prompt into it.
+- Kimi executed the bounded TASK-006 work, ran tests, and stopped without committing or pushing.
+- The outer Agent Runner returned control to the normal shell with exit code `0`.
+- After review, Alex manually committed and pushed the exact TASK-006 changes to `agent-control-foundation`.
 
 ### Files changed
 
 - `docs/validation/AGENT_RUNNER_E2E.md` (new)
 - `tests/test_agent_runner_e2e_artifact.py` (new)
-- `tasks/TASK-006-agent-runner-e2e-validation.md` (completion report section only)
+- `tasks/TASK-006-agent-runner-e2e-validation.md` (completion report)
 
 No Agent Runner implementation code was modified.
 No database models, migrations, ERP modules, or production code were modified.
@@ -108,51 +117,35 @@ None. No model changes or Alembic revisions were introduced.
 .venv/bin/python -m pytest tests/ -v
 ```
 
-Result: **63 passed** (61 pre-existing + 2 new E2E artifact tests).
+Result: **63 passed**.
 
 ### Assumptions
 
-- The locally installed Kimi Code CLI continues to support the bounded
-  `--prompt` invocation validated in TASK-005.
-- The operator launching `--execute --worker kimi` supervises the run and
-  reviews the worker output before approving any commit or push.
+- The locally installed Kimi Code CLI continues to support bounded `--prompt` invocation.
+- Until stronger technical enforcement is added, Kimi continues to honor the no-commit/no-push instruction.
 
 ### Risks / unresolved issues
 
-- The runner's safety depends on the worker honoring the no-commit/no-push
-  instruction. A future task may add an explicit pre- or post-execution Git-state
-  verification step.
-- Worker execution is local and interactive-terminal dependent. Long-running or
-  multi-turn worker sessions are not yet addressed.
-- No audit log of runner invocations exists outside the terminal output.
-- The `IN_PROGRESS` task status is parsed but not executable; the runner does
-  not currently update task status itself.
-- This validation did not execute `--execute --worker kimi` because doing so
-  would recursively spawn a Kimi process with the same TASK-006 prompt.
+- The runner currently depends partly on the worker honoring the no-commit/no-push instruction.
+- Post-worker Git state is not yet independently re-verified and surfaced as a first-class approval artifact.
+- No persistent audit log of runner invocations exists outside terminal output and repository/task records.
+- Final approval-state output should be clearer and more explicit.
+- Long-running or multi-turn worker sessions are not yet addressed.
+- The runner does not yet retrieve/sync READY tasks from GitHub automatically.
+- Commit/push to the controlled review branch is still manual.
 
 ### Decisions required
 
-None required to complete TASK-006.
-
-Optional future decisions:
-
-- Whether to perform a supervised `--execute --worker kimi` run using a
-  non-recursive task payload.
-- Whether to add a post-worker Git-state verification step before owner review.
-- Whether to add an explicit task-status transition helper behind its own
-  approval gate.
+None for TASK-006.
 
 ### Recommended next step
 
-1. Independent review of TASK-006 changes on `agent-control-foundation`.
-2. After approval, a controlled commit/push (still human-gated) of the validation
-   artifact and test.
-3. Use the evidence from this validation to define the next runner hardening
-   step rather than immediately granting broader autonomy.
+Create a bounded runner-hardening task adding post-worker Git-state verification, durable local audit output, and explicit `AWAITING_APPROVAL` presentation while keeping commit, push, merge, task-status mutation, production access, secrets, and destructive operations gated.
 
-### `git status --short`
+### Final validation state
 
-```text
-?? docs/validation/
-?? tests/test_agent_runner_e2e_artifact.py
-```
+- Worker execution: completed successfully.
+- Tests: 63 passed.
+- Worker commit/push: none.
+- Outer runner exit code: 0.
+- Human-gated commit/push: performed only after review.
