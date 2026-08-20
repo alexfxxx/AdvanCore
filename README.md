@@ -51,3 +51,13 @@ Future modules may include:
 ## Status
 
 Gate 0 — Platform foundation setup.
+
+## Running tests
+
+The project uses `pytest`. Run the test suite from the repository root with:
+
+```bash
+.venv/bin/python -m pytest tests/ -v
+```
+
+Tests are intentionally isolated: model tests inspect SQLAlchemy metadata without touching a database, and database service tests mock the engine so no real credentials or data are required.
