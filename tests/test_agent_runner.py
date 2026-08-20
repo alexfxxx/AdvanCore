@@ -26,8 +26,16 @@ from advancore.agent_runner import (
     plan,
     validate,
 )
+import json
+
+from advancore.agent_runner.audit import (
+    AUDIT_FILENAME,
+    AuditWriteError,
+    build_audit_payload,
+    default_audit_dir,
+)
 from advancore.agent_runner.git_info import GitInfo
-from advancore.agent_runner.runner import RunnerStatus
+from advancore.agent_runner.runner import RunnerStatus, verify_post_worker
 from advancore.agent_runner.task import Task, TaskError
 
 
@@ -358,13 +366,19 @@ class TestWorkerAdapterBoundary:
 # ---------------------------------------------------------------------------
 
 
-def _patch_git_info(repo_root: Path, branch: str, clean: bool):
+def _patch_git_info(
+    repo_root: Path,
+    branch: str,
+    clean: bool,
+    head_sha: str = "pre000000000000000000000000000000000000",
+):
     """Return a patch target that replaces ``get_git_info`` with a fake."""
 
     def _fake_get_git_info(cwd=None):
         return GitInfo(
             repo_root=repo_root,
             current_branch=branch,
+            head_sha=head_sha,
             is_clean=clean,
             status_lines=[] if clean else ["?? some-file.py"],
         )
@@ -528,6 +542,7 @@ class TestCLI:
             lambda cwd=None: GitInfo(
                 repo_root=repo_root,
                 current_branch="feature-branch",
+                head_sha="abc1230000000000000000000000000000000000",
                 is_clean=True,
                 status_lines=[],
             ),
@@ -552,6 +567,7 @@ class TestCLI:
             lambda cwd=None: GitInfo(
                 repo_root=repo_root,
                 current_branch="main",
+                head_sha="def4560000000000000000000000000000000000",
                 is_clean=True,
                 status_lines=[],
             ),
@@ -561,3 +577,318 @@ class TestCLI:
 
         code = main(["plan", "TASK-001"])
         assert code == 1
+
+
+# ---------------------------------------------------------------------------
+# Post-worker verification
+# ---------------------------------------------------------------------------
+
+
+def _git_info(
+    repo_root: Path,
+    branch: str = "agent-control-foundation",
+    head_sha: str = "abc1230000000000000000000000000000000000",
+    clean: bool = True,
+    status_lines: list[str] | None = None,
+) -> GitInfo:
+    """Build a ``GitInfo`` snapshot for tests."""
+    return GitInfo(
+        repo_root=repo_root,
+        current_branch=branch,
+        head_sha=head_sha,
+        is_clean=clean,
+        status_lines=status_lines or [],
+    )
+
+
+def _sequence_git_info(*snapshots: GitInfo):
+    """Return a callable that yields successive GitInfo snapshots on each call."""
+    iterator = iter(snapshots)
+
+    def _fake(cwd=None):
+        return next(iterator)
+
+    return _fake
+
+
+def _patch_sequence_git_info(*snapshots: GitInfo):
+    """Patch ``get_git_info`` to return *snapshots* in order."""
+    return patch(
+        "advancore.agent_runner.runner.get_git_info",
+        side_effect=_sequence_git_info(*snapshots),
+    )
+
+
+class TestPostWorkerVerification:
+    def test_passes_when_branch_and_head_unchanged(self, tmp_path: Path):
+        repo_root = tmp_path / "repo"
+        pre = _git_info(repo_root)
+        post = _git_info(repo_root)
+
+        verification = verify_post_worker(pre, post)
+
+        assert verification.ok is True
+        assert "branch 'agent-control-foundation' unchanged" in verification.messages[0]
+        assert "HEAD abc12300 unchanged" in verification.messages[1]
+        assert verification.changed_paths == []
+
+    def test_fails_on_head_movement(self, tmp_path: Path):
+        repo_root = tmp_path / "repo"
+        pre = _git_info(repo_root, head_sha="pre000000000000000000000000000000000000")
+        post = _git_info(repo_root, head_sha="post00000000000000000000000000000000000")
+
+        verification = verify_post_worker(pre, post)
+
+        assert verification.ok is False
+        assert "HEAD moved" in " ".join(verification.messages)
+
+    def test_fails_on_branch_movement(self, tmp_path: Path):
+        repo_root = tmp_path / "repo"
+        pre = _git_info(repo_root, branch="feature-branch")
+        post = _git_info(repo_root, branch="other-branch")
+
+        verification = verify_post_worker(pre, post)
+
+        assert verification.ok is False
+        assert "branch changed" in " ".join(verification.messages)
+
+    def test_fails_when_post_branch_is_main(self, tmp_path: Path):
+        repo_root = tmp_path / "repo"
+        pre = _git_info(repo_root, branch="feature-branch")
+        post = _git_info(repo_root, branch="main")
+
+        verification = verify_post_worker(pre, post)
+
+        assert verification.ok is False
+        assert "post-worker branch is 'main'" in " ".join(verification.messages)
+
+    def test_surfaces_changed_paths(self, tmp_path: Path):
+        repo_root = tmp_path / "repo"
+        pre = _git_info(repo_root)
+        post = _git_info(
+            repo_root,
+            clean=False,
+            status_lines=[" M advancore/agent_runner/runner.py", "?? new-file.txt"],
+        )
+
+        verification = verify_post_worker(pre, post)
+
+        assert verification.ok is True
+        assert verification.changed_paths == [
+            "advancore/agent_runner/runner.py",
+            "new-file.txt",
+        ]
+
+
+class TestRunnerPostWorkerVerification:
+    def test_execute_awaits_approval_with_changed_paths(self, tmp_path: Path):
+        repo_root = tmp_path / "repo"
+        tasks_dir = repo_root / "tasks"
+        tasks_dir.mkdir(parents=True)
+        _write_task(tasks_dir, "TASK-001", "Ready Task", "READY")
+        pre = _git_info(repo_root)
+        post = _git_info(
+            repo_root,
+            clean=False,
+            status_lines=[" M changed.py"],
+        )
+
+        with _patch_sequence_git_info(pre, post):
+            result = execute(tasks_dir, "TASK-001")
+
+        assert result.status == RunnerStatus.AWAITING_APPROVAL
+        assert result.post_verification is not None
+        assert result.post_verification.ok is True
+        assert "changed.py" in result.post_verification.changed_paths
+        assert any("PASS" in msg for msg in result.messages)
+
+    def test_execute_blocks_approval_on_head_movement(self, tmp_path: Path):
+        repo_root = tmp_path / "repo"
+        tasks_dir = repo_root / "tasks"
+        tasks_dir.mkdir(parents=True)
+        _write_task(tasks_dir, "TASK-001", "Ready Task", "READY")
+        pre = _git_info(repo_root, head_sha="pre000000000000000000000000000000000000")
+        post = _git_info(repo_root, head_sha="post00000000000000000000000000000000000")
+
+        with _patch_sequence_git_info(pre, post):
+            result = execute(tasks_dir, "TASK-001")
+
+        assert result.status == RunnerStatus.POST_WORKER_VERIFICATION_FAILED
+        assert result.post_verification.ok is False
+        assert "Approval is blocked" in " ".join(result.messages)
+
+    def test_execute_blocks_approval_on_branch_movement(self, tmp_path: Path):
+        repo_root = tmp_path / "repo"
+        tasks_dir = repo_root / "tasks"
+        tasks_dir.mkdir(parents=True)
+        _write_task(tasks_dir, "TASK-001", "Ready Task", "READY")
+        pre = _git_info(repo_root, branch="feature-branch")
+        post = _git_info(repo_root, branch="other-branch")
+
+        with _patch_sequence_git_info(pre, post):
+            result = execute(tasks_dir, "TASK-001")
+
+        assert result.status == RunnerStatus.POST_WORKER_VERIFICATION_FAILED
+        assert result.post_verification.ok is False
+
+    def test_worker_failure_is_distinct_from_verification_failure(
+        self, tmp_path: Path
+    ):
+        repo_root = tmp_path / "repo"
+        tasks_dir = repo_root / "tasks"
+        tasks_dir.mkdir(parents=True)
+        _write_task(tasks_dir, "TASK-001", "Ready Task", "READY")
+
+        # Worker succeeds, but repository verification fails.
+        pre = _git_info(repo_root, head_sha="pre000000000000000000000000000000000000")
+        post = _git_info(repo_root, head_sha="post00000000000000000000000000000000000")
+        fake = FakeWorkerAdapter(return_success=True)
+        with _patch_sequence_git_info(pre, post):
+            result = execute(tasks_dir, "TASK-001", worker=fake)
+        assert result.worker_result.success is True
+        assert result.status == RunnerStatus.POST_WORKER_VERIFICATION_FAILED
+
+        # Worker fails, but repository verification passes.
+        pre = _git_info(repo_root)
+        post = _git_info(repo_root)
+        fake = FakeWorkerAdapter(return_success=False, return_message="worker error")
+        with _patch_sequence_git_info(pre, post):
+            result = execute(tasks_dir, "TASK-001", worker=fake)
+        assert result.worker_result.success is False
+        assert result.status == RunnerStatus.WORKER_FAILED
+        assert result.post_verification.ok is True
+
+
+# ---------------------------------------------------------------------------
+# Audit records
+# ---------------------------------------------------------------------------
+
+
+class TestAuditRecords:
+    def _load_last_record(self, audit_path: Path) -> dict:
+        lines = audit_path.read_text(encoding="utf-8").strip().splitlines()
+        return json.loads(lines[-1])
+
+    def test_plan_writes_audit_record(self, tmp_path: Path):
+        repo_root = tmp_path / "repo"
+        tasks_dir = repo_root / "tasks"
+        tasks_dir.mkdir(parents=True)
+        _write_task(tasks_dir, "TASK-001", "Ready Task", "READY")
+
+        with _patch_git_info(repo_root, "feature-branch", True):
+            result = plan(tasks_dir, "TASK-001")
+
+        assert result.status == RunnerStatus.PLANNING
+        assert result.audit_path is not None
+        assert result.audit_path.exists()
+        assert result.audit_write_ok is True
+        record = self._load_last_record(result.audit_path)
+        assert record["mode"] == "plan"
+        assert record["task_id"] == "TASK-001"
+        assert record["task_filename"] == "TASK-001-sample-task.md"
+        assert record["final_status"] == "planning"
+        assert record["worker_success"] is None
+        assert record["post_verification_ok"] is None
+        assert record["post_head"] is None
+
+    def test_execute_writes_audit_record_with_post_verification(
+        self, tmp_path: Path
+    ):
+        repo_root = tmp_path / "repo"
+        tasks_dir = repo_root / "tasks"
+        tasks_dir.mkdir(parents=True)
+        _write_task(tasks_dir, "TASK-001", "Ready Task", "READY")
+        pre = _git_info(repo_root)
+        post = _git_info(
+            repo_root,
+            clean=False,
+            status_lines=[" M changed.py"],
+        )
+
+        with _patch_sequence_git_info(pre, post):
+            result = execute(tasks_dir, "TASK-001")
+
+        assert result.status == RunnerStatus.AWAITING_APPROVAL
+        assert result.audit_path is not None
+        record = self._load_last_record(result.audit_path)
+        assert record["mode"] == "execute"
+        assert record["post_verification_ok"] is True
+        assert record["worker_success"] is True
+        assert record["changed_paths"] == ["changed.py"]
+        assert record["pre_head"] == pre.head_sha
+        assert record["post_head"] == post.head_sha
+
+    def test_audit_record_contains_only_safe_fields(self, tmp_path: Path):
+        repo_root = tmp_path / "repo"
+        tasks_dir = repo_root / "tasks"
+        tasks_dir.mkdir(parents=True)
+        _write_task(
+            tasks_dir,
+            "TASK-001",
+            "Ready Task",
+            "READY",
+            content="Business secret: password=abc token=xyz",
+        )
+
+        with _patch_git_info(repo_root, "feature-branch", True):
+            result = plan(tasks_dir, "TASK-001")
+
+        record = self._load_last_record(result.audit_path)
+        expected_keys = {
+            "timestamp",
+            "task_id",
+            "task_filename",
+            "mode",
+            "worker_type",
+            "branch",
+            "pre_head",
+            "post_head",
+            "pre_validation_ok",
+            "worker_success",
+            "post_verification_ok",
+            "final_status",
+            "changed_paths",
+        }
+        assert set(record.keys()) == expected_keys
+        raw = json.dumps(record)
+        assert "password" not in raw.lower()
+        assert "token" not in raw.lower()
+        assert "secret" not in raw.lower()
+        assert "Business secret" not in raw
+
+    def test_audit_write_failure_is_reported(self, tmp_path: Path):
+        repo_root = tmp_path / "repo"
+        tasks_dir = repo_root / "tasks"
+        tasks_dir.mkdir(parents=True)
+        _write_task(tasks_dir, "TASK-001", "Ready Task", "READY")
+
+        with _patch_git_info(repo_root, "feature-branch", True):
+            with patch(
+                "advancore.agent_runner.runner.write_audit_record"
+            ) as mock_write:
+                mock_write.side_effect = AuditWriteError("disk full")
+                result = plan(tasks_dir, "TASK-001")
+
+        assert result.status == RunnerStatus.PLANNING
+        assert result.audit_write_ok is False
+        assert "disk full" in " ".join(result.messages)
+
+    def test_audit_payload_helper_returns_expected_shape(self):
+        payload = build_audit_payload(
+            task_id="TASK-001",
+            task_filename="TASK-001.md",
+            mode="execute",
+            worker_type="dry-run",
+            branch="feature",
+            pre_head="pre",
+            post_head="post",
+            pre_validation_ok=True,
+            worker_success=True,
+            post_verification_ok=True,
+            final_status="awaiting_approval",
+            changed_paths=["a.py"],
+        )
+        assert payload["task_id"] == "TASK-001"
+        assert payload["mode"] == "execute"
+        assert payload["changed_paths"] == ["a.py"]
+        assert "timestamp" in payload

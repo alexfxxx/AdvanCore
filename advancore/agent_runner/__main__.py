@@ -14,7 +14,7 @@ from advancore.agent_runner.runner import RunnerResult, RunnerStatus, execute, p
 from advancore.agent_runner.worker import DryRunWorkerAdapter, KimiWorkerAdapter
 
 
-def _format_plan(result: RunnerResult) -> str:
+def _format_result(result: RunnerResult) -> str:
     lines: list[str] = []
     lines.append("=" * 64)
     lines.append("AdvanCore Local Agent Runner — Execution Plan")
@@ -28,18 +28,21 @@ def _format_plan(result: RunnerResult) -> str:
     else:
         lines.append("Task:         n/a")
 
-    if result.git_info:
-        lines.append(f"Branch:       {result.git_info.current_branch}")
-        lines.append(f"Repo root:    {result.git_info.repo_root}")
+    git_info = result.pre_git_info or result.git_info
+    if git_info:
+        lines.append(f"Branch:       {git_info.current_branch}")
+        lines.append(f"HEAD:         {git_info.head_sha}")
+        lines.append(f"Repo root:    {git_info.repo_root}")
         lines.append(
-            f"Working tree: {'clean' if result.git_info.is_clean else 'dirty'}"
+            f"Working tree: {'clean' if git_info.is_clean else 'dirty'}"
         )
-        if result.git_info.status_lines:
-            lines.append("Uncommitted changes:")
-            for status_line in result.git_info.status_lines:
+        if git_info.status_lines:
+            lines.append("Pre-worker uncommitted changes:")
+            for status_line in git_info.status_lines:
                 lines.append(f"  {status_line}")
     else:
         lines.append("Branch:       n/a")
+        lines.append("HEAD:         n/a")
         lines.append("Repo root:    n/a")
 
     lines.append("-" * 64)
@@ -70,8 +73,10 @@ def _format_plan(result: RunnerResult) -> str:
     lines.append("Allowed automatic actions:")
     lines.append("  - Read approved repository files")
     lines.append("  - Parse task metadata")
-    lines.append("  - Inspect git status / branch")
+    lines.append("  - Inspect git status / branch / HEAD")
     lines.append("  - Generate worker prompt")
+    lines.append("  - Capture pre/post Git snapshots")
+    lines.append("  - Write local audit record")
     lines.append("Gated actions (require explicit approval):")
     lines.append("  - Commit, push, merge")
     lines.append("  - Destructive Git operations (reset, force push, history rewrite)")
@@ -79,17 +84,20 @@ def _format_plan(result: RunnerResult) -> str:
     lines.append("  - Secret / credential access")
     lines.append("  - Compliance / commercial rule changes")
 
-    lines.append("-" * 64)
-    lines.append("Messages:")
-    if result.messages:
-        for msg in result.messages:
+    if result.post_verification:
+        lines.append("-" * 64)
+        lines.append("Post-worker verification:")
+        status = "PASS" if result.post_verification.ok else "FAIL"
+        lines.append(f"  Result: {status}")
+        for msg in result.post_verification.messages:
             lines.append(f"  {msg}")
-    else:
-        lines.append("  (none)")
+        if result.post_verification.changed_paths:
+            lines.append("  Changed paths:")
+            for changed_path in result.post_verification.changed_paths:
+                lines.append(f"    {changed_path}")
 
-    lines.append("-" * 64)
-    lines.append(f"Result status: {result.status.value}")
     if result.worker_result:
+        lines.append("-" * 64)
         lines.append("Worker result:")
         lines.append(f"  success: {result.worker_result.success}")
         lines.append(f"  message: {result.worker_result.message}")
@@ -101,6 +109,27 @@ def _format_plan(result: RunnerResult) -> str:
             lines.append("  stderr:")
             for line in result.worker_result.stderr.splitlines():
                 lines.append(f"    {line}")
+
+    lines.append("-" * 64)
+    lines.append("Messages:")
+    if result.messages:
+        for msg in result.messages:
+            lines.append(f"  {msg}")
+    else:
+        lines.append("  (none)")
+
+    lines.append("-" * 64)
+    lines.append(f"Result status: {result.status.value}")
+
+    if result.audit_path:
+        rel_path = result.audit_path.relative_to(
+            (result.pre_git_info or result.git_info).repo_root
+        )
+        lines.append(f"Audit record: {rel_path}")
+    elif not result.audit_write_ok:
+        lines.append("Audit record: NOT WRITTEN")
+        if result.audit_write_error:
+            lines.append(f"  error: {result.audit_write_error}")
 
     lines.append("=" * 64)
     return "\n".join(lines)
@@ -139,9 +168,13 @@ def main(argv: list[str] | None = None) -> int:
     else:
         result = plan(tasks_dir, args.task_id, worker=worker)
 
-    print(_format_plan(result))
+    print(_format_result(result))
 
-    if result.status in (RunnerStatus.FAILED, RunnerStatus.WORKER_FAILED):
+    if result.status in (
+        RunnerStatus.FAILED,
+        RunnerStatus.WORKER_FAILED,
+        RunnerStatus.POST_WORKER_VERIFICATION_FAILED,
+    ):
         return 1
     return 0
 

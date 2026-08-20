@@ -6,6 +6,9 @@ __pycache__/
 .venv/
 *.pyc
 
+# Local agent-runner audit records
+.agent_runner/
+
 # C extensions
 *.so
 

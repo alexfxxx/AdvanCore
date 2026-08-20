@@ -11,7 +11,13 @@ gated for explicit human approval.
 """
 
 from advancore.agent_runner.git_info import GitInfo, get_git_info
-from advancore.agent_runner.runner import RunnerResult, RunnerStatus, execute, plan
+from advancore.agent_runner.runner import (
+    PostWorkerVerification,
+    RunnerResult,
+    RunnerStatus,
+    execute,
+    plan,
+)
 from advancore.agent_runner.task import Task, TaskError, discover_tasks, find_task, parse_task
 from advancore.agent_runner.validation import ValidationResult, validate
 from advancore.agent_runner.worker import (
@@ -24,6 +30,7 @@ from advancore.agent_runner.worker import (
 
 __all__ = [
     "GitInfo",
+    "PostWorkerVerification",
     "RunnerResult",
     "RunnerStatus",
     "Task",

@@ -1,6 +1,6 @@
 # TASK-007 — Runner Post-Worker Verification and Audit Hardening
 
-STATUS: READY
+STATUS: COMPLETE
 
 ## Objective
 
@@ -139,18 +139,75 @@ None required to begin.
 
 ### Implemented
 
+- Added `head_sha` to `GitInfo` and captured it via `git rev-parse HEAD`.
+- Introduced `PostWorkerVerification` in `runner.py` to compare pre- and post-worker Git snapshots.
+- Added independent verification that branch is unchanged, branch is not `main`, and HEAD SHA is unchanged after the worker exits.
+- Kept worker success/failure separate from repository-safety verification; worker success cannot override a failed verification.
+- Added `POST_WORKER_VERIFICATION_FAILED` runner status.
+- Created `advancore/agent_runner/audit.py` for durable JSON Lines audit records under `.agent_runner/audit/runner.jsonl`.
+- Both `plan()` and `execute()` now write a local audit record with safe metadata only.
+- Audit-write failures are reported explicitly without silently masking the runner's primary status.
+- Updated CLI output to show HEAD, post-worker verification result, changed paths, audit path, and a clear `awaiting_approval` status.
+- Added `.agent_runner/` to `.gitignore`.
+- Updated `docs/architecture/AGENT_RUNNER.md`.
+- Added `docs/decisions/ADR-004-runner-post-worker-verification-audit.md`.
+
 ### Files changed
+
+- `.gitignore`
+- `advancore/agent_runner/__init__.py`
+- `advancore/agent_runner/__main__.py`
+- `advancore/agent_runner/audit.py` (new)
+- `advancore/agent_runner/git_info.py`
+- `advancore/agent_runner/runner.py`
+- `docs/architecture/AGENT_RUNNER.md`
+- `docs/decisions/ADR-004-runner-post-worker-verification-audit.md` (new)
+- `tests/test_agent_runner.py`
+- `tasks/TASK-007-runner-post-worker-verification-audit.md`
 
 ### Database changes
 
+None.
+
 ### Tests and results
+
+- Added `TestPostWorkerVerification` covering unchanged state, HEAD movement, branch movement, post-worker `main`, and changed-path surfacing.
+- Added `TestRunnerPostWorkerVerification` covering end-to-end `AWAITING_APPROVAL`, blocked approval on HEAD/branch movement, and distinct handling of worker vs verification failure.
+- Added `TestAuditRecords` covering audit creation for `plan` and `execute`, safe field coverage, exclusion of sensitive content, and explicit audit-write failure reporting.
+- Updated existing tests for the new `GitInfo` field and audit behaviour.
+- Full suite: `77 passed`.
 
 ### Assumptions
 
+- `git status --porcelain` lines use standard two-character status codes followed by a space, so changed paths are extracted from index 3 onward.
+- Audit records are stored locally in JSON Lines format; a remote or database-backed audit store is out of scope.
+- Audit-write failure is reported but does not change the runner's primary status.
+
 ### Risks / unresolved issues
+
+- A worker could still create untracked files or make working-tree changes; the runner surfaces these but does not auto-clean or stash them.
+- Audit records are local and not tamper-evident; future work may add integrity protections if required.
+- The runner does not detect all possible repository mutations (e.g., tags, refs, staged changes that preserve HEAD); the current checks cover branch and HEAD movement, which are the highest-risk cases.
 
 ### Decisions required
 
+None.
+
 ### Recommended next step
 
+- Review the changes, then approve commit/push separately.
+- Consider a future task to surface the audit log via a CLI `audit` or `status` subcommand.
+
 ### `git status --short`
+
+```
+ M .gitignore
+ M advancore/agent_runner/__init__.py
+ M advancore/agent_runner/__main__.py
+ M advancore/agent_runner/git_info.py
+ M advancore/agent_runner/runner.py
+ M docs/architecture/AGENT_RUNNER.md
+ M tests/test_agent_runner.py
+?? advancore/agent_runner/audit.py
+?? docs/decisions/ADR-004-runner-post-worker-verification-audit.md
+```

@@ -2,7 +2,7 @@
 
 **Date:** 2026-08-20  
 **Branch:** `agent-control-foundation`  
-**Task:** TASK-005 — Local Agent Runner / Orchestrator Foundation
+**Task:** TASK-005 / TASK-007 — Local Agent Runner / Orchestrator Foundation and Post-Worker Verification
 
 ---
 
@@ -25,7 +25,7 @@ resetting, merging, or broadening scope.
 ```
 ┌─────────────────┐     ┌──────────────────┐     ┌─────────────────┐
 │   CLI / API     │────▶│  Task discovery  │────▶│  Git inspection │
-│  (plan/execute) │     │  (tasks/*.md)    │     │ (read-only)     │
+│  (plan/execute) │     │  (tasks/*.md)    │     │ (pre, read-only)│
 └─────────────────┘     └──────────────────┘     └─────────────────┘
                                                         │
                         ┌──────────────────┐           ▼
@@ -35,9 +35,15 @@ resetting, merging, or broadening scope.
                                 │
                                 ▼
                         ┌──────────────────┐
-                        │  RunnerResult    │
-                        │  + approval gate │
+                        │ Post-worker Git  │
+                        │   inspection     │
                         └──────────────────┘
+                                │
+                                ▼
+                        ┌──────────────────┐     ┌──────────────┐
+                        │  RunnerResult    │────▶│ Local audit  │
+                        │  + approval gate │     │  (.jsonl)    │
+                        └──────────────────┘     └──────────────┘
 ```
 
 ---
@@ -47,10 +53,11 @@ resetting, merging, or broadening scope.
 | Module | Responsibility |
 |--------|---------------|
 | `advancore/agent_runner/task.py` | Task-file discovery, parsing, and deterministic selection by ID or path. |
-| `advancore/agent_runner/git_info.py` | Safe, read-only Git introspection: repo root, current branch, working-tree cleanliness. |
-| `advancore/agent_runner/validation.py` | Fail-closed safety validation: branch, working tree, task status. |
+| `advancore/agent_runner/git_info.py` | Safe, read-only Git introspection: repo root, current branch, HEAD SHA, working-tree cleanliness. |
+| `advancore/agent_runner/validation.py` | Fail-closed pre-flight validation: branch, working tree, task status. |
 | `advancore/agent_runner/worker.py` | Worker adapter interface, Kimi adapter, dry-run adapter, and canonical instruction builder. |
-| `advancore/agent_runner/runner.py` | Orchestration: `plan()` (dry-run) and `execute()` (opt-in worker launch). |
+| `advancore/agent_runner/runner.py` | Orchestration, post-worker verification, and `plan()` / `execute()` entry points. |
+| `advancore/agent_runner/audit.py` | Durable local JSON Lines audit records under `.agent_runner/audit/`. |
 | `advancore/agent_runner/__main__.py` | CLI entry point: `python -m advancore.agent_runner plan TASK-005`. |
 
 ---
@@ -91,7 +98,30 @@ A `ValidationResult` is truthy only when:
 - task status is in `{READY, REWORK}`.
 
 Any failure produces a clear message and the runner stops before launching the
-worker.
+worker. `execute()` additionally captures a pre-worker Git snapshot (branch and
+HEAD SHA) so the runner can verify repository state independently after the
+worker exits.
+
+### Post-worker verification
+
+After the worker exits, `execute()` captures a second Git snapshot and compares
+it to the pre-worker snapshot. Approval is blocked unless:
+
+- the branch is unchanged,
+- the branch is not `main`,
+- the HEAD SHA is unchanged.
+
+Changed paths are surfaced clearly. Worker success is never allowed to override
+a failed repository-safety check.
+
+### Local audit records
+
+Every `plan()` and `execute()` invocation appends one JSON Lines record to
+`.agent_runner/audit/runner.jsonl`. The record contains only safe metadata:
+timestamp, task ID/filename, mode, worker type, branch, pre/post HEAD, pre-flight
+validation result, worker result, post-worker verification result, final status,
+and changed paths. No credentials, environment dumps, full task bodies, or
+worker transcripts are stored. Audit-write failures are reported explicitly.
 
 ---
 
@@ -179,11 +209,13 @@ them the runner only inspects and plans.
 - `WORKER_LAUNCHED` — worker process started.
 - `WORKER_COMPLETED` — worker finished successfully.
 - `WORKER_FAILED` — worker returned an error.
-- `AWAITING_APPROVAL` — worker completed; results await owner/reviewer approval.
+- `POST_WORKER_VERIFICATION_FAILED` — worker ran but repository state changed unexpectedly.
+- `AWAITING_APPROVAL` — worker completed and repository verification passed; results await owner/reviewer approval.
 - `FAILED` — validation or discovery failed.
 
-A `RunnerResult` carries the task, Git snapshot, validation, worker instruction,
-worker result, and human-readable messages. This makes every invocation
+A `RunnerResult` carries the task, pre- and post-worker Git snapshots,
+validation, worker instruction, worker result, post-worker verification, audit
+path/write status, and human-readable messages. This makes every invocation
 auditable and easy to test.
 
 ---
@@ -197,6 +229,10 @@ auditable and easy to test.
 - Worker adapters are tested with fakes and with the dry-run adapter.
 - The Kimi adapter is verified to build a safe command and to fail gracefully
   when the executable is missing; it is not invoked during tests.
+- Post-worker verification is tested for unchanged state, HEAD movement,
+  branch movement, and changed-path surfacing.
+- Audit records are tested for creation, safe field coverage, exclusion of
+  sensitive content, and explicit write-failure reporting.
 - CLI tests patch `get_git_info` directly and verify exit codes.
 
 ---
@@ -206,13 +242,15 @@ auditable and easy to test.
 | Threat | Mitigation |
 |--------|-----------|
 | Accidental commit/push | Worker instruction forbids it; runner has no commit/push/merge commands. |
-| Running on `main` | Validation rejects `main` branch. |
+| Running on `main` | Validation rejects `main` branch; post-worker verification rejects `main`. |
 | Dirty-tree surprises | Validation requires a clean working tree. |
+| Unexpected branch/HEAD movement | Post-worker verification fails closed and blocks approval. |
 | Wrong task executed | Task is selected deterministically by ID/path; ambiguous matches fail. |
-| Secret leakage | Runner never reads `.env` or credentials; no secrets in logs. |
+| Secret leakage | Runner never reads `.env` or credentials; audit stores only safe metadata. |
 | Production DB changes | Runner never runs migrations or destructive DB commands. |
 | Unattended autonomous mode | `--auto` / `--yolo` Kimi flags are not used. |
 | Hard-coded worker coupling | `WorkerAdapter` interface lets Kimi be replaced later. |
+| Silent audit failure | Audit-write errors are reported explicitly in runner output. |
 
 ---
 
@@ -235,6 +273,9 @@ auditable and easy to test.
 - `main` branch and dirty working trees are rejected.
 - Only `READY` and `REWORK` task statuses are executable.
 - Kimi Code supports `kimi --prompt <instruction>` for non-interactive prompts.
+- `execute()` captures pre- and post-worker Git snapshots including branch and HEAD SHA.
+- Worker success cannot override a failed post-worker repository verification.
+- Every `plan()` and `execute()` invocation writes a JSON Lines audit record under `.agent_runner/audit/`.
 
 ### ASSUMPTION
 

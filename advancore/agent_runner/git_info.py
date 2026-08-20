@@ -17,6 +17,7 @@ class GitInfo:
 
     repo_root: Path
     current_branch: str
+    head_sha: str
     is_clean: bool
     status_lines: list[str]
 
@@ -48,12 +49,14 @@ def get_git_info(cwd: Path | None = None) -> GitInfo:
     """
     repo_root = Path(_run_git(["rev-parse", "--show-toplevel"], cwd=cwd).strip())
     current_branch = _run_git(["branch", "--show-current"], cwd=repo_root).strip()
+    head_sha = _run_git(["rev-parse", "HEAD"], cwd=repo_root).strip()
     status_output = _run_git(["status", "--porcelain"], cwd=repo_root)
     status_lines = [line for line in status_output.splitlines() if line.strip()]
 
     return GitInfo(
         repo_root=repo_root,
         current_branch=current_branch,
+        head_sha=head_sha,
         is_clean=len(status_lines) == 0,
         status_lines=status_lines,
     )
