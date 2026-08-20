@@ -258,24 +258,127 @@ If Kimi CLI cannot be invoked safely/non-interactively using documented local ca
 ## Completion report
 ### Implemented
 
+- Created the `advancore.agent_runner` package as the first local orchestration control plane.
+- Implemented task-file discovery and parsing under `advancore/agent_runner/task.py`:
+  - extracts task ID, title, and status from `tasks/TASK-###-name.md` files,
+  - rejects ambiguous or malformed task files,
+  - supports selection by task ID or path.
+- Implemented safe, read-only Git introspection under `advancore/agent_runner/git_info.py`:
+  - repo root detection, current branch, working-tree cleanliness.
+- Implemented fail-closed safety validation under `advancore/agent_runner/validation.py`:
+  - rejects `main` branch,
+  - rejects dirty working trees,
+  - rejects non-READY/non-REWORK task statuses.
+- Implemented a replaceable worker adapter boundary under `advancore/agent_runner/worker.py`:
+  - `WorkerAdapter` abstract interface,
+  - `DryRunWorkerAdapter` (default, no side effects),
+  - `KimiWorkerAdapter` using the documented `kimi --prompt <instruction>` mode,
+  - canonical bounded worker instruction builder.
+- Implemented orchestration under `advancore/agent_runner/runner.py`:
+  - `plan()` for dry-run planning,
+  - `execute()` for opt-in worker launch,
+  - explicit `RunnerResult` / `RunnerStatus` state model.
+- Implemented CLI entry point `python -m advancore.agent_runner plan TASK-005` with `--execute` and `--worker` opt-in flags.
+- Added 40 automated tests covering task parsing, status gating, branch gating, working-tree gating, prompt generation, dry-run safety, worker adapter boundary, runner plan/execute, and CLI behavior.
+- Added architecture documentation in `docs/architecture/AGENT_RUNNER.md`.
+- Added ADR in `docs/decisions/ADR-003-agent-runner-fail-closed.md` recording the fail-closed permission model and replaceable worker-adapter decision.
+
 ### Files changed
+
+- `advancore/agent_runner/__init__.py` (new)
+- `advancore/agent_runner/task.py` (new)
+- `advancore/agent_runner/git_info.py` (new)
+- `advancore/agent_runner/validation.py` (new)
+- `advancore/agent_runner/worker.py` (new)
+- `advancore/agent_runner/runner.py` (new)
+- `advancore/agent_runner/__main__.py` (new)
+- `tests/test_agent_runner.py` (new)
+- `docs/architecture/AGENT_RUNNER.md` (new)
+- `docs/decisions/ADR-003-agent-runner-fail-closed.md` (new)
+- `tasks/TASK-005-local-agent-runner-foundation.md` (completion report section only)
+
+No existing application, model, or service files were modified.
 
 ### Git / repository behavior
 
+- All work is on `agent-control-foundation`.
+- `main` is untouched.
+- No merge, reset, forced checkout, force-push, branch deletion, or history rewrite was performed.
+- The runner uses only read-only Git commands (`git rev-parse --show-toplevel`, `git branch --show-current`, `git status --porcelain`) in planning mode.
+- Working tree is currently dirty because the new files above are not yet committed.
+
 ### Database changes
+
+None. No model changes or Alembic revisions were introduced.
 
 ### Tests and results
 
+```bash
+.venv/bin/python -m pytest tests/ -v
+```
+
+Result: **61 passed** (40 new agent-runner tests + 21 existing tests).
+
+Sanity checks:
+
+```bash
+.venv/bin/python -m advancore.agent_runner --help
+.venv/bin/python -m advancore.agent_runner plan TASK-005
+```
+
+Both run successfully. The plan command correctly reports a dirty working tree and blocks execution.
+
 ### Kimi CLI capability findings
+
+- Kimi Code CLI is installed at `/Users/alex/.kimi-code/bin/kimi`.
+- `kimi --help` documents a non-interactive, single-prompt mode: `kimi --prompt <prompt>`.
+- The runner's `KimiWorkerAdapter` uses only this documented mode. It does not add `--auto`, `--yolo`, or other autonomous flags.
+- The adapter is available behind the explicit opt-in `--worker kimi --execute` flags. Default behavior remains dry-run.
 
 ### Allowed automatic actions
 
+The runner foundation may automatically perform only low-risk inspection/planning actions:
+
+- Read approved repository files (task files, AGENTS.md).
+- Parse task metadata.
+- Inspect `git status` / branch.
+- Generate a worker prompt.
+- Run its own isolated automated tests when explicitly invoked during development.
+
 ### Gated actions
+
+The following remain gated and are not automated by TASK-005:
+
+- Committing, pushing, merging.
+- Destructive Git operations (reset, forced checkout, force push, branch deletion, history rewrite).
+- Production / destructive database actions.
+- Secret / credential access.
+- Compliance / commercial rule changes.
+- Autonomous approval of completed work.
 
 ### Assumptions
 
+- The local Kimi Code CLI's `--prompt` mode remains a suitable bounded invocation for single-task development work.
+- Future tasks will define additional approval gates before any commit/push automation is added.
+- Task files continue to use the `TASK-###-name.md` naming and `STATUS: <value>` metadata convention.
+
 ### Risks / unresolved issues
+
+- The runner's safety depends on the worker honoring the no-commit/no-push instruction. A future task may add an explicit pre- or post-execution Git-state verification step.
+- Worker execution is local and interactive-terminal dependent. Long-running or multi-turn worker sessions are not yet addressed.
+- No audit log of runner invocations exists outside the terminal output.
+- The `IN_PROGRESS` task status is parsed but not executable; the runner does not currently update task status itself.
 
 ### Decisions required
 
+None required to complete TASK-005. Optional future decisions:
+
+- Whether to add a status-update helper for task files (READY -> IN_PROGRESS -> REVIEW) and the approval gate around it.
+- Whether to add post-worker Git-state verification before owner review.
+- Whether to support additional worker adapters or remote/cloud runners.
+
 ### Recommended next step
+
+1. Owner/reviewer review of TASK-005 changes on `agent-control-foundation`.
+2. After approval, a controlled commit/push (still human-gated) of the runner foundation.
+3. A follow-up task to exercise the runner end-to-end on a small, safe task with explicit `--execute --worker kimi` opt-in, under close supervision.
