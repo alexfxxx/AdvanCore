@@ -44,6 +44,13 @@ resetting, merging, or broadening scope.
                         │  RunnerResult    │────▶│ Local audit  │
                         │  + approval gate │     │  (.jsonl)    │
                         └──────────────────┘     └──────────────┘
+                                │
+                                ▼
+                        ┌──────────────────┐
+                        │  Review bundle   │
+                        │  (.agent_runner/ │
+                        │     review/)     │
+                        └──────────────────┘
 ```
 
 ---
@@ -58,8 +65,9 @@ resetting, merging, or broadening scope.
 | `advancore/agent_runner/worker.py` | Worker adapter interface, Kimi adapter, dry-run adapter, and canonical instruction builder. |
 | `advancore/agent_runner/runner.py` | Orchestration, post-worker verification, and `plan()` / `execute()` entry points. |
 | `advancore/agent_runner/audit.py` | Durable local JSON Lines audit records under `.agent_runner/audit/`. |
+| `advancore/agent_runner/review_bundle.py` | Controller review bundle model, serializer, builder, writer, loader, and inspection formatter. |
 | `advancore/agent_runner/lifecycle.py` | Task-status enum, actor-role enum, transition matrix, and authority-aware status update helper. |
-| `advancore/agent_runner/__main__.py` | CLI entry point: `python -m advancore.agent_runner plan TASK-005` or `transition TASK-009 --to ...`. |
+| `advancore/agent_runner/__main__.py` | CLI entry point: `python -m advancore.agent_runner plan TASK-005`, `transition TASK-009 --to ...`, or `review-bundle show`. |
 
 ---
 
@@ -127,6 +135,46 @@ timestamp, task ID/filename, mode, worker type, branch, pre/post HEAD, pre-fligh
 validation result, worker result, post-worker verification result, final status,
 and changed paths. No credentials, environment dumps, full task bodies, or
 worker transcripts are stored. Audit-write failures are reported explicitly.
+
+### Controller review bundles
+
+After every `execute()` invocation that reaches post-worker verification, the
+runner writes a deterministic, machine-readable JSON review bundle under
+`.agent_runner/review/`. The bundle is designed for independent controller/reviewer
+handoff and contains only bounded review metadata:
+
+- timestamp,
+- task ID and filename,
+- task lifecycle status when available,
+- branch, pre-worker HEAD, and post-worker HEAD,
+- runner final status,
+- worker type and worker success,
+- post-worker verification result and messages,
+- exact changed paths,
+- concise diff summary/statistics,
+- audit-record reference,
+- recommended controller action.
+
+The recommended action is derived from runner evidence only and may be one of:
+
+- `REVIEW` — worker succeeded and post-worker verification passed.
+- `REWORK` — worker failed but repository verification remained safe.
+- `BLOCKED` — repository safety verification failed or review evidence could not
+  be produced reliably.
+
+The bundle must never recommend or assert `APPROVED`. It also excludes
+credentials, environment dumps, connection strings, the full task body, full
+worker transcripts, customer/business data, and arbitrary command output.
+Bundle-write failures are reported explicitly and do not silently disappear.
+
+Inspect a bundle with:
+
+```bash
+.venv/bin/python -m advancore.agent_runner review-bundle show
+.venv/bin/python -m advancore.agent_runner review-bundle show path/to/bundle.json
+```
+
+The `show` command is read-only and never mutates repository state.
 
 ---
 
@@ -214,6 +262,18 @@ Apply the transition explicitly:
 .venv/bin/python -m advancore.agent_runner transition TASK-009 --to IN_PROGRESS --actor worker --apply
 ```
 
+Inspect the latest review bundle:
+
+```bash
+.venv/bin/python -m advancore.agent_runner review-bundle show
+```
+
+Inspect a specific review bundle:
+
+```bash
+.venv/bin/python -m advancore.agent_runner review-bundle show .agent_runner/review/20260820T120000_TASK-010.json
+```
+
 ---
 
 ## 8. Task lifecycle state model
@@ -288,6 +348,9 @@ auditable and easy to test.
   branch movement, and changed-path surfacing.
 - Audit records are tested for creation, safe field coverage, exclusion of
   sensitive content, and explicit write-failure reporting.
+- Review bundles are tested for controller-action rules, safe-field policy,
+  changed-path capture, serialization round-trip, read-only inspection, and
+  explicit write-failure reporting.
 - Lifecycle transitions are tested for allowed/denied authority, dry-run
   behaviour, applied mutation, malformed-file rejection, and audit metadata.
 - CLI tests patch `get_git_info` directly and verify exit codes.
@@ -308,6 +371,9 @@ auditable and easy to test.
 | Unattended autonomous mode | `--auto` / `--yolo` Kimi flags are not used. |
 | Hard-coded worker coupling | `WorkerAdapter` interface lets Kimi be replaced later. |
 | Silent audit failure | Audit-write errors are reported explicitly in runner output. |
+| Scattered review evidence | One deterministic review bundle per execute run consolidates task identity, Git snapshots, verification result, changed paths, and recommended action. |
+| Review bundle contains secrets or full transcripts | Bundle excludes credentials, env dumps, full task body, worker stdout/stderr, and customer data. |
+| Worker self-approval through bundle | Bundle recommends only `REVIEW`, `REWORK`, or `BLOCKED`; `APPROVED` is never emitted. |
 | Unauthorized task-status changes | `transition` validates state machine and actor role; default is preview-only and `--apply` is required. |
 
 ---
@@ -318,6 +384,7 @@ auditable and easy to test.
 - Integration with GitHub Issues/PRs for task discovery (read-only first).
 - Background/scheduled execution only after explicit policy tasks define it.
 - Approval-gate state persistence once an auditable store is approved.
+- Optional bundle signing or checksums if tamper-evident handoff is required.
 
 ---
 
@@ -336,6 +403,9 @@ auditable and easy to test.
 - Task lifecycle transitions are controlled by `TaskStatus`, `ActorRole`, and an explicit transition matrix.
 - The `transition` subcommand defaults to preview; `--apply` is required to rewrite the `STATUS:` line.
 - A worker cannot transition `REVIEW -> APPROVED`; controller/reviewer or owner authority is required.
+- Every `execute()` invocation that reaches post-worker verification writes a JSON review bundle under `.agent_runner/review/`.
+- The review bundle recommends only `REVIEW`, `REWORK`, or `BLOCKED`; it never recommends or asserts `APPROVED`.
+- The review bundle excludes credentials, environment dumps, full task bodies, worker transcripts, and customer/business data.
 
 ### ASSUMPTION
 

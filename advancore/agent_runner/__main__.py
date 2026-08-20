@@ -17,6 +17,12 @@ from advancore.agent_runner.lifecycle import (
     TaskStatus,
     transition_task,
 )
+from advancore.agent_runner.review_bundle import (
+    ReviewBundleError,
+    find_latest_bundle,
+    format_bundle_summary,
+    load_review_bundle,
+)
 from advancore.agent_runner.runner import RunnerResult, RunnerStatus, execute, plan
 from advancore.agent_runner.worker import DryRunWorkerAdapter, KimiWorkerAdapter
 
@@ -138,6 +144,16 @@ def _format_result(result: RunnerResult) -> str:
         if result.audit_write_error:
             lines.append(f"  error: {result.audit_write_error}")
 
+    if result.review_bundle_path:
+        rel_path = result.review_bundle_path.relative_to(
+            (result.pre_git_info or result.git_info).repo_root
+        )
+        lines.append(f"Review bundle: {rel_path}")
+    elif not result.review_bundle_write_ok:
+        lines.append("Review bundle: NOT WRITTEN")
+        if result.review_bundle_write_error:
+            lines.append(f"  error: {result.review_bundle_write_error}")
+
     lines.append("=" * 64)
     return "\n".join(lines)
 
@@ -217,7 +233,59 @@ def main(argv: list[str] | None = None) -> int:
         help="Actually rewrite the task file (default is preview only).",
     )
 
+    review_bundle_parser = subparsers.add_parser(
+        "review-bundle",
+        help="Inspect a controller review bundle (read-only).",
+    )
+    review_bundle_subparsers = review_bundle_parser.add_subparsers(
+        dest="review_bundle_command", required=True
+    )
+    show_parser = review_bundle_subparsers.add_parser(
+        "show", help="Show a review bundle summary."
+    )
+    show_parser.add_argument(
+        "target",
+        nargs="?",
+        default="latest",
+        help='Path to a bundle file, or "latest" for the most recent bundle (default: latest).',
+    )
+
     args = parser.parse_args(argv)
+
+    if args.command == "review-bundle":
+        if args.review_bundle_command != "show":
+            print(f"FAIL: unknown review-bundle command: {args.review_bundle_command}", file=sys.stderr)
+            return 1
+
+        try:
+            git_info = get_git_info(cwd=Path.cwd())
+        except Exception as exc:
+            print(f"FAIL: cannot inspect Git repository: {exc}", file=sys.stderr)
+            return 1
+
+        review_dir = git_info.repo_root / ".agent_runner" / "review"
+        target = args.target
+        if target.lower() == "latest":
+            bundle_path = find_latest_bundle(review_dir)
+            if bundle_path is None:
+                print(
+                    f"FAIL: no review bundles found in {review_dir}",
+                    file=sys.stderr,
+                )
+                return 1
+        else:
+            bundle_path = Path(target)
+            if not bundle_path.is_absolute():
+                bundle_path = Path.cwd() / bundle_path
+
+        try:
+            bundle = load_review_bundle(bundle_path)
+        except ReviewBundleError as exc:
+            print(f"FAIL: {exc}", file=sys.stderr)
+            return 1
+
+        print(format_bundle_summary(bundle))
+        return 0
 
     tasks_dir = Path.cwd() / "tasks"
 

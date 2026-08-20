@@ -148,14 +148,58 @@ None required to begin.
 
 ## Completion report
 
-To be completed by the worker. Report:
+### Implemented
+- Added `advancore/agent_runner/review_bundle.py` with:
+  - `ControllerAction` enum (`REVIEW`, `REWORK`, `BLOCKED` — no `APPROVED`).
+  - `ReviewBundle` dataclass and JSON serializer.
+  - `build_review_bundle()` deriving action from runner evidence only.
+  - `write_review_bundle()` / `load_review_bundle()` / `find_latest_bundle()`.
+  - `format_bundle_summary()` for read-only CLI inspection.
+- Integrated review-bundle creation into `execute()` in `runner.py`.
+- Extended `RunnerResult` with bundle path/write status fields.
+- Added `review-bundle show [<path-or-latest>]` CLI subcommand in `__main__.py`.
+- Exported public review-bundle helpers in `advancore/agent_runner/__init__.py`.
+- Added comprehensive tests in `tests/test_review_bundle.py`.
+- Updated `docs/architecture/AGENT_RUNNER.md`.
+- Added `docs/decisions/ADR-006-controller-review-bundle.md`.
 
-- Implemented
-- Files changed
-- Database changes
-- Tests executed and results
-- Assumptions
-- Risks / unresolved issues
-- Decisions required
-- Recommended next step
-- `git status --short`
+### Files changed
+- `advancore/agent_runner/__init__.py`
+- `advancore/agent_runner/__main__.py`
+- `advancore/agent_runner/runner.py`
+- `advancore/agent_runner/review_bundle.py` (new)
+- `docs/architecture/AGENT_RUNNER.md`
+- `docs/decisions/ADR-006-controller-review-bundle.md` (new)
+- `tests/test_review_bundle.py` (new)
+- `tasks/TASK-010-controller-review-bundle-foundation.md` (completion report only)
+
+### Database changes
+- None. No model or migration changes.
+
+### Tests executed and results
+```bash
+.venv/bin/python -m pytest tests/ -v
+```
+Result: **144 passed, 0 failed**.
+
+### Assumptions
+- Bundles are produced for every `execute()` run that reaches post-worker verification, not only `AWAITING_APPROVAL`, so that `REWORK` and `BLOCKED` cases are also captured as required by the test checklist.
+- `.agent_runner/review/` is covered by the existing `.agent_runner/` gitignore rule; no separate gitignore edit was needed.
+- Bundles intentionally do not include previous task status because the runner does not currently capture pre-run task status; `previous_status` is reserved and left null.
+
+### Risks / unresolved issues
+- Local review bundles are not signed or checksummed; tamper-evident handoff is a future extension noted in the architecture doc.
+- The `review-bundle show` command relies on filesystem mtime for `latest`; clocks and filesystems must be reasonable.
+- Bundle write failure is reported but does not currently change the runner's primary status; the CLI clearly marks the bundle as `NOT WRITTEN`.
+
+### Decisions required
+- None to complete this task. A controller/reviewer may later decide whether bundles should be signed, compressed, or transmitted.
+
+### Recommended next step
+- Have a controller/reviewer inspect a generated bundle with:
+  ```bash
+  .venv/bin/python -m advancore.agent_runner review-bundle show
+  ```
+- Once approved, the reviewer can commit the code changes (the bundles themselves remain gitignored).
+
+### git status --short

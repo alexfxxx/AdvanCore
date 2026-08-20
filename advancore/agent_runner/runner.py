@@ -14,6 +14,13 @@ from advancore.agent_runner.audit import (
     write_audit_record,
 )
 from advancore.agent_runner.git_info import GitInfo, get_git_info
+from advancore.agent_runner.review_bundle import (
+    ControllerAction,
+    ReviewBundleWriteError,
+    build_review_bundle,
+    default_review_dir,
+    write_review_bundle,
+)
 from advancore.agent_runner.task import find_task
 from advancore.agent_runner.validation import ValidationResult, validate
 from advancore.agent_runner.worker import (
@@ -70,6 +77,9 @@ class RunnerResult:
     audit_path: Path | None = None
     audit_write_ok: bool = True
     audit_write_error: str | None = None
+    review_bundle_path: Path | None = None
+    review_bundle_write_ok: bool = True
+    review_bundle_write_error: str | None = None
     messages: list[str] = field(default_factory=list)
 
 
@@ -196,6 +206,33 @@ def _build_plan(
     )
 
 
+def _write_review_bundle(result: RunnerResult) -> None:
+    """Write a controller review bundle for *result* and update it in place.
+
+    Bundle-write failures are surfaced explicitly in ``result.messages`` but do
+    not mask the runner's primary status. The bundle recommends ``BLOCKED`` when
+    review evidence cannot be produced reliably.
+    """
+    git_info = result.pre_git_info or result.git_info
+    if git_info is None:
+        result.review_bundle_write_ok = False
+        result.review_bundle_write_error = "Cannot write review bundle: no Git snapshot available."
+        result.messages.append(f"WARNING: {result.review_bundle_write_error}")
+        return
+
+    try:
+        bundle = build_review_bundle(result)
+        review_dir = default_review_dir(git_info.repo_root)
+        bundle_path = write_review_bundle(bundle, review_dir)
+        result.review_bundle_path = bundle_path
+        rel_path = bundle_path.relative_to(git_info.repo_root)
+        result.messages.append(f"Review bundle written to {rel_path}")
+    except ReviewBundleWriteError as exc:
+        result.review_bundle_write_ok = False
+        result.review_bundle_write_error = str(exc)
+        result.messages.append(f"WARNING: {exc}")
+
+
 def _write_audit(result: RunnerResult, mode: str) -> None:
     """Write a durable local audit record for *result* and update it in place.
 
@@ -294,6 +331,7 @@ def execute(
         result.status = RunnerStatus.POST_WORKER_VERIFICATION_FAILED
         result.messages.append(f"FAIL: could not capture post-worker Git snapshot: {exc}")
         _write_audit(result, mode="execute")
+        _write_review_bundle(result)
         return result
 
     result.post_verification = verify_post_worker(
@@ -319,4 +357,5 @@ def execute(
         result.messages.append(f"Worker failed: {worker_result.message}")
 
     _write_audit(result, mode="execute")
+    _write_review_bundle(result)
     return result

@@ -11,6 +11,18 @@ gated for explicit human approval.
 """
 
 from advancore.agent_runner.git_info import GitInfo, get_git_info
+from advancore.agent_runner.review_bundle import (
+    ControllerAction,
+    ReviewBundle,
+    ReviewBundleError,
+    ReviewBundleWriteError,
+    build_review_bundle,
+    default_review_dir,
+    find_latest_bundle,
+    format_bundle_summary,
+    load_review_bundle,
+    write_review_bundle,
+)
 from advancore.agent_runner.lifecycle import (
     ActorRole,
     LifecycleResult,
@@ -37,8 +49,18 @@ from advancore.agent_runner.worker import (
 
 __all__ = [
     "ActorRole",
+    "ControllerAction",
     "GitInfo",
     "LifecycleResult",
+    "ReviewBundle",
+    "ReviewBundleError",
+    "ReviewBundleWriteError",
+    "build_review_bundle",
+    "default_review_dir",
+    "find_latest_bundle",
+    "format_bundle_summary",
+    "load_review_bundle",
+    "write_review_bundle",
     "PostWorkerVerification",
     "RunnerResult",
     "RunnerStatus",
