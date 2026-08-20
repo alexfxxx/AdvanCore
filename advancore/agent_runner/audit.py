@@ -66,6 +66,39 @@ def build_audit_payload(
     }
 
 
+def build_lifecycle_audit_payload(
+    *,
+    timestamp: datetime | None = None,
+    task_id: str | None,
+    task_filename: str | None,
+    actor_role: str | None,
+    previous_status: str | None,
+    requested_status: str | None,
+    transition_allowed: bool,
+    applied: bool,
+    branch: str | None,
+    head_sha: str | None,
+) -> dict[str, Any]:
+    """Return a safe metadata payload for a task lifecycle transition attempt.
+
+    The payload intentionally excludes the task body, worker transcripts,
+    credentials, environment dumps, and business or customer data.
+    """
+    return {
+        "timestamp": (timestamp or datetime.now(timezone.utc)).isoformat(),
+        "task_id": task_id,
+        "task_filename": task_filename,
+        "mode": "lifecycle",
+        "actor_role": actor_role,
+        "previous_status": previous_status,
+        "requested_status": requested_status,
+        "transition_allowed": transition_allowed,
+        "applied": applied,
+        "branch": branch,
+        "head_sha": head_sha,
+    }
+
+
 def write_audit_record(
     payload: dict[str, Any],
     audit_dir: Path,

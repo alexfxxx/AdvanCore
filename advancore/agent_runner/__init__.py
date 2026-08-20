@@ -11,6 +11,13 @@ gated for explicit human approval.
 """
 
 from advancore.agent_runner.git_info import GitInfo, get_git_info
+from advancore.agent_runner.lifecycle import (
+    ActorRole,
+    LifecycleResult,
+    TaskStatus,
+    is_transition_allowed,
+    transition_task,
+)
 from advancore.agent_runner.runner import (
     PostWorkerVerification,
     RunnerResult,
@@ -29,12 +36,15 @@ from advancore.agent_runner.worker import (
 )
 
 __all__ = [
+    "ActorRole",
     "GitInfo",
+    "LifecycleResult",
     "PostWorkerVerification",
     "RunnerResult",
     "RunnerStatus",
     "Task",
     "TaskError",
+    "TaskStatus",
     "ValidationResult",
     "WorkerAdapter",
     "WorkerResult",
@@ -43,8 +53,10 @@ __all__ = [
     "execute",
     "find_task",
     "get_git_info",
+    "is_transition_allowed",
     "parse_task",
     "plan",
+    "transition_task",
     "validate",
     "DryRunWorkerAdapter",
     "KimiWorkerAdapter",

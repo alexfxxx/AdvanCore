@@ -1,6 +1,6 @@
 # TASK-009 — Task Lifecycle Control Plane
 
-STATUS: READY
+STATUS: REVIEW
 
 ## Objective
 
@@ -170,18 +170,93 @@ None required to begin.
 
 ### Implemented
 
+- Added `advancore/agent_runner/lifecycle.py` with explicit `TaskStatus` and
+  `ActorRole` enums, a pure `is_transition_allowed()` validator, and the
+  `transition_task()` helper.
+- Implemented authority-aware transition rules per the task specification,
+  including BLOCKED transitions and the worker self-approval prohibition.
+- Made task-status updates dry-run by default; mutation requires `--apply`.
+- Ensured only the single `STATUS:` line is rewritten; the task body is
+  preserved, and missing/duplicate STATUS lines fail closed.
+- Extended `advancore/agent_runner/audit.py` with a lifecycle audit payload so
+  every transition attempt is recorded in the existing `.agent_runner/audit/runner.jsonl`.
+- Added a `transition` subcommand to `advancore/agent_runner/__main__.py`.
+- Updated `tasks/README.md` with the authoritative state machine, actor
+  responsibilities, and CLI examples.
+- Updated `docs/architecture/AGENT_RUNNER.md` with the lifecycle module, state
+  model, CLI usage, and threat boundary.
+- Added `docs/decisions/ADR-005-task-lifecycle-control-plane.md`.
+- Added `tests/test_agent_runner_lifecycle.py` covering allowed/denied
+  transitions, dry-run, applied mutation, malformed files, and audit metadata.
+- Ran the full pytest suite; all tests pass.
+- Used the new CLI to move this task from READY → IN_PROGRESS → REVIEW.
+
 ### Files changed
+
+- `advancore/agent_runner/__init__.py`
+- `advancore/agent_runner/__main__.py`
+- `advancore/agent_runner/audit.py`
+- `advancore/agent_runner/lifecycle.py` (new)
+- `docs/architecture/AGENT_RUNNER.md`
+- `docs/decisions/ADR-005-task-lifecycle-control-plane.md` (new)
+- `tasks/README.md`
+- `tasks/TASK-009-task-lifecycle-control-plane.md`
+- `tests/test_agent_runner_lifecycle.py` (new)
 
 ### Database changes
 
+None.
+
 ### Tests and results
+
+```bash
+.venv/bin/python -m pytest tests/ -v
+```
+
+Result: **121 passed** (79 existing + 42 new).
 
 ### Assumptions
 
+- `controller` in `ActorRole` represents both controller and reviewer authority.
+- Owner authority includes controller/reviewer transitions and the worker
+  transitions, so an owner is not more restricted than the roles it supersedes.
+- Lifecycle audit records reuse the existing `.agent_runner/audit/runner.jsonl`
+  file and contain only safe metadata (no task body).
+- The `transition` CLI requires a Git repository snapshot for audit metadata,
+  consistent with the runner's existing Git introspection.
+
 ### Risks / unresolved issues
+
+- The lifecycle helper validates transitions only when invoked; it does not
+  prevent direct manual edits to task files. Governance and review remain the
+  primary enforcement.
+- `parse_task()` still tolerates duplicate `STATUS:` lines by taking the first
+  match; the lifecycle helper now rejects duplicates, but a future task may want
+  to tighten `parse_task()` as well.
+- No remote/GitHub task-status synchronization is implemented.
 
 ### Decisions required
 
+None.
+
 ### Recommended next step
 
+Human review of the implementation and documentation. If approved, the changes
+may be committed and pushed. A future task could optionally integrate lifecycle
+updates into `execute()` (e.g. READY → IN_PROGRESS at start and
+IN_PROGRESS → REVIEW on successful completion), gated by the same authority
+model.
+
 ### `git status --short`
+
+```
+ M advancore/agent_runner/__init__.py
+ M advancore/agent_runner/__main__.py
+ M advancore/agent_runner/audit.py
+ M docs/architecture/AGENT_RUNNER.md
+ M tasks/README.md
+ M tasks/TASK-009-task-lifecycle-control-plane.md
+?? advancore/agent_runner/lifecycle.py
+?? docs/decisions/ADR-005-task-lifecycle-control-plane.md
+?? tests/test_agent_runner_lifecycle.py
+```

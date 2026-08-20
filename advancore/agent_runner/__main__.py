@@ -10,6 +10,13 @@ import argparse
 import sys
 from pathlib import Path
 
+from advancore.agent_runner.git_info import GitInfo, get_git_info
+from advancore.agent_runner.lifecycle import (
+    ActorRole,
+    LifecycleResult,
+    TaskStatus,
+    transition_task,
+)
 from advancore.agent_runner.runner import RunnerResult, RunnerStatus, execute, plan
 from advancore.agent_runner.worker import DryRunWorkerAdapter, KimiWorkerAdapter
 
@@ -135,6 +142,35 @@ def _format_result(result: RunnerResult) -> str:
     return "\n".join(lines)
 
 
+def _format_lifecycle_result(result: LifecycleResult) -> str:
+    lines: list[str] = []
+    lines.append("=" * 64)
+    lines.append("AdvanCore Local Agent Runner — Task Lifecycle Transition")
+    lines.append("=" * 64)
+    lines.append(f"Task:            {result.task_id or 'n/a'}")
+    lines.append(f"File:            {result.task_filename or 'n/a'}")
+    lines.append(f"Current state:   {result.previous_status or 'n/a'}")
+    lines.append(f"Requested state: {result.requested_status or 'n/a'}")
+    lines.append(f"Actor role:      {result.actor.value if result.actor else 'n/a'}")
+    lines.append(f"Permitted:       {'yes' if result.allowed else 'no'}")
+    lines.append(f"Mode:            {'applied' if result.applied else result.mode}")
+    lines.append("-" * 64)
+    lines.append("Messages:")
+    if result.messages:
+        for msg in result.messages:
+            lines.append(f"  {msg}")
+    else:
+        lines.append("  (none)")
+    if result.audit_path:
+        lines.append(f"Audit record: {result.audit_path}")
+    elif not result.audit_write_ok:
+        lines.append("Audit record: NOT WRITTEN")
+        if result.audit_write_error:
+            lines.append(f"  error: {result.audit_write_error}")
+    lines.append("=" * 64)
+    return "\n".join(lines)
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         prog="python -m advancore.agent_runner",
@@ -158,9 +194,51 @@ def main(argv: list[str] | None = None) -> int:
         help="Worker adapter to use (default: dry-run).",
     )
 
+    transition_parser = subparsers.add_parser(
+        "transition",
+        help="Preview or apply a task-status transition (dry-run by default).",
+    )
+    transition_parser.add_argument("task_id", help="Task identifier, e.g. TASK-009")
+    transition_parser.add_argument(
+        "--to",
+        required=True,
+        choices=[s.value for s in TaskStatus],
+        help="Requested task status.",
+    )
+    transition_parser.add_argument(
+        "--actor",
+        required=True,
+        choices=[r.value for r in ActorRole],
+        help="Actor role requesting the transition (controller = controller/reviewer).",
+    )
+    transition_parser.add_argument(
+        "--apply",
+        action="store_true",
+        help="Actually rewrite the task file (default is preview only).",
+    )
+
     args = parser.parse_args(argv)
 
     tasks_dir = Path.cwd() / "tasks"
+
+    if args.command == "transition":
+        try:
+            git_info = get_git_info(cwd=tasks_dir)
+        except Exception as exc:
+            print(f"FAIL: cannot inspect Git repository: {exc}", file=sys.stderr)
+            return 1
+
+        result = transition_task(
+            tasks_dir,
+            args.task_id,
+            args.to,
+            args.actor,
+            apply=args.apply,
+            git_info=git_info,
+        )
+        print(_format_lifecycle_result(result))
+        return 0 if result.ok else 1
+
     worker = KimiWorkerAdapter() if args.worker == "kimi" else DryRunWorkerAdapter()
 
     if args.execute:

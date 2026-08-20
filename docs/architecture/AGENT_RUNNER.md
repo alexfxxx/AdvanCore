@@ -58,7 +58,8 @@ resetting, merging, or broadening scope.
 | `advancore/agent_runner/worker.py` | Worker adapter interface, Kimi adapter, dry-run adapter, and canonical instruction builder. |
 | `advancore/agent_runner/runner.py` | Orchestration, post-worker verification, and `plan()` / `execute()` entry points. |
 | `advancore/agent_runner/audit.py` | Durable local JSON Lines audit records under `.agent_runner/audit/`. |
-| `advancore/agent_runner/__main__.py` | CLI entry point: `python -m advancore.agent_runner plan TASK-005`. |
+| `advancore/agent_runner/lifecycle.py` | Task-status enum, actor-role enum, transition matrix, and authority-aware status update helper. |
+| `advancore/agent_runner/__main__.py` | CLI entry point: `python -m advancore.agent_runner plan TASK-005` or `transition TASK-009 --to ...`. |
 
 ---
 
@@ -88,6 +89,10 @@ resetting, merging, or broadening scope.
     changes require explicit approval.
 12. **Fail closed.** Unknown state or unsupported worker behaviour stops and
     reports.
+13. **Explicit, authority-aware task lifecycle changes.** Task status transitions
+    are validated against the state machine and actor role. The default
+    `transition` command is preview-only; `--apply` is required to mutate the
+    task file, and only the `STATUS:` line is changed.
 
 ### Validation outcomes
 
@@ -197,9 +202,59 @@ Opt-in worker execution:
 The `--execute` flag and `--worker kimi` are required to launch Kimi. Without
 them the runner only inspects and plans.
 
+Task lifecycle transition (dry-run preview by default):
+
+```bash
+.venv/bin/python -m advancore.agent_runner transition TASK-009 --to IN_PROGRESS --actor worker
+```
+
+Apply the transition explicitly:
+
+```bash
+.venv/bin/python -m advancore.agent_runner transition TASK-009 --to IN_PROGRESS --actor worker --apply
+```
+
 ---
 
-## 8. Runner state model
+## 8. Task lifecycle state model
+
+`TaskStatus` enumerates the authoritative task statuses:
+
+- `DRAFT` — requirement is incomplete.
+- `READY` — approved for implementation.
+- `IN_PROGRESS` — actively being worked.
+- `REVIEW` — implementation completed and awaiting review.
+- `REWORK` — changes requested after review.
+- `APPROVED` — accepted for merge/release.
+- `BLOCKED` — cannot proceed without a decision or dependency.
+
+Allowed transitions and authority:
+
+| Transition | Authorized roles |
+|------------|-----------------|
+| DRAFT → READY | controller, owner |
+| READY → IN_PROGRESS | worker, owner |
+| IN_PROGRESS → REVIEW | worker, owner |
+| REVIEW → APPROVED | controller, owner |
+| REVIEW → REWORK | controller, owner |
+| REWORK → IN_PROGRESS | worker, owner |
+| any non-final working state → BLOCKED | controller, owner |
+| BLOCKED → READY / REWORK | controller, owner |
+
+`ActorRole` distinguishes:
+
+- `worker` — may request/report work transitions only; cannot approve or block.
+- `controller` — controller/reviewer authority; may approve, request rework, and
+  manage BLOCKED states.
+- `owner` — includes controller/reviewer authority and remains required for
+  higher-impact decisions gated elsewhere.
+
+`is_transition_allowed()` is a pure validation function used by the CLI and
+`transition_task()` helper. `transition_task()` validates the current status,
+checks authority, and previews or applies only the single `STATUS:` line. Every
+attempt is recorded in the local audit trail with safe metadata only.
+
+## 9. Runner state model
 
 `RunnerStatus` enumerates the possible lifecycle states:
 
@@ -220,7 +275,7 @@ auditable and easy to test.
 
 ---
 
-## 9. Testing approach
+## 10. Testing approach
 
 - Task parsing, status gating, branch gating, and working-tree gating are
   tested with temporary task files.
@@ -233,11 +288,13 @@ auditable and easy to test.
   branch movement, and changed-path surfacing.
 - Audit records are tested for creation, safe field coverage, exclusion of
   sensitive content, and explicit write-failure reporting.
+- Lifecycle transitions are tested for allowed/denied authority, dry-run
+  behaviour, applied mutation, malformed-file rejection, and audit metadata.
 - CLI tests patch `get_git_info` directly and verify exit codes.
 
 ---
 
-## 10. Threat / safety boundaries
+## 11. Threat / safety boundaries
 
 | Threat | Mitigation |
 |--------|-----------|
@@ -251,20 +308,20 @@ auditable and easy to test.
 | Unattended autonomous mode | `--auto` / `--yolo` Kimi flags are not used. |
 | Hard-coded worker coupling | `WorkerAdapter` interface lets Kimi be replaced later. |
 | Silent audit failure | Audit-write errors are reported explicitly in runner output. |
+| Unauthorized task-status changes | `transition` validates state machine and actor role; default is preview-only and `--apply` is required. |
 
 ---
 
-## 11. Future extension points
+## 12. Future extension points
 
 - Additional `WorkerAdapter` implementations for other local or remote workers.
-- A `tasks/` status update helper behind an explicit approval gate.
 - Integration with GitHub Issues/PRs for task discovery (read-only first).
 - Background/scheduled execution only after explicit policy tasks define it.
 - Approval-gate state persistence once an auditable store is approved.
 
 ---
 
-## 12. Reasoning labels
+## 13. Reasoning labels
 
 ### FACT
 
@@ -276,6 +333,9 @@ auditable and easy to test.
 - `execute()` captures pre- and post-worker Git snapshots including branch and HEAD SHA.
 - Worker success cannot override a failed post-worker repository verification.
 - Every `plan()` and `execute()` invocation writes a JSON Lines audit record under `.agent_runner/audit/`.
+- Task lifecycle transitions are controlled by `TaskStatus`, `ActorRole`, and an explicit transition matrix.
+- The `transition` subcommand defaults to preview; `--apply` is required to rewrite the `STATUS:` line.
+- A worker cannot transition `REVIEW -> APPROVED`; controller/reviewer or owner authority is required.
 
 ### ASSUMPTION
 
