@@ -13,6 +13,7 @@ from pathlib import Path
 from advancore.agent_runner.audit import (
     AuditWriteError,
     build_controller_decision_audit_payload,
+    build_handoff_audit_payload,
     default_audit_dir,
     write_audit_record,
 )
@@ -26,6 +27,19 @@ from advancore.agent_runner.controller_decision import (
     format_decision_summary,
     load_controller_decision,
     write_controller_decision,
+)
+from advancore.agent_runner.controller_handoff import (
+    ControllerHandoffError,
+    ControllerHandoffWriteError,
+    HandoffReconciliationResult,
+    HandoffState,
+    build_controller_handoff,
+    default_handoff_dir,
+    find_latest_handoff,
+    format_handoff_summary,
+    load_controller_handoff,
+    reconcile_controller_handoff,
+    write_controller_handoff,
 )
 from advancore.agent_runner.decision_lifecycle_bridge import (
     DecisionLifecycleResult,
@@ -285,6 +299,70 @@ def _format_bridge_result(result: DecisionLifecycleResult) -> str:
     return "\n".join(lines)
 
 
+def _format_handoff_prepare_result(
+    handoff_path: Path | None,
+    audit_path: Path | None,
+    audit_write_error: str | None,
+    error: str | None = None,
+) -> str:
+    lines: list[str] = []
+    lines.append("=" * 64)
+    lines.append("AdvanCore Local Agent Runner — Controller Handoff")
+    lines.append("=" * 64)
+    if error:
+        lines.append("Result: FAIL")
+        lines.append(f"Error:  {error}")
+    elif handoff_path:
+        lines.append("Result: OK")
+        lines.append(f"Handoff request: {handoff_path}")
+    else:
+        lines.append("Result: FAIL")
+        lines.append("Error:  handoff request was not created")
+    if audit_path:
+        try:
+            rel_path = audit_path.relative_to(Path.cwd())
+        except ValueError:
+            rel_path = audit_path
+        lines.append(f"Audit record: {rel_path}")
+    elif audit_write_error:
+        lines.append("Audit record: NOT WRITTEN")
+        lines.append(f"  error: {audit_write_error}")
+    lines.append("=" * 64)
+    return "\n".join(lines)
+
+
+def _format_handoff_reconcile_result(result: HandoffReconciliationResult) -> str:
+    lines: list[str] = []
+    lines.append("=" * 64)
+    lines.append("AdvanCore Local Agent Runner — Controller Handoff Reconciliation")
+    lines.append("=" * 64)
+    lines.append(f"Result: {'OK' if result.ok else 'FAIL'}")
+    if result.handoff:
+        lines.append(f"Request ID: {result.handoff.request_id}")
+        lines.append(f"State:      {result.handoff.state}")
+        if result.handoff.decision:
+            lines.append(f"Decision:   {result.handoff.decision}")
+    lines.append("-" * 64)
+    lines.append("Messages:")
+    if result.messages:
+        for msg in result.messages:
+            lines.append(f"  {msg}")
+    else:
+        lines.append("  (none)")
+    if result.audit_path:
+        try:
+            rel_path = result.audit_path.relative_to(Path.cwd())
+        except ValueError:
+            rel_path = result.audit_path
+        lines.append(f"Audit record: {rel_path}")
+    elif not result.audit_write_ok:
+        lines.append("Audit record: NOT WRITTEN")
+        if result.audit_write_error:
+            lines.append(f"  error: {result.audit_write_error}")
+    lines.append("=" * 64)
+    return "\n".join(lines)
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         prog="python -m advancore.agent_runner",
@@ -406,7 +484,241 @@ def main(argv: list[str] | None = None) -> int:
         help="Actually request the lifecycle transition (default is preview only).",
     )
 
+    controller_handoff_parser = subparsers.add_parser(
+        "controller-handoff",
+        help="Prepare, inspect, or reconcile a controller handoff request.",
+    )
+    controller_handoff_subparsers = controller_handoff_parser.add_subparsers(
+        dest="controller_handoff_command", required=True
+    )
+    handoff_prepare_parser = controller_handoff_subparsers.add_parser(
+        "prepare", help="Prepare a handoff request from a review bundle."
+    )
+    handoff_prepare_parser.add_argument(
+        "target",
+        nargs="?",
+        default="latest",
+        help='Path to a review bundle, or "latest" for the most recent bundle (default: latest).',
+    )
+    handoff_show_parser = controller_handoff_subparsers.add_parser(
+        "show", help="Show a handoff request (read-only)."
+    )
+    handoff_show_parser.add_argument(
+        "target",
+        nargs="?",
+        default="latest",
+        help='Path to a handoff request, or "latest" for the most recent request (default: latest).',
+    )
+    handoff_reconcile_parser = controller_handoff_subparsers.add_parser(
+        "reconcile", help="Reconcile a handoff request with a controller decision."
+    )
+    handoff_reconcile_parser.add_argument(
+        "request_target",
+        nargs="?",
+        default="latest",
+        help='Path to a handoff request, or "latest" for the most recent request (default: latest).',
+    )
+    handoff_reconcile_parser.add_argument(
+        "decision_target",
+        nargs="?",
+        default="latest",
+        help='Path to a decision record, or "latest" for the most recent record (default: latest).',
+    )
+
     args = parser.parse_args(argv)
+
+    if args.command == "controller-handoff":
+        try:
+            git_info = get_git_info(cwd=Path.cwd())
+        except Exception as exc:
+            print(
+                _format_handoff_prepare_result(
+                    None, None, None, error=f"cannot inspect Git repository: {exc}"
+                ),
+                file=sys.stderr,
+            )
+            return 1
+
+        if args.controller_handoff_command == "prepare":
+            review_dir = git_info.repo_root / ".agent_runner" / "review"
+            target = args.target
+            if target.lower() == "latest":
+                bundle_path = find_latest_bundle(review_dir)
+                if bundle_path is None:
+                    print(
+                        _format_handoff_prepare_result(
+                            None, None, None, error=f"no review bundles found in {review_dir}"
+                        ),
+                        file=sys.stderr,
+                    )
+                    return 1
+            else:
+                bundle_path = Path(target)
+                if not bundle_path.is_absolute():
+                    bundle_path = Path.cwd() / bundle_path
+
+            try:
+                bundle = load_review_bundle(bundle_path)
+            except ReviewBundleError as exc:
+                print(
+                    _format_handoff_prepare_result(
+                        None, None, None, error=f"cannot load review bundle: {exc}"
+                    ),
+                    file=sys.stderr,
+                )
+                return 1
+
+            try:
+                handoff = build_controller_handoff(
+                    bundle_path,
+                    bundle,
+                    git_info=git_info,
+                    repo_root=git_info.repo_root,
+                )
+            except ControllerHandoffError as exc:
+                print(
+                    _format_handoff_prepare_result(
+                        None, None, None, error=str(exc)
+                    ),
+                    file=sys.stderr,
+                )
+                return 1
+
+            handoff_dir = default_handoff_dir(git_info.repo_root)
+            try:
+                handoff_path = write_controller_handoff(handoff, handoff_dir)
+            except ControllerHandoffWriteError as exc:
+                print(
+                    _format_handoff_prepare_result(
+                        None, None, None, error=str(exc)
+                    ),
+                    file=sys.stderr,
+                )
+                return 1
+
+            audit_path: Path | None = None
+            audit_write_error: str | None = None
+            try:
+                audit_payload = build_handoff_audit_payload(
+                    task_id=handoff.task_id,
+                    task_filename=handoff.task_filename,
+                    request_id=handoff.request_id,
+                    mode="handoff_prepare",
+                    state=handoff.state,
+                    bundle_path=handoff.bundle_path,
+                    bundle_branch=handoff.bundle_branch,
+                    bundle_pre_head=handoff.bundle_pre_head,
+                    bundle_post_head=handoff.bundle_post_head,
+                    branch=git_info.current_branch,
+                    head_sha=git_info.head_sha,
+                )
+                audit_path = write_audit_record(
+                    audit_payload, default_audit_dir(git_info.repo_root)
+                )
+            except AuditWriteError as exc:
+                audit_write_error = str(exc)
+
+            rel_handoff_path = handoff_path
+            try:
+                rel_handoff_path = handoff_path.relative_to(git_info.repo_root)
+            except ValueError:
+                pass
+
+            print(
+                _format_handoff_prepare_result(
+                    rel_handoff_path, audit_path, audit_write_error
+                )
+            )
+            return 0
+
+        if args.controller_handoff_command == "show":
+            handoff_dir = git_info.repo_root / ".agent_runner" / "controller_handoff"
+            target = args.target
+            if target.lower() == "latest":
+                handoff_path = find_latest_handoff(handoff_dir)
+                if handoff_path is None:
+                    print(
+                        _format_handoff_prepare_result(
+                            None, None, None, error=f"no handoff requests found in {handoff_dir}"
+                        ),
+                        file=sys.stderr,
+                    )
+                    return 1
+            else:
+                handoff_path = Path(target)
+                if not handoff_path.is_absolute():
+                    handoff_path = Path.cwd() / handoff_path
+
+            try:
+                handoff = load_controller_handoff(handoff_path)
+            except ControllerHandoffError as exc:
+                print(
+                    _format_handoff_prepare_result(
+                        None, None, None, error=str(exc)
+                    ),
+                    file=sys.stderr,
+                )
+                return 1
+
+            print(format_handoff_summary(handoff))
+            return 0
+
+        if args.controller_handoff_command == "reconcile":
+            handoff_dir = git_info.repo_root / ".agent_runner" / "controller_handoff"
+            decisions_dir = git_info.repo_root / ".agent_runner" / "decisions"
+
+            request_target = args.request_target
+            if request_target.lower() == "latest":
+                request_path = find_latest_handoff(handoff_dir)
+                if request_path is None:
+                    print(
+                        _format_handoff_reconcile_result(
+                            HandoffReconciliationResult(
+                                ok=False,
+                                messages=[f"no handoff requests found in {handoff_dir}"],
+                            )
+                        ),
+                        file=sys.stderr,
+                    )
+                    return 1
+            else:
+                request_path = Path(request_target)
+                if not request_path.is_absolute():
+                    request_path = Path.cwd() / request_path
+
+            decision_target = args.decision_target
+            if decision_target.lower() == "latest":
+                decision_path = find_latest_decision(decisions_dir)
+                if decision_path is None:
+                    print(
+                        _format_handoff_reconcile_result(
+                            HandoffReconciliationResult(
+                                ok=False,
+                                messages=[f"no decision records found in {decisions_dir}"],
+                            )
+                        ),
+                        file=sys.stderr,
+                    )
+                    return 1
+            else:
+                decision_path = Path(decision_target)
+                if not decision_path.is_absolute():
+                    decision_path = Path.cwd() / decision_path
+
+            result = reconcile_controller_handoff(
+                request_path=request_path,
+                decision_path=decision_path,
+                repo_root=git_info.repo_root,
+                git_info=git_info,
+            )
+            print(_format_handoff_reconcile_result(result))
+            return 0 if result.ok else 1
+
+        print(
+            f"FAIL: unknown controller-handoff command: {args.controller_handoff_command}",
+            file=sys.stderr,
+        )
+        return 1
 
     if args.command == "controller-decision":
         try:

@@ -221,16 +221,88 @@ None required to begin.
 
 ### Implemented
 
+- Added `advancore/agent_runner/controller_handoff.py` with a bounded local
+  controller handoff request model (`ControllerHandoff`), explicit state model
+  (`HandoffState`), deterministic reconciliation logic, and safe read/write
+  helpers.
+- Added `controller-handoff` CLI subcommand with `prepare`, `show`, and
+  `reconcile` operations in `advancore/agent_runner/__main__.py`.
+- Extended `advancore/agent_runner/audit.py` with
+  `build_handoff_audit_payload()` and wrote `handoff_prepare` /
+  `handoff_reconcile` audit records from the CLI.
+- Exported the new public API through `advancore/agent_runner/__init__.py`.
+- Added comprehensive tests in `tests/test_controller_handoff.py` covering
+  request creation, validation failures, reconciliation, authority restrictions,
+  idempotency/conflict protection, read-only inspection, audit behavior, CLI
+  integration, and write-failure reporting.
+- Updated `docs/architecture/AGENT_RUNNER.md` with the handoff request concept,
+  flow diagram, safety model, CLI usage, and factual assertions.
+- Added `docs/decisions/ADR-013-controller-handoff-queue.md` documenting the
+  architectural decision, consequences, and alternatives considered.
+
 ### Files changed
+
+- `advancore/agent_runner/controller_handoff.py` (new)
+- `advancore/agent_runner/audit.py`
+- `advancore/agent_runner/__main__.py`
+- `advancore/agent_runner/__init__.py`
+- `tests/test_controller_handoff.py` (new)
+- `docs/architecture/AGENT_RUNNER.md`
+- `docs/decisions/ADR-013-controller-handoff-queue.md` (new)
+- `tasks/TASK-013-controller-handoff-queue-foundation.md`
 
 ### Database changes
 
+None. No schema, model, migration, or production database change was made.
+
 ### Tests and results
+
+```bash
+.venv/bin/python -m pytest tests/ -v
+```
+
+Result: **240 passed** (includes 40 new controller-handoff tests).
+
+Key coverage:
+- Valid review bundle → `WAITING_DECISION` handoff request.
+- Request contains correct task/bundle/branch/HEAD/recommendation metadata and
+  excludes sensitive/full-content fields.
+- Missing/malformed bundle, unsupported recommended action, and branch mismatch
+  fail closed during prepare.
+- Valid matching controller decision reconciles to `DECISION_RECEIVED`.
+- Worker actor, task ID/filename mismatch, bundle reference mismatch, and
+  missing/malformed decision record are rejected.
+- Same-decision reconciliation is idempotent; different-decision reconciliation
+  fails closed without overwriting.
+- Read-only `show` does not mutate Git or artifact state.
+- Prepare/reconcile do not mutate task files, Git publication state, or lifecycle
+  state.
+- Handoff prepare/reconcile produce local audit records.
+- Handoff write failures are explicit.
 
 ### Assumptions
 
+- The current `.agent_runner/` gitignore rule is sufficient for the new
+  `controller_handoff/` subdirectory.
+- Future transport/adapter tasks will reuse the request/decision linkage
+  contract introduced here rather than redesigning governance.
+- The existing `controller_decision` module remains the sole producer of valid
+  decision records; tampered records are caught by validation.
+
 ### Risks / unresolved issues
+
+- None identified. The implementation stays strictly within the local
+  `.agent_runner/` scope and does not add network transport, automatic
+  controller invocation, or lifecycle mutation.
 
 ### Decisions required
 
+- None. The task was implemented within approved scope and existing policy.
+
 ### Recommended next step
+
+- Review and approve this task.
+- A future task may add a controller adapter or remote transport layer on top
+  of the handoff request/decision linkage contract.
+- Consider adding optional checksums or signing for tamper-evident handoff if
+  the control-plane review surface expands.

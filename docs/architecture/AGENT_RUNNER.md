@@ -55,6 +55,14 @@ resetting, merging, or broadening scope.
                                 ▼
                         ┌──────────────────┐
                         │ Controller       │
+                        │ handoff request  │
+                        │ (.agent_runner/  │
+                        │ controller_handoff/)
+                        └──────────────────┘
+                                │
+                                ▼
+                        ┌──────────────────┐
+                        │ Controller       │
                         │ decision record  │
                         │ (.agent_runner/  │
                         │    decisions/)   │
@@ -81,10 +89,11 @@ resetting, merging, or broadening scope.
 | `advancore/agent_runner/runner.py` | Orchestration, post-worker verification, and `plan()` / `execute()` entry points. |
 | `advancore/agent_runner/audit.py` | Durable local JSON Lines audit records under `.agent_runner/audit/`. |
 | `advancore/agent_runner/review_bundle.py` | Controller review bundle model, serializer, builder, writer, loader, and inspection formatter. |
+| `advancore/agent_runner/controller_handoff.py` | Controller handoff request model, prepare/reconcile logic, writer, loader, and inspection formatter. |
 | `advancore/agent_runner/controller_decision.py` | Controller decision record model, serializer, builder, writer, loader, and inspection formatter. |
 | `advancore/agent_runner/lifecycle.py` | Task-status enum, actor-role enum, transition matrix, and authority-aware status update helper. |
 | `advancore/agent_runner/decision_lifecycle_bridge.py` | Fail-closed bridge from a validated controller decision record to the existing task lifecycle; preview by default, explicit `--apply` required to mutate. |
-| `advancore/agent_runner/__main__.py` | CLI entry point: `python -m advancore.agent_runner plan TASK-005`, `transition TASK-009 --to ...`, `review-bundle show`, `controller-decision record/show`, or `controller-decision apply`. |
+| `advancore/agent_runner/__main__.py` | CLI entry point: `python -m advancore.agent_runner plan TASK-005`, `transition TASK-009 --to ...`, `review-bundle show`, `controller-decision record/show/apply`, or `controller-handoff prepare/show/reconcile`. |
 
 ---
 
@@ -203,6 +212,62 @@ Inspect a bundle with:
 ```
 
 The `show` command is read-only and never mutates repository state.
+
+### Controller handoff requests
+
+After a review bundle is produced, the runner (or a human operator) may prepare a
+deterministic, machine-readable handoff request under
+`.agent_runner/controller_handoff/`. The request represents “this review bundle
+is waiting for an independent controller decision.” It contains only bounded
+safe metadata:
+
+- request version and request ID,
+- timestamp,
+- task ID and filename,
+- review-bundle path/reference,
+- review-bundle branch and pre/post HEAD evidence,
+- review-bundle recommended action,
+- handoff state,
+- reconciled controller-decision path/value when available,
+- audit reference when available.
+
+A handoff request is an orchestration artifact only. It is not controller
+approval, owner approval, or permission to commit, push, merge, deploy, mutate
+lifecycle state, or impersonate the controller.
+
+The handoff state model is intentionally small:
+
+- `WAITING_DECISION` — a valid review bundle has been prepared for independent
+  controller review.
+- `DECISION_RECEIVED` — a valid controller decision record has been reconciled
+  to the request.
+- `BLOCKED` — reserved for missing, malformed, conflicting, or unsafe handoff
+  evidence.
+
+Prepare a handoff request from the latest review bundle:
+
+```bash
+.venv/bin/python -m advancore.agent_runner controller-handoff prepare
+.venv/bin/python -m advancore.agent_runner controller-handoff prepare .agent_runner/review/20260820T120000_TASK-010.json
+```
+
+Reconcile a handoff request with a controller decision record:
+
+```bash
+.venv/bin/python -m advancore.agent_runner controller-handoff reconcile
+.venv/bin/python -m advancore.agent_runner controller-handoff reconcile .agent_runner/controller_handoff/20260821T120000_TASK-013_WAITING_DECISION.json .agent_runner/decisions/20260821T130000_TASK-013_APPROVE.json
+```
+
+Inspect the latest handoff request:
+
+```bash
+.venv/bin/python -m advancore.agent_runner controller-handoff show
+.venv/bin/python -m advancore.agent_runner controller-handoff show .agent_runner/controller_handoff/20260821T120000_TASK-013_WAITING_DECISION.json
+```
+
+The `show` command is read-only. `prepare` and `reconcile` write only local
+`.agent_runner/` artifacts and do not mutate task files, Git state, or lifecycle
+state.
 
 ### Controller decision records
 
@@ -436,6 +501,44 @@ Explicitly apply the decision to the linked task lifecycle:
 .venv/bin/python -m advancore.agent_runner controller-decision apply --apply
 ```
 
+Prepare a controller handoff request from the latest review bundle:
+
+```bash
+.venv/bin/python -m advancore.agent_runner controller-handoff prepare
+```
+
+Prepare a handoff request from a specific review bundle:
+
+```bash
+.venv/bin/python -m advancore.agent_runner controller-handoff prepare .agent_runner/review/20260820T120000_TASK-010.json
+```
+
+Reconcile the latest handoff request with the latest controller decision:
+
+```bash
+.venv/bin/python -m advancore.agent_runner controller-handoff reconcile
+```
+
+Reconcile specific artifacts:
+
+```bash
+.venv/bin/python -m advancore.agent_runner controller-handoff reconcile \
+  .agent_runner/controller_handoff/20260821T120000_TASK-013_WAITING_DECISION.json \
+  .agent_runner/decisions/20260821T130000_TASK-013_APPROVE.json
+```
+
+Inspect the latest handoff request:
+
+```bash
+.venv/bin/python -m advancore.agent_runner controller-handoff show
+```
+
+Inspect a specific handoff request:
+
+```bash
+.venv/bin/python -m advancore.agent_runner controller-handoff show .agent_runner/controller_handoff/20260821T120000_TASK-013_WAITING_DECISION.json
+```
+
 ---
 
 ## 8. Task lifecycle state model
@@ -549,6 +652,11 @@ auditable and easy to test.
 | Worker self-approval through bridge | Bridge rejects `worker` actors; only `controller`/`owner` may apply a decision. |
 | Hidden task mutation by bridge | Bridge default is preview; explicit `--apply` is required and only the `STATUS:` line is rewritten. |
 | Bridge audit leaks secrets or full content | Bridge audit records exclude task bodies, transcripts, credentials, env dumps, notes, and business/customer data. |
+| Missing explicit handoff object between bundle and decision | Handoff request stores bounded metadata and a stable reference to the review bundle. |
+| Handoff request treated as approval | Handoff state is `WAITING_DECISION` until a separate controller decision record is reconciled. |
+| Worker self-approval through handoff queue | Reconciliation rejects `worker` actors and validates decision/task/bundle linkage. |
+| Silent replacement of a reconciled decision | Reconciliation is idempotent for the same decision and fails closed for a different decision. |
+| Handoff artifacts leak secrets or full content | Handoff requests exclude task bodies, transcripts, credentials, env dumps, and business/customer data. |
 
 ---
 
@@ -559,6 +667,8 @@ auditable and easy to test.
 - Background/scheduled execution only after explicit policy tasks define it.
 - Approval-gate state persistence once an auditable store is approved.
 - Optional bundle signing or checksums if tamper-evident handoff is required.
+- Controller adapter or remote transport layered on top of the existing handoff
+  request/decision linkage contract without redesigning governance.
 
 ---
 
@@ -591,6 +701,13 @@ auditable and easy to test.
 - The bridge validates decision record existence/parseability, actor role, decision value, review-bundle linkage, task identity, current branch, and lifecycle transition validity before applying any mutation.
 - The bridge surfaces HEAD/branch freshness evidence but does not enforce a current-HEAD-equals-bundle-HEAD policy.
 - Bridge preview/apply attempts append a safe metadata audit record with mode `bridge` to `.agent_runner/audit/runner.jsonl`.
+- Controller handoff requests are stored under `.agent_runner/controller_handoff/` and contain only bounded safe metadata.
+- Allowed handoff states are `WAITING_DECISION`, `DECISION_RECEIVED`, and `BLOCKED`.
+- A handoff request is created only from a valid review bundle with supported recommended action and matching branch evidence.
+- Reconciliation validates request/decision parseability, actor role, task identity, bundle reference, and branch/HEAD evidence consistency.
+- Reconciliation is idempotent when the same decision is reconciled again and fails closed when a different decision is already reconciled.
+- Handoff prepare/reconcile write only local `.agent_runner/` artifacts and do not mutate task files, Git state, or lifecycle state.
+- Handoff prepare/reconcile attempts append safe metadata audit records with modes `handoff_prepare` and `handoff_reconcile` to `.agent_runner/audit/runner.jsonl`.
 
 ### ASSUMPTION
 

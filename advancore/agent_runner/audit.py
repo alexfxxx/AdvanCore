@@ -178,6 +178,48 @@ def build_controller_decision_audit_payload(
     }
 
 
+def build_handoff_audit_payload(
+    *,
+    timestamp: datetime | None = None,
+    task_id: str | None,
+    task_filename: str | None,
+    request_id: str | None,
+    mode: str,
+    state: str | None,
+    bundle_path: str | None,
+    bundle_branch: str | None,
+    bundle_pre_head: str | None,
+    bundle_post_head: str | None,
+    decision_path: str | None = None,
+    decision: str | None = None,
+    branch: str | None = None,
+    head_sha: str | None = None,
+) -> dict[str, Any]:
+    """Return a safe metadata payload for a controller handoff operation.
+
+    The payload intentionally excludes the full task body, worker transcripts,
+    credentials, environment dumps, arbitrary notes, and business or customer
+    data. It records only that a handoff request was prepared or reconciled,
+    the linked artifact references, and the resulting state.
+    """
+    return {
+        "timestamp": (timestamp or datetime.now(timezone.utc)).isoformat(),
+        "task_id": task_id,
+        "task_filename": task_filename,
+        "request_id": request_id,
+        "mode": mode,
+        "state": state,
+        "bundle_path": bundle_path,
+        "bundle_branch": bundle_branch,
+        "bundle_pre_head": bundle_pre_head,
+        "bundle_post_head": bundle_post_head,
+        "decision_path": decision_path,
+        "decision": decision,
+        "branch": branch,
+        "head_sha": head_sha,
+    }
+
+
 def write_audit_record(
     payload: dict[str, Any],
     audit_dir: Path,
