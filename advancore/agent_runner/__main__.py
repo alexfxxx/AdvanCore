@@ -651,6 +651,12 @@ def main(argv: list[str] | None = None) -> int:
         default="dry-run",
         help="Worker adapter to use (default: dry-run).",
     )
+    auto_parser.add_argument(
+        "--repair-attempts",
+        type=int,
+        default=0,
+        help="Maximum autonomous repair attempts (0-2, default: 0).",
+    )
 
     transition_parser = subparsers.add_parser(
         "transition",
@@ -1731,6 +1737,7 @@ def main(argv: list[str] | None = None) -> int:
             tasks_dir,
             args.task_id,
             worker=worker,
+            max_repair_attempts=args.repair_attempts,
         )
         print(format_auto_pipeline_report(result))
         return 0 if result.status == AutoPipelineStatus.READY_FOR_APPROVAL else 1

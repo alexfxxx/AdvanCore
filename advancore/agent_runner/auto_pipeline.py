@@ -25,8 +25,13 @@ from advancore.agent_runner.audit import (
     default_audit_dir,
     write_audit_record,
 )
-from advancore.agent_runner.git_info import GitInfo
-from advancore.agent_runner.runner import RunnerResult, RunnerStatus, execute
+from advancore.agent_runner.git_info import GitInfo, get_git_info
+from advancore.agent_runner.runner import (
+    RunnerResult,
+    RunnerStatus,
+    execute,
+    verify_post_worker,
+)
 from advancore.agent_runner.task import Task, TaskError, find_task
 from advancore.agent_runner.validation import ValidationResult, validate
 from advancore.agent_runner.worker import WorkerAdapter
@@ -46,6 +51,46 @@ class AutoPipelineStatus(str, Enum):
     DIFF_CHECK_FAILED = "DIFF_CHECK_FAILED"
     SCOPE_FAILED = "SCOPE_FAILED"
     ARTIFACT_FAILED = "ARTIFACT_FAILED"
+    REPAIR_EXHAUSTED = "REPAIR_EXHAUSTED"
+    NON_REPAIRABLE = "NON_REPAIRABLE"
+
+
+class RepairStatus(str, Enum):
+    """Status of a single repair attempt."""
+
+    REPAIRABLE = "REPAIRABLE"
+    NON_REPAIRABLE = "NON_REPAIRABLE"
+    SUCCEEDED = "SUCCEEDED"
+    FAILED = "FAILED"
+
+
+@dataclass
+class RepairConfig:
+    """Bounded configuration for autonomous repair."""
+
+    max_attempts: int = 0
+
+    def __post_init__(self):
+        """Clamp the repair budget to the approved 0-2 range."""
+        if self.max_attempts < 0:
+            object.__setattr__(self, "max_attempts", 0)
+        elif self.max_attempts > 2:
+            object.__setattr__(self, "max_attempts", 2)
+
+
+@dataclass
+class RepairAttempt:
+    """Bounded metadata for one autonomous repair attempt."""
+
+    attempt_number: int
+    triggering_gate: str
+    status: RepairStatus
+    worker_type: str | None = None
+    worker_success: bool | None = None
+    worker_message: str | None = None
+    evidence: dict[str, Any] = field(default_factory=dict)
+    verification_status: str | None = None
+    messages: list[str] = field(default_factory=list)
 
 
 @dataclass
@@ -117,6 +162,8 @@ class AutoPipelineResult:
     auto_artifact_write_error: str | None = None
     staged_paths: list[str] = field(default_factory=list)
     messages: list[str] = field(default_factory=list)
+    repair_attempts: list[RepairAttempt] = field(default_factory=list)
+    max_repair_attempts: int = 0
 
     def __bool__(self) -> bool:
         return self.status == AutoPipelineStatus.READY_FOR_APPROVAL
@@ -438,6 +485,20 @@ def default_auto_dir(repo_root: Path) -> Path:
 
 def build_auto_artifact_payload(result: AutoPipelineResult) -> dict[str, Any]:
     """Return a safe JSON-serializable payload for the auto pipeline artifact."""
+    repair_payloads: list[dict[str, Any]] = []
+    for attempt in result.repair_attempts or []:
+        repair_payloads.append(
+            {
+                "attempt_number": attempt.attempt_number,
+                "triggering_gate": attempt.triggering_gate,
+                "status": attempt.status.value,
+                "worker_type": attempt.worker_type,
+                "worker_success": attempt.worker_success,
+                "verification_status": attempt.verification_status,
+                "evidence_keys": sorted(attempt.evidence.keys()),
+            }
+        )
+
     return {
         "timestamp": datetime.now(timezone.utc).isoformat(),
         "task_id": result.task.task_id if result.task else None,
@@ -461,6 +522,8 @@ def build_auto_artifact_payload(result: AutoPipelineResult) -> dict[str, Any]:
         "staged_paths": result.staged_paths,
         "working_tree_clean": result.post_git_info.is_clean if result.post_git_info else None,
         "no_publication_performed": True,
+        "max_repair_attempts": result.max_repair_attempts,
+        "repair_attempts": repair_payloads,
         "recommended_action": "controller/owner review",
         "messages": list(result.messages or []),
     }
@@ -518,6 +581,8 @@ def format_auto_pipeline_report(result: AutoPipelineResult) -> str:
         lines.append(f"Task file:         tasks/{result.task.filename}")
     else:
         lines.append("Task:              n/a")
+
+    lines.append(f"Terminal status:   {result.status.value}")
 
     git_info = result.git_info
     if git_info:
@@ -580,6 +645,25 @@ def format_auto_pipeline_report(result: AutoPipelineResult) -> str:
         lines.append("Working tree:      n/a")
 
     lines.append("Publication state: NO staging / commit / push / merge performed")
+
+    if result.max_repair_attempts:
+        lines.append(f"Max repair attempts: {result.max_repair_attempts}")
+        lines.append(f"Repair attempts used: {len(result.repair_attempts)}")
+        for attempt in result.repair_attempts:
+            lines.append(
+                f"  attempt {attempt.attempt_number}: {attempt.status.value} "
+                f"(gate {attempt.triggering_gate}, "
+                f"verification {attempt.verification_status or 'n/a'})"
+            )
+    else:
+        lines.append("Repair mode:       disabled")
+
+    owner_action_required = result.status not in (
+        AutoPipelineStatus.READY_FOR_APPROVAL,
+    )
+    lines.append(
+        f"Controller/owner action required: {'yes' if owner_action_required else 'no'}"
+    )
     lines.append("Next action:       controller/owner review")
     lines.append("-" * 72)
     lines.append("Messages:")
@@ -587,6 +671,127 @@ def format_auto_pipeline_report(result: AutoPipelineResult) -> str:
         lines.append(f"  {msg}")
     lines.append("=" * 72)
     return "\n".join(lines)
+
+
+# ---------------------------------------------------------------------------
+# Bounded autonomous repair
+# ---------------------------------------------------------------------------
+
+
+# Maximum autonomous repair attempts approved without explicit owner review.
+_MAX_REPAIR_ATTEMPTS = 2
+
+
+_REPAIR_INSTRUCTION_TEMPLATE = """Read AGENTS.md.
+
+Execute {task_path} completely using Kimi's AgentSwarm capability for implementation and review work.
+
+Governance inherited by every swarm/sub-agent:
+- Read approved repository files as needed.
+- Modify ONLY paths authorized by the task's allowed changed-file scope.
+- Run local tests/inspection necessary for implementation.
+- Do NOT stage, commit, push, merge, switch branches, tag, reset, rebase, or rewrite history.
+- Do NOT access credentials, secrets, or production databases.
+- Do NOT deploy or alter production systems.
+- Do NOT change commercial/compliance policy.
+- Do NOT declare the work approved.
+- Stop with a completion report and git status.
+
+Do not commit or push until explicitly approved.
+
+Stop with the completion report and git status.
+
+--- AUTONOMOUS REPAIR CONTEXT ---
+This is a bounded autonomous repair attempt triggered by a failed verification gate.
+Task: {task_id}
+Task file: {task_path}
+Triggering gate: {triggering_gate}
+Attempt: {attempt_number} of {max_attempts}
+
+Bounded failure evidence:
+{evidence_text}
+
+Required actions:
+1. Fix only the failing issue described above.
+2. Keep all changes within the allowed changed-file scope below.
+3. Do not use --auto, --yolo, -y, or any permission-bypass mode.
+4. Do not expand scope or perform destructive Git operations.
+5. Confirm the fix by running local tests/inspection.
+
+Allowed changed-file scope:
+{allowed_scope_text}
+"""
+
+
+def classify_repair_status(status: AutoPipelineStatus) -> RepairStatus:
+    """Return whether *status* may be retried autonomously.
+
+    Recoverable failures are implementation/test/diff issues that the worker can
+    plausibly fix without mutating branch/HEAD, staging changes, or exceeding
+    scope. All governance violations and ambiguous states are non-repairable.
+    """
+    if status in (
+        AutoPipelineStatus.TEST_FAILED,
+        AutoPipelineStatus.DIFF_CHECK_FAILED,
+        AutoPipelineStatus.WORKER_FAILED,
+    ):
+        return RepairStatus.REPAIRABLE
+    return RepairStatus.NON_REPAIRABLE
+
+
+def build_repair_evidence(result: AutoPipelineResult) -> dict[str, Any]:
+    """Return bounded, JSON-safe failure evidence for a repair prompt.
+
+    The evidence contains only metadata and short summaries. It never includes
+    full worker transcripts, secrets, environment dumps, or arbitrary command
+    output.
+    """
+    evidence: dict[str, Any] = {"triggering_gate": result.status.value}
+
+    if result.status == AutoPipelineStatus.TEST_FAILED and result.pytest_result:
+        evidence["pytest_returncode"] = result.pytest_result.returncode
+        evidence["pytest_summary"] = result.pytest_result.summary
+        evidence["pytest_passed_count"] = result.pytest_result.passed_count
+
+    elif result.status == AutoPipelineStatus.DIFF_CHECK_FAILED and result.diff_check_result:
+        evidence["diff_check_commands"] = result.diff_check_result.commands
+        evidence["diff_check_returncodes"] = result.diff_check_result.returncodes
+        stderr = result.diff_check_result.stderr or ""
+        evidence["diff_check_error_summary"] = stderr[:500]
+
+    elif result.status == AutoPipelineStatus.WORKER_FAILED and result.worker_result:
+        evidence["worker_returncode"] = result.worker_result.returncode
+        evidence["worker_message"] = result.worker_result.message
+
+    return evidence
+
+
+def build_repair_instruction(
+    task: Task,
+    attempt_number: int,
+    max_attempts: int,
+    triggering_gate: str,
+    evidence: dict[str, Any],
+    allowed_scope: list[str],
+) -> str:
+    """Return a canonical bounded repair instruction for *task*.
+
+    The instruction reuses the existing swarm governance boundary and restates
+    the allowed changed-file scope and prohibited actions for every attempt. It
+    contains only the bounded evidence needed to address the current failure.
+    """
+    task_path = f"tasks/{task.filename}"
+    evidence_text = json.dumps(evidence, indent=2, ensure_ascii=False, sort_keys=True)
+    allowed_scope_text = "\n".join(f"- {p}" for p in allowed_scope) or "(none)"
+    return _REPAIR_INSTRUCTION_TEMPLATE.format(
+        task_path=task_path,
+        task_id=task.task_id,
+        triggering_gate=triggering_gate,
+        attempt_number=attempt_number,
+        max_attempts=max_attempts,
+        evidence_text=evidence_text,
+        allowed_scope_text=allowed_scope_text,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -627,111 +832,22 @@ def _pre_execute_failure(
     return result
 
 
-def run_auto_pipeline(
-    tasks_dir: Path,
-    task_id: str,
-    worker: WorkerAdapter,
-    *,
-    require_scope: bool = True,
-    pytest_runner: Callable[[Path], PytestResult] | None = None,
-    diff_check_runner: Callable[[Path], DiffCheckResult] | None = None,
+def _run_verification_sequence(
+    result: AutoPipelineResult,
+    repo_root: Path,
+    allowed_paths: list[str],
+    require_scope: bool,
+    pytest_runner: Callable[[Path], PytestResult],
+    diff_check_runner: Callable[[Path], DiffCheckResult],
 ) -> AutoPipelineResult:
-    """Run the full governed auto-pipeline for *task_id*.
+    """Run the full post-worker verification sequence and update *result* in place.
 
-    The pipeline reuses the existing ``execute()`` runner for validation,
-    worker launch, post-worker Git verification, audit, and review-bundle
-    generation. It then runs pytest, ``git diff --check`` (unstaged and
-    staged), exact scope validation, and writes a consolidated auto artifact.
-
-    The pipeline never stages, commits, pushes, merges, switches branches, or
-    mutates task lifecycle state.
+    The sequence detects staged paths, runs pytest, runs ``git diff --check``,
+    validates exact changed-file scope, and finalizes ``READY_FOR_APPROVAL`` or
+    the appropriate failure status. It never stages, commits, pushes, merges, or
+    mutates lifecycle state.
     """
-    pytest_runner = pytest_runner or run_pytest
-    diff_check_runner = diff_check_runner or run_git_diff_check
-    repo_root = tasks_dir.parent
-
-    # Step 1: discover the approved task.
-    try:
-        task = find_task(tasks_dir, task_id)
-    except Exception as exc:
-        return _pre_execute_failure(
-            AutoPipelineStatus.VALIDATION_FAILED,
-            [f"FAIL: cannot discover task: {exc}"],
-            repo_root=repo_root,
-        )
-
-    # Step 2: parse and validate allowed changed-file scope before any worker runs.
-    allowed_scope_raw = parse_task_allowed_scope(task.path)
-    if require_scope and allowed_scope_raw is None:
-        return _pre_execute_failure(
-            AutoPipelineStatus.SCOPE_FAILED,
-            ["FAIL: task is missing required 'Allowed changed-file scope' section"],
-            task=task,
-            repo_root=repo_root,
-            worker_type=worker.name,
-        )
-
-    safe_allowed, unsafe_allowed = _validate_allowed_paths(allowed_scope_raw or [])
-    if unsafe_allowed:
-        return _pre_execute_failure(
-            AutoPipelineStatus.SCOPE_FAILED,
-            [
-                "FAIL: allowed changed-file scope contains unsafe path(s): "
-                f"{unsafe_allowed}"
-            ],
-            task=task,
-            repo_root=repo_root,
-            worker_type=worker.name,
-        )
-
-    # Step 3: launch worker via the existing runner execute path.
-    # ``execute()`` validates branch/clean/status, captures pre/post Git snapshots,
-    # writes an audit record, and produces a review bundle.
-    runner_result = execute(tasks_dir, task_id, worker=worker)
-
-    result = AutoPipelineResult(
-        status=AutoPipelineStatus.READY_FOR_APPROVAL,
-        task=task,
-        git_info=runner_result.git_info,
-        pre_git_info=runner_result.pre_git_info,
-        post_git_info=runner_result.post_git_info,
-        validation=runner_result.validation,
-        allowed_paths=safe_allowed,
-        worker_type=runner_result.worker_type,
-        worker_result=runner_result.worker_result,
-        post_verification=runner_result.post_verification,
-        review_bundle_path=runner_result.review_bundle_path,
-        audit_path=runner_result.audit_path,
-        audit_write_ok=runner_result.audit_write_ok,
-        audit_write_error=runner_result.audit_write_error,
-        messages=list(runner_result.messages or []),
-    )
-
-    if runner_result.status == RunnerStatus.FAILED:
-        result.status = AutoPipelineStatus.VALIDATION_FAILED
-        if runner_result.validation is not None:
-            result.messages.extend(runner_result.validation.messages)
-        result.messages.append("Execution blocked: safety validation failed.")
-        _write_auto_artifact(result)
-        return result
-
-    if runner_result.status == RunnerStatus.POST_WORKER_VERIFICATION_FAILED:
-        result.status = AutoPipelineStatus.POST_WORKER_VERIFICATION_FAILED
-        result.messages.append("Post-worker verification failed.")
-        _write_auto_artifact(result)
-        return result
-
-    if runner_result.worker_result is None or not runner_result.worker_result.success:
-        result.status = AutoPipelineStatus.WORKER_FAILED
-        if runner_result.worker_result:
-            result.messages.append(f"Worker failed: {runner_result.worker_result.message}")
-        else:
-            result.messages.append("Worker failed: no worker result returned")
-        _write_auto_artifact(result)
-        return result
-
-    # Step 4: detect staged/index changes created by the worker.
-    repo_root = runner_result.git_info.repo_root if runner_result.git_info else repo_root
+    # Step 1: detect staged/index changes created by the worker.
     try:
         result.staged_paths = detect_staged_paths(repo_root)
     except Exception as exc:  # pragma: no cover - defensive
@@ -746,7 +862,7 @@ def run_auto_pipeline(
         _write_auto_artifact(result)
         return result
 
-    # Step 5: run full pytest suite.
+    # Step 2: run full pytest suite.
     try:
         result.pytest_result = pytest_runner(repo_root)
     except Exception as exc:
@@ -775,7 +891,7 @@ def run_auto_pipeline(
             f"PASS: {result.pytest_result.passed_count} test(s) passed"
         )
 
-    # Step 6: run git diff --check (unstaged and staged).
+    # Step 3: run git diff --check (unstaged and staged).
     try:
         result.diff_check_result = diff_check_runner(repo_root)
     except Exception as exc:
@@ -794,10 +910,12 @@ def run_auto_pipeline(
 
     result.messages.append("PASS: git diff --check found no whitespace errors")
 
-    # Step 7: validate exact changed-file scope.
-    actual_paths = _derive_actual_changed_paths(runner_result)
+    # Step 4: validate exact changed-file scope.
+    actual_paths: list[str] = []
+    if result.post_verification is not None:
+        actual_paths = list(result.post_verification.changed_paths or [])
     result.scope_result = build_scope_result(
-        safe_allowed,
+        allowed_paths,
         actual_paths,
         require_scope=require_scope,
     )
@@ -808,7 +926,7 @@ def run_auto_pipeline(
         _write_auto_artifact(result)
         return result
 
-    # Step 8: finalize as READY_FOR_APPROVAL.
+    # Step 5: finalize as READY_FOR_APPROVAL.
     result.status = AutoPipelineStatus.READY_FOR_APPROVAL
     result.messages.append(
         "Implementation and verification complete. READY FOR CONTROLLER/OWNER REVIEW."
@@ -817,6 +935,339 @@ def run_auto_pipeline(
         "No staging, commit, push, merge, deployment, or lifecycle approval occurred."
     )
 
+    _write_auto_artifact(result)
+    return result
+
+
+def _run_repair_attempt(
+    tasks_dir: Path,
+    task: Task,
+    worker: WorkerAdapter,
+    instruction: str,
+    allowed_paths: list[str],
+    require_scope: bool,
+    pytest_runner: Callable[[Path], PytestResult],
+    diff_check_runner: Callable[[Path], DiffCheckResult],
+    attempt_number: int,
+    max_attempts: int,
+) -> AutoPipelineResult:
+    """Launch a bounded repair worker and rerun full verification.
+
+    Repair attempts do not require a clean working tree because they operate on
+    the dirty state left by the previous attempt. They still enforce branch/HEAD
+    stability, staged-path prohibition, pytest, diff-check, and exact scope.
+    """
+    repo_root = tasks_dir.parent
+    result = AutoPipelineResult(
+        status=AutoPipelineStatus.READY_FOR_APPROVAL,
+        task=task,
+        allowed_paths=allowed_paths,
+        worker_type=worker.name,
+        messages=[f"Repair attempt {attempt_number} of {max_attempts} launched"],
+    )
+
+    # Capture pre-repair Git snapshot for branch/HEAD comparison.
+    try:
+        pre_git_info = get_git_info(cwd=repo_root)
+    except Exception as exc:
+        result.git_info = GitInfo(
+            repo_root=repo_root,
+            current_branch="unknown",
+            head_sha="unknown",
+            is_clean=False,
+            status_lines=[],
+        )
+        result.status = AutoPipelineStatus.POST_WORKER_VERIFICATION_FAILED
+        result.messages.append(
+            f"FAIL: could not capture pre-repair Git snapshot: {exc}"
+        )
+        _write_auto_artifact(result)
+        return result
+
+    result.git_info = pre_git_info
+    result.pre_git_info = pre_git_info
+
+    # Launch repair worker with the bounded instruction.
+    worker_result = worker.run(instruction, repo_root)
+    result.worker_result = worker_result
+
+    if not worker_result.success:
+        result.status = AutoPipelineStatus.WORKER_FAILED
+        result.messages.append(f"Repair worker failed: {worker_result.message}")
+        _write_auto_artifact(result)
+        return result
+
+    # Capture post-repair Git snapshot.
+    try:
+        post_git_info = get_git_info(cwd=repo_root)
+    except Exception as exc:
+        result.status = AutoPipelineStatus.POST_WORKER_VERIFICATION_FAILED
+        result.messages.append(
+            f"FAIL: could not capture post-repair Git snapshot: {exc}"
+        )
+        _write_auto_artifact(result)
+        return result
+
+    result.post_git_info = post_git_info
+    result.git_info = post_git_info
+
+    # Verify branch/HEAD stability after repair.
+    result.post_verification = verify_post_worker(pre_git_info, post_git_info)
+    if not result.post_verification:
+        result.status = AutoPipelineStatus.POST_WORKER_VERIFICATION_FAILED
+        result.messages.extend(result.post_verification.messages)
+        result.messages.append("Post-repair verification failed.")
+        _write_auto_artifact(result)
+        return result
+
+    return _run_verification_sequence(
+        result,
+        repo_root,
+        allowed_paths,
+        require_scope,
+        pytest_runner,
+        diff_check_runner,
+    )
+
+
+def run_auto_pipeline(
+    tasks_dir: Path,
+    task_id: str,
+    worker: WorkerAdapter,
+    *,
+    require_scope: bool = True,
+    pytest_runner: Callable[[Path], PytestResult] | None = None,
+    diff_check_runner: Callable[[Path], DiffCheckResult] | None = None,
+    max_repair_attempts: int = 0,
+) -> AutoPipelineResult:
+    """Run the full governed auto-pipeline for *task_id* with optional repair.
+
+    The pipeline reuses the existing ``execute()`` runner for validation,
+    worker launch, post-worker Git verification, audit, and review-bundle
+    generation. It then runs pytest, ``git diff --check`` (unstaged and
+    staged), exact scope validation, and writes a consolidated auto artifact.
+
+    When *max_repair_attempts* is greater than zero, recoverable failures
+    (pytest, diff-check, or safe worker failures) trigger a bounded repair
+    prompt back to the selected worker. The full verification sequence reruns
+    after every repair attempt. Non-repairable governance failures (branch/HEAD
+    mutation, staged changes, scope violations, etc.) fail closed immediately.
+
+    The pipeline never stages, commits, pushes, merges, switches branches, or
+    mutates task lifecycle state.
+    """
+    pytest_runner = pytest_runner or run_pytest
+    diff_check_runner = diff_check_runner or run_git_diff_check
+    repo_root = tasks_dir.parent
+    repair_config = RepairConfig(max_attempts=max_repair_attempts)
+
+    def _pre_failure(
+        status: AutoPipelineStatus, messages: list[str]
+    ) -> AutoPipelineResult:
+        """Build a pre-execute failure, escalating to NON_REPAIRABLE when repair is on."""
+        if repair_config.max_attempts > 0:
+            status = AutoPipelineStatus.NON_REPAIRABLE
+            messages = messages + [
+                "FAIL: pre-execute failure is not repairable; escalating to controller/owner"
+            ]
+        return _pre_execute_failure(
+            status,
+            messages,
+            task=task if "task" in vars() else None,
+            repo_root=repo_root,
+            worker_type=worker.name,
+        )
+
+    # Step 1: discover the approved task.
+    try:
+        task = find_task(tasks_dir, task_id)
+    except Exception as exc:
+        return _pre_failure(
+            AutoPipelineStatus.VALIDATION_FAILED,
+            [f"FAIL: cannot discover task: {exc}"],
+        )
+
+    # Step 2: parse and validate allowed changed-file scope before any worker runs.
+    allowed_scope_raw = parse_task_allowed_scope(task.path)
+    if require_scope and allowed_scope_raw is None:
+        return _pre_failure(
+            AutoPipelineStatus.SCOPE_FAILED,
+            ["FAIL: task is missing required 'Allowed changed-file scope' section"],
+        )
+
+    safe_allowed, unsafe_allowed = _validate_allowed_paths(allowed_scope_raw or [])
+    if unsafe_allowed:
+        return _pre_failure(
+            AutoPipelineStatus.SCOPE_FAILED,
+            [
+                "FAIL: allowed changed-file scope contains unsafe path(s): "
+                f"{unsafe_allowed}"
+            ],
+        )
+
+    # Step 3: launch worker via the existing runner execute path.
+    # ``execute()`` validates branch/clean/status, captures pre/post Git snapshots,
+    # writes an audit record, and produces a review bundle.
+    runner_result = execute(tasks_dir, task_id, worker=worker)
+
+    result = AutoPipelineResult(
+        status=AutoPipelineStatus.READY_FOR_APPROVAL,
+        task=task,
+        git_info=runner_result.git_info,
+        pre_git_info=runner_result.pre_git_info,
+        post_git_info=runner_result.post_git_info,
+        validation=runner_result.validation,
+        allowed_paths=safe_allowed,
+        worker_type=runner_result.worker_type,
+        worker_result=runner_result.worker_result,
+        post_verification=runner_result.post_verification,
+        review_bundle_path=runner_result.review_bundle_path,
+        audit_path=runner_result.audit_path,
+        audit_write_ok=runner_result.audit_write_ok,
+        audit_write_error=runner_result.audit_write_error,
+        messages=list(runner_result.messages or []),
+        max_repair_attempts=repair_config.max_attempts,
+    )
+
+    if runner_result.status == RunnerStatus.FAILED:
+        result.status = AutoPipelineStatus.VALIDATION_FAILED
+        if runner_result.validation is not None:
+            result.messages.extend(runner_result.validation.messages)
+        result.messages.append("Execution blocked: safety validation failed.")
+        if repair_config.max_attempts == 0:
+            _write_auto_artifact(result)
+            return result
+
+    elif runner_result.status == RunnerStatus.POST_WORKER_VERIFICATION_FAILED:
+        result.status = AutoPipelineStatus.POST_WORKER_VERIFICATION_FAILED
+        result.messages.append("Post-worker verification failed.")
+        if repair_config.max_attempts == 0:
+            _write_auto_artifact(result)
+            return result
+
+    elif runner_result.worker_result is None or not runner_result.worker_result.success:
+        result.status = AutoPipelineStatus.WORKER_FAILED
+        if runner_result.worker_result:
+            result.messages.append(
+                f"Worker failed: {runner_result.worker_result.message}"
+            )
+        else:
+            result.messages.append("Worker failed: no worker result returned")
+    else:
+        # Worker succeeded; run the full post-worker verification sequence.
+        repo_root = (
+            runner_result.git_info.repo_root if runner_result.git_info else repo_root
+        )
+        result = _run_verification_sequence(
+            result,
+            repo_root,
+            safe_allowed,
+            require_scope,
+            pytest_runner,
+            diff_check_runner,
+        )
+
+    repair_attempts: list[RepairAttempt] = []
+    result.repair_attempts = repair_attempts
+    result.max_repair_attempts = repair_config.max_attempts
+
+    if result:
+        return result
+
+    if repair_config.max_attempts == 0:
+        # No repair budget; ensure artifact is written and return the failure.
+        if result.auto_artifact_path is None:
+            _write_auto_artifact(result)
+        return result
+
+    # Step 4: bounded autonomous repair loop.
+    for attempt_number in range(1, repair_config.max_attempts + 1):
+        original_status = result.status
+        classification = classify_repair_status(original_status)
+        if classification != RepairStatus.REPAIRABLE:
+            result.status = AutoPipelineStatus.NON_REPAIRABLE
+            result.messages.append(
+                f"FAIL: {original_status.value} is not repairable; "
+                "escalating to controller/owner"
+            )
+            if result.auto_artifact_path is None:
+                _write_auto_artifact(result)
+            return result
+
+        evidence = build_repair_evidence(result)
+        instruction = build_repair_instruction(
+            task=task,
+            attempt_number=attempt_number,
+            max_attempts=repair_config.max_attempts,
+            triggering_gate=original_status.value,
+            evidence=evidence,
+            allowed_scope=safe_allowed,
+        )
+
+        repair_attempt = RepairAttempt(
+            attempt_number=attempt_number,
+            triggering_gate=original_status.value,
+            status=RepairStatus.REPAIRABLE,
+            worker_type=worker.name,
+            evidence=evidence,
+            messages=[
+                f"Repair attempt {attempt_number} of {repair_config.max_attempts} launched"
+            ],
+        )
+        repair_attempts.append(repair_attempt)
+
+        repair_result = _run_repair_attempt(
+            tasks_dir=tasks_dir,
+            task=task,
+            worker=worker,
+            instruction=instruction,
+            allowed_paths=safe_allowed,
+            require_scope=require_scope,
+            pytest_runner=pytest_runner,
+            diff_check_runner=diff_check_runner,
+            attempt_number=attempt_number,
+            max_attempts=repair_config.max_attempts,
+        )
+        repair_attempt.worker_success = (
+            repair_result.worker_result.success if repair_result.worker_result else None
+        )
+        repair_attempt.worker_message = (
+            repair_result.worker_result.message if repair_result.worker_result else None
+        )
+        repair_attempt.verification_status = repair_result.status.value
+
+        if repair_result.status == AutoPipelineStatus.READY_FOR_APPROVAL:
+            repair_attempt.status = RepairStatus.SUCCEEDED
+            repair_attempt.messages.append("Repair attempt succeeded")
+        else:
+            repair_attempt.status = RepairStatus.FAILED
+            repair_attempt.messages.append(
+                f"Repair attempt failed: {repair_result.status.value}"
+            )
+
+        # Preserve review bundle / audit evidence from the original execute().
+        repair_result.review_bundle_path = result.review_bundle_path
+        repair_result.audit_path = result.audit_path
+        repair_result.audit_write_ok = result.audit_write_ok
+        repair_result.audit_write_error = result.audit_write_error
+        repair_result.validation = result.validation
+        result = repair_result
+        result.repair_attempts = repair_attempts
+        result.max_repair_attempts = repair_config.max_attempts
+
+        if result:
+            result.messages.append(
+                f"Repair succeeded on attempt {attempt_number}"
+            )
+            _write_auto_artifact(result)
+            return result
+
+    # Repair budget exhausted.
+    result.status = AutoPipelineStatus.REPAIR_EXHAUSTED
+    result.messages.append(
+        f"FAIL: repair budget exhausted after {repair_config.max_attempts} "
+        "attempt(s); controller/owner review required"
+    )
     _write_auto_artifact(result)
     return result
 

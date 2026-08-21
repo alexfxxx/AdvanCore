@@ -945,6 +945,10 @@ auditable and easy to test.
 | Driver silently overwrites conflicting artifacts | Identical request resend is idempotent; divergent requests or ambiguous responses for the same correlation id fail closed. |
 | Path traversal/symlink escape via driver artifacts | Driver read/write paths are resolved and checked against the bounded `outbox/` and `inbox/` directories; escapes are rejected. |
 | Unintended remote transport via driver | Only the local-filesystem driver is implemented; no HTTP, webhooks, sockets, queues, background polling, or subprocess transport is added. |
+| Autonomous repair bypassing governance | Repair is opt-in (`--repair-attempts`), capped at 2, and fails closed on non-repairable governance violations. |
+| Repair prompt leaking secrets or full transcripts | Repair evidence is bounded to metadata and short summaries; full stdout/stderr, env dumps, and arbitrary repo content are excluded. |
+| Repair loop mutating branch/HEAD or staging | Full verification reruns after each attempt; branch/HEAD/staging failures are classified `NON_REPAIRABLE` and stop immediately. |
+| Repair loop granting controller authority | Successful repair ends only at `READY_FOR_APPROVAL`; no commit, push, merge, deploy, or lifecycle approval occurs. |
 
 ---
 
@@ -963,6 +967,11 @@ the authority boundaries established by TASK-005 through TASK-016.
 The default worker is `dry-run`. Use `--worker kimi` for the standard Kimi
 prompt adapter or `--worker kimi-swarm` for the swarm-mode adapter.
 
+Use `--repair-attempts N` (0-2, default 0) to enable a bounded autonomous repair
+loop. A value of `0` preserves the original TASK-017 single-pass behavior; any
+non-zero value triggers recoverable-failure classification and re-prompts the
+selected worker with bounded evidence. Values above `2` are clamped to `2`.
+
 ### 12.2 Gates (executed in order, fail-closed)
 
 1. Resolve and parse the approved task file.
@@ -978,9 +987,15 @@ prompt adapter or `--worker kimi-swarm` for the swarm-mode adapter.
 10. Compare actual changed paths against the allowed scope.
 11. Write a bounded auto-pipeline artifact and produce a consolidated
     controller-ready report.
+12. If `--repair-attempts` is enabled and the failure is classified as
+    repairable, build a bounded repair prompt and re-run steps 4-11. Repeat
+    until the run passes or the repair budget is exhausted. Non-repairable
+    governance failures (branch/HEAD mutation, staged changes, scope violations,
+    etc.) fail closed immediately and are reported as `NON_REPAIRABLE`.
 
-The pipeline stops at the first failing gate and never stages, commits, pushes,
-merges, switches branches, deploys, or mutates lifecycle state.
+The pipeline stops at the first failing gate (or after exhausting the repair
+budget) and never stages, commits, pushes, merges, switches branches, deploys,
+or mutates lifecycle state.
 
 ### 12.3 Allowed changed-file scope
 
@@ -1014,6 +1029,10 @@ worker is permitted to modify. The pipeline fails closed if:
 - `DIFF_CHECK_FAILED` — `git diff --check` detected whitespace errors.
 - `SCOPE_FAILED` — scope missing/unsafe or actual changes exceed allowed paths.
 - `ARTIFACT_FAILED` — the auto-pipeline artifact could not be written.
+- `REPAIR_EXHAUSTED` — the repair budget was consumed without producing a
+  passing run; controller/owner review is required.
+- `NON_REPAIRABLE` — a governance or safety failure cannot be autonomously
+  repaired; controller/owner review is required immediately.
 
 ### 12.6 Auto artifact
 
@@ -1035,6 +1054,41 @@ IMPLEMENTATION + VERIFICATION COMPLETE → READY FOR CONTROLLER/OWNER REVIEW
 It does **not** mean approved, committed, pushed, merged, or deployed. The
 AdvanCore runner remains the policy authority; Kimi/Kimi Swarm remains a bounded
 implementation worker.
+
+### 12.8 Autonomous repair loop (TASK-018)
+
+When `--repair-attempts N` is enabled, the runner classifies the initial
+failure as either repairable or non-repairable:
+
+- **Repairable:** `TEST_FAILED`, `DIFF_CHECK_FAILED`, and `WORKER_FAILED` (when
+  branch/HEAD/staging checks are still clean). The runner sends the selected
+  worker a bounded repair instruction that contains only the triggering gate,
+  attempt number, bounded evidence, and the task's allowed changed-file scope.
+- **Non-repairable:** `VALIDATION_FAILED`, `POST_WORKER_VERIFICATION_FAILED`,
+  `SCOPE_FAILED`, `ARTIFACT_FAILED`, and any other governance or ambiguous
+  state. These stop immediately and are reported as `NON_REPAIRABLE`.
+
+The repair instruction:
+
+- restates the task ID, task file, and allowed changed-file scope,
+- includes only bounded metadata (return codes, short summaries) and never full
+  worker transcripts, secrets, environment dumps, or arbitrary repository
+  content,
+- explicitly forbids `--auto`, `--yolo`, permission-bypass modes, destructive
+  Git operations, staging, commit, push, merge, branch switch, credential
+  access, deployment, and self-approval,
+- is sent through the same worker adapter selected for the original attempt
+  (preserving `kimi-swarm` when already chosen).
+
+After every repair attempt the full verification sequence reruns: post-worker
+Git/branch/HEAD checks, staged-path detection, full pytest, `git diff --check`,
+and exact changed-file scope verification. A successful repair ends only at
+`READY_FOR_APPROVAL`; it never stages, commits, pushes, merges, deploys, or
+mutates lifecycle state.
+
+The auto artifact records bounded per-attempt metadata (attempt number,
+triggering gate, status, worker type, worker success, verification status, and
+evidence keys) without storing full transcripts or command output.
 
 ---
 
@@ -1110,6 +1164,14 @@ implementation worker.
 - The `KimiSwarmWorkerAdapter` uses the documented `kimi --prompt` boundary because the installed Kimi CLI does not expose a documented non-interactive swarm subcommand.
 - The swarm adapter instruction explicitly requests AgentSwarm capability, restates the allowed changed-file scope, and forbids staging, commit, push, merge, branch switch, credential access, deployment, and self-approval.
 - The swarm adapter never adds `--auto`, `--yolo`, or equivalent permission-bypass flags.
+- The `auto` subcommand supports `--repair-attempts N` (default `0`, clamped to `0-2`) to enable a bounded autonomous repair loop.
+- Autonomous repair classifies failures as `REPAIRABLE` (`TEST_FAILED`, `DIFF_CHECK_FAILED`, safe `WORKER_FAILED`) or `NON_REPAIRABLE` (governance/branch/HEAD/staging/scope/artifact failures).
+- Repair instructions contain only bounded failure evidence (triggering gate, attempt number, return codes, short summaries) and never full worker transcripts, secrets, environment dumps, or arbitrary command output.
+- Repair instructions restate the task's allowed changed-file scope and prohibited actions for every attempt.
+- The full verification sequence (post-worker Git/branch/HEAD checks, staged-path detection, pytest, `git diff --check`, exact scope verification) reruns after every repair attempt.
+- A successful repair ends only at `READY_FOR_APPROVAL`; it never stages, commits, pushes, merges, deploys, or mutates lifecycle state.
+- Repair budget exhaustion is reported as `REPAIR_EXHAUSTED`; non-repairable failures are reported as `NON_REPAIRABLE`.
+- The auto artifact records bounded per-attempt metadata (attempt number, triggering gate, status, worker type, worker success, verification status, evidence keys) without full transcripts or command output.
 - The controller-transport envelope lives in `advancore/agent_runner/controller_transport.py`.
 - Transport request and response envelopes are versioned (`envelope_version: "1"`) and schema-tagged (`advancore.controller.transport.request` / `.response`).
 - Transport envelopes carry only bounded safe metadata: correlation/request ID, task identity, handoff and review-bundle references, adapter name/type, bundle branch/HEAD/recommended-action/handoff-state, and bounded messages.

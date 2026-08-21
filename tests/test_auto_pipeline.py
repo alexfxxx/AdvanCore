@@ -9,6 +9,7 @@ actually running.
 from __future__ import annotations
 
 import json
+from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
 from unittest.mock import MagicMock, patch
@@ -21,14 +22,21 @@ from advancore.agent_runner import (
     DiffCheckResult,
     KimiSwarmWorkerAdapter,
     PytestResult,
+    RepairAttempt,
+    RepairConfig,
+    RepairStatus,
     WorkerAdapter,
     WorkerResult,
+    classify_repair_status,
+    parse_task,
     parse_task_allowed_scope,
     run_auto_pipeline,
 )
 from advancore.agent_runner.auto_pipeline import (
     AutoArtifactWriteError,
     ScopeResult,
+    build_repair_evidence,
+    build_repair_instruction,
     build_scope_result,
     format_auto_pipeline_report,
     run_git_diff_check,
@@ -98,6 +106,35 @@ def _patch_sequence_git_info(*snapshots: GitInfo):
     )
 
 
+@contextmanager
+def _patch_sequence_git_info_for_repair(*snapshots: GitInfo):
+    """Patch get_git_info in both runner and auto_pipeline for repair tests.
+
+    The initial ``execute()`` call consumes the first two snapshots from the
+    runner patch; each repair attempt consumes two snapshots from the
+    auto_pipeline patch. Both patches share the same iterator so the overall
+    order of Git snapshots is preserved.
+    """
+    from contextlib import ExitStack
+
+    snapshots_list = list(snapshots)
+    side_effect = _sequence_git_info(*snapshots_list)
+    with ExitStack() as stack:
+        stack.enter_context(
+            patch(
+                "advancore.agent_runner.runner.get_git_info",
+                side_effect=side_effect,
+            )
+        )
+        stack.enter_context(
+            patch(
+                "advancore.agent_runner.auto_pipeline.get_git_info",
+                side_effect=side_effect,
+            )
+        )
+        yield
+
+
 def _patch_detect_staged_paths(paths: list[str] | None = None):
     return patch(
         "advancore.agent_runner.auto_pipeline.detect_staged_paths",
@@ -112,7 +149,9 @@ class FakeWorkerAdapter(WorkerAdapter):
     name_value: str = "fake"
     return_success: bool = True
     return_message: str = "fake worker ran"
+    return_success_sequence: list[bool] | None = None
     recorded: list[tuple[str, Path]] | None = None
+    _sequence_index: int = 0
 
     @property
     def name(self) -> str:
@@ -125,8 +164,18 @@ class FakeWorkerAdapter(WorkerAdapter):
         if self.recorded is None:
             self.recorded = []
         self.recorded.append((instruction, working_dir))
+
+        if self.return_success_sequence is not None:
+            if self._sequence_index < len(self.return_success_sequence):
+                success = self.return_success_sequence[self._sequence_index]
+            else:
+                success = self.return_success
+            self._sequence_index += 1
+        else:
+            success = self.return_success
+
         return WorkerResult(
-            success=self.return_success,
+            success=success,
             command=self.build_command(instruction, working_dir),
             message=self.return_message,
         )
@@ -170,6 +219,26 @@ def _failing_diff_check(repo_root: Path) -> DiffCheckResult:
         stdout="",
         stderr="error: trailing whitespace",
     )
+
+
+def _sequence_runner(results: list):
+    """Return a callable that yields results in order on each invocation."""
+    index = 0
+
+    def _runner(*args, **kwargs):
+        nonlocal index
+        if index >= len(results):
+            raise RuntimeError("sequence runner exhausted")
+        result = results[index]
+        index += 1
+        return result
+
+    return _runner
+
+
+def _sequence_git_info_list(*snapshots: GitInfo):
+    """Return a list of get_git_info return values for patching."""
+    return list(snapshots)
 
 
 # ---------------------------------------------------------------------------
@@ -1047,3 +1116,812 @@ class TestAutoPipelineNoPublicationSideEffects:
             assert "switch" not in args
             assert "reset" not in args
             assert "rebase" not in args
+
+
+
+# ---------------------------------------------------------------------------
+# Bounded autonomous repair loop (TASK-018)
+# ---------------------------------------------------------------------------
+
+
+class TestRepairClassification:
+    def test_classify_repair_status_recoverable_failures(self):
+        assert classify_repair_status(AutoPipelineStatus.TEST_FAILED) == RepairStatus.REPAIRABLE
+        assert classify_repair_status(AutoPipelineStatus.DIFF_CHECK_FAILED) == RepairStatus.REPAIRABLE
+        assert classify_repair_status(AutoPipelineStatus.WORKER_FAILED) == RepairStatus.REPAIRABLE
+
+    def test_classify_repair_status_non_repairable_failures(self):
+        assert classify_repair_status(AutoPipelineStatus.VALIDATION_FAILED) == RepairStatus.NON_REPAIRABLE
+        assert classify_repair_status(AutoPipelineStatus.POST_WORKER_VERIFICATION_FAILED) == RepairStatus.NON_REPAIRABLE
+        assert classify_repair_status(AutoPipelineStatus.SCOPE_FAILED) == RepairStatus.NON_REPAIRABLE
+        assert classify_repair_status(AutoPipelineStatus.ARTIFACT_FAILED) == RepairStatus.NON_REPAIRABLE
+        assert classify_repair_status(AutoPipelineStatus.NON_REPAIRABLE) == RepairStatus.NON_REPAIRABLE
+        assert classify_repair_status(AutoPipelineStatus.REPAIR_EXHAUSTED) == RepairStatus.NON_REPAIRABLE
+
+    def test_repair_config_clamps_to_approved_range(self):
+        assert RepairConfig(max_attempts=-1).max_attempts == 0
+        assert RepairConfig(max_attempts=0).max_attempts == 0
+        assert RepairConfig(max_attempts=1).max_attempts == 1
+        assert RepairConfig(max_attempts=2).max_attempts == 2
+        assert RepairConfig(max_attempts=5).max_attempts == 2
+
+
+class TestRepairInstruction:
+    def test_repair_instruction_contains_required_fields(self, tmp_path: Path):
+        task_path = _write_task(
+            tmp_path,
+            "TASK-018",
+            "Repair Instruction Task",
+            "READY",
+            allowed_scope=["advancore/agent_runner/auto_pipeline.py"],
+        )
+        task = parse_task(task_path)
+        instruction = build_repair_instruction(
+            task=task,
+            attempt_number=1,
+            max_attempts=2,
+            triggering_gate="TEST_FAILED",
+            evidence={"pytest_returncode": 1, "pytest_summary": "1 failed"},
+            allowed_scope=["advancore/agent_runner/auto_pipeline.py"],
+        )
+        assert "TASK-018" in instruction
+        assert "tasks/TASK-018" in instruction
+        assert "TEST_FAILED" in instruction
+        assert "Attempt: 1 of 2" in instruction
+        assert "pytest_returncode" in instruction
+        assert "Allowed changed-file scope" in instruction
+        assert "advancore/agent_runner/auto_pipeline.py" in instruction
+        assert "Do NOT stage, commit, push, merge" in instruction
+        assert "Do NOT declare" in instruction
+        assert "Do not use --auto, --yolo" in instruction
+        assert "permission-bypass" in instruction
+
+    def test_repair_instruction_excludes_full_transcripts_and_secrets(self, tmp_path: Path):
+        task_path = _write_task(
+            tmp_path,
+            "TASK-018",
+            "Repair Instruction Task",
+            "READY",
+            allowed_scope=["advancore/agent_runner/auto_pipeline.py"],
+        )
+        task = parse_task(task_path)
+        evidence = {
+            "worker_message": "error",
+            "secret": "password=abc token=xyz",  # should not appear in real use
+        }
+        instruction = build_repair_instruction(
+            task=task,
+            attempt_number=1,
+            max_attempts=2,
+            triggering_gate="WORKER_FAILED",
+            evidence=evidence,
+            allowed_scope=["advancore/agent_runner/auto_pipeline.py"],
+        )
+        # Even if evidence is malformed, the instruction must not expand environment/repo dumps.
+        assert "ENV" not in instruction
+        assert "stdout" not in instruction.lower() or "worker_message" in instruction
+
+
+class TestRepairEvidence:
+    def test_build_repair_evidence_for_pytest(self):
+        result = AutoPipelineResult(
+            status=AutoPipelineStatus.TEST_FAILED,
+            pytest_result=_failing_pytest(Path("/tmp")),
+        )
+        evidence = build_repair_evidence(result)
+        assert evidence["triggering_gate"] == "TEST_FAILED"
+        assert evidence["pytest_returncode"] == 1
+        assert evidence["pytest_summary"] == "1 failed"
+
+    def test_build_repair_evidence_for_diff_check(self):
+        result = AutoPipelineResult(
+            status=AutoPipelineStatus.DIFF_CHECK_FAILED,
+            diff_check_result=_failing_diff_check(Path("/tmp")),
+        )
+        evidence = build_repair_evidence(result)
+        assert evidence["triggering_gate"] == "DIFF_CHECK_FAILED"
+        assert evidence["diff_check_returncodes"] == [1, 0]
+        assert "trailing whitespace" in evidence["diff_check_error_summary"]
+
+    def test_build_repair_evidence_truncates_long_stderr(self):
+        long_stderr = "x" * 1000
+        result = AutoPipelineResult(
+            status=AutoPipelineStatus.DIFF_CHECK_FAILED,
+            diff_check_result=DiffCheckResult(
+                commands=[],
+                returncodes=[1, 0],
+                stdout="",
+                stderr=long_stderr,
+            ),
+        )
+        evidence = build_repair_evidence(result)
+        assert len(evidence["diff_check_error_summary"]) <= 500
+
+
+class TestRepairLoopSuccess:
+    def test_repair_disabled_preserves_task_017_behavior(self, tmp_path: Path):
+        repo_root = tmp_path / "repo"
+        tasks_dir = repo_root / "tasks"
+        tasks_dir.mkdir(parents=True)
+        _write_task(
+            tasks_dir,
+            "TASK-018",
+            "Auto Pipeline Task",
+            "READY",
+            allowed_scope=["advancore/agent_runner/auto_pipeline.py"],
+        )
+        pre = _git_info(repo_root)
+        post = _git_info(repo_root)
+        fake = FakeWorkerAdapter()
+
+        with _patch_sequence_git_info(pre, post), _patch_detect_staged_paths([]):
+            result = run_auto_pipeline(
+                tasks_dir,
+                "TASK-018",
+                worker=fake,
+                pytest_runner=_failing_pytest,
+                diff_check_runner=_passing_diff_check,
+                max_repair_attempts=0,
+            )
+
+        assert result.status == AutoPipelineStatus.TEST_FAILED
+        assert len(fake.recorded) == 1  # only initial worker
+        assert result.repair_attempts == []
+        assert result.max_repair_attempts == 0
+
+    def test_pytest_failure_repairable_and_succeeds_on_first_attempt(self, tmp_path: Path):
+        repo_root = tmp_path / "repo"
+        tasks_dir = repo_root / "tasks"
+        tasks_dir.mkdir(parents=True)
+        _write_task(
+            tasks_dir,
+            "TASK-018",
+            "Auto Pipeline Task",
+            "READY",
+            allowed_scope=["advancore/agent_runner/auto_pipeline.py"],
+        )
+        pre = _git_info(repo_root)
+        post = _git_info(repo_root)
+        repair_pre = _git_info(repo_root)
+        repair_post = _git_info(repo_root)
+        fake = FakeWorkerAdapter()
+        pytest_ran = []
+
+        pytest_runner = _sequence_runner([_failing_pytest(repo_root), _passing_pytest(repo_root)])
+
+        with _patch_sequence_git_info_for_repair(
+            pre, post, repair_pre, repair_post
+        ), _patch_detect_staged_paths([]):
+            result = run_auto_pipeline(
+                tasks_dir,
+                "TASK-018",
+                worker=fake,
+                pytest_runner=pytest_runner,
+                diff_check_runner=_passing_diff_check,
+                max_repair_attempts=2,
+            )
+
+        assert result.status == AutoPipelineStatus.READY_FOR_APPROVAL
+        assert len(fake.recorded) == 2  # initial + repair
+        assert len(result.repair_attempts) == 1
+        attempt = result.repair_attempts[0]
+        assert attempt.attempt_number == 1
+        assert attempt.triggering_gate == "TEST_FAILED"
+        assert attempt.status == RepairStatus.SUCCEEDED
+        assert attempt.verification_status == "READY_FOR_APPROVAL"
+        assert attempt.worker_type == "fake"
+        assert pytest_runner  # used
+
+    def test_diff_check_failure_repairable_and_succeeds_after_two_attempts(self, tmp_path: Path):
+        repo_root = tmp_path / "repo"
+        tasks_dir = repo_root / "tasks"
+        tasks_dir.mkdir(parents=True)
+        _write_task(
+            tasks_dir,
+            "TASK-018",
+            "Auto Pipeline Task",
+            "READY",
+            allowed_scope=["advancore/agent_runner/auto_pipeline.py"],
+        )
+        pre = _git_info(repo_root)
+        post = _git_info(repo_root)
+        repair1_pre = _git_info(repo_root)
+        repair1_post = _git_info(repo_root)
+        repair2_pre = _git_info(repo_root)
+        repair2_post = _git_info(repo_root)
+        fake = FakeWorkerAdapter(return_success_sequence=[True, True])
+        diff_check_runner = _sequence_runner(
+            [
+                _failing_diff_check(repo_root),
+                _failing_diff_check(repo_root),
+                _passing_diff_check(repo_root),
+            ]
+        )
+
+        with _patch_sequence_git_info_for_repair(
+            pre, post, repair1_pre, repair1_post, repair2_pre, repair2_post
+        ), _patch_detect_staged_paths([]):
+            result = run_auto_pipeline(
+                tasks_dir,
+                "TASK-018",
+                worker=fake,
+                pytest_runner=_passing_pytest,
+                diff_check_runner=diff_check_runner,
+                max_repair_attempts=2,
+            )
+
+        assert result.status == AutoPipelineStatus.READY_FOR_APPROVAL
+        assert len(fake.recorded) == 3  # initial + 2 repairs
+        assert len(result.repair_attempts) == 2
+        assert result.repair_attempts[0].status == RepairStatus.FAILED
+        assert result.repair_attempts[1].status == RepairStatus.SUCCEEDED
+        assert result.repair_attempts[1].verification_status == "READY_FOR_APPROVAL"
+
+    def test_worker_failure_repairable_and_succeeds(self, tmp_path: Path):
+        repo_root = tmp_path / "repo"
+        tasks_dir = repo_root / "tasks"
+        tasks_dir.mkdir(parents=True)
+        _write_task(
+            tasks_dir,
+            "TASK-018",
+            "Auto Pipeline Task",
+            "READY",
+            allowed_scope=["advancore/agent_runner/auto_pipeline.py"],
+        )
+        pre = _git_info(repo_root)
+        post = _git_info(repo_root)
+        repair_pre = _git_info(repo_root)
+        repair_post = _git_info(repo_root)
+        fake = FakeWorkerAdapter(return_success_sequence=[False, True])
+
+        with _patch_sequence_git_info_for_repair(
+            pre, post, repair_pre, repair_post
+        ), _patch_detect_staged_paths([]):
+            result = run_auto_pipeline(
+                tasks_dir,
+                "TASK-018",
+                worker=fake,
+                pytest_runner=_passing_pytest,
+                diff_check_runner=_passing_diff_check,
+                max_repair_attempts=2,
+            )
+
+        assert result.status == AutoPipelineStatus.READY_FOR_APPROVAL
+        assert len(fake.recorded) == 2
+        assert len(result.repair_attempts) == 1
+        assert result.repair_attempts[0].triggering_gate == "WORKER_FAILED"
+        assert result.repair_attempts[0].status == RepairStatus.SUCCEEDED
+
+
+class TestRepairLoopEscalation:
+    def test_missing_scope_is_non_repairable(self, tmp_path: Path):
+        repo_root = tmp_path / "repo"
+        tasks_dir = repo_root / "tasks"
+        tasks_dir.mkdir(parents=True)
+        _write_task(tasks_dir, "TASK-018", "No Scope Task", "READY")
+        git_info = _git_info(repo_root)
+        fake = FakeWorkerAdapter()
+
+        with patch(
+            "advancore.agent_runner.runner.get_git_info",
+            return_value=git_info,
+        ):
+            result = run_auto_pipeline(
+                tasks_dir,
+                "TASK-018",
+                worker=fake,
+                pytest_runner=_passing_pytest,
+                diff_check_runner=_passing_diff_check,
+                max_repair_attempts=2,
+            )
+
+        assert result.status == AutoPipelineStatus.NON_REPAIRABLE
+        assert fake.recorded is None
+        assert result.repair_attempts == []
+
+    def test_unsafe_scope_is_non_repairable(self, tmp_path: Path):
+        repo_root = tmp_path / "repo"
+        tasks_dir = repo_root / "tasks"
+        tasks_dir.mkdir(parents=True)
+        _write_task(
+            tasks_dir,
+            "TASK-018",
+            "Unsafe Scope Task",
+            "READY",
+            allowed_scope=["../escape.py"],
+        )
+        git_info = _git_info(repo_root)
+        fake = FakeWorkerAdapter()
+
+        with patch(
+            "advancore.agent_runner.runner.get_git_info",
+            return_value=git_info,
+        ):
+            result = run_auto_pipeline(
+                tasks_dir,
+                "TASK-018",
+                worker=fake,
+                pytest_runner=_passing_pytest,
+                diff_check_runner=_passing_diff_check,
+                max_repair_attempts=2,
+            )
+
+        assert result.status == AutoPipelineStatus.NON_REPAIRABLE
+        assert fake.recorded is None
+
+    def test_staged_paths_detected_are_non_repairable(self, tmp_path: Path):
+        repo_root = tmp_path / "repo"
+        tasks_dir = repo_root / "tasks"
+        tasks_dir.mkdir(parents=True)
+        _write_task(
+            tasks_dir,
+            "TASK-018",
+            "Auto Pipeline Task",
+            "READY",
+            allowed_scope=["advancore/agent_runner/auto_pipeline.py"],
+        )
+        pre = _git_info(repo_root)
+        post = _git_info(repo_root)
+        fake = FakeWorkerAdapter()
+
+        with _patch_sequence_git_info(pre, post), _patch_detect_staged_paths(
+            ["advancore/agent_runner/auto_pipeline.py"]
+        ):
+            result = run_auto_pipeline(
+                tasks_dir,
+                "TASK-018",
+                worker=fake,
+                pytest_runner=_passing_pytest,
+                diff_check_runner=_passing_diff_check,
+                max_repair_attempts=2,
+            )
+
+        assert result.status == AutoPipelineStatus.NON_REPAIRABLE
+        assert len(fake.recorded) == 1  # initial worker only
+        assert result.repair_attempts == []
+        assert result.staged_paths == ["advancore/agent_runner/auto_pipeline.py"]
+
+    def test_head_movement_is_non_repairable(self, tmp_path: Path):
+        repo_root = tmp_path / "repo"
+        tasks_dir = repo_root / "tasks"
+        tasks_dir.mkdir(parents=True)
+        _write_task(
+            tasks_dir,
+            "TASK-018",
+            "Auto Pipeline Task",
+            "READY",
+            allowed_scope=["advancore/agent_runner/auto_pipeline.py"],
+        )
+        pre = _git_info(repo_root, head_sha="pre000000000000000000000000000000000000")
+        post = _git_info(repo_root, head_sha="post00000000000000000000000000000000000")
+        fake = FakeWorkerAdapter()
+
+        with _patch_sequence_git_info(pre, post), _patch_detect_staged_paths([]):
+            result = run_auto_pipeline(
+                tasks_dir,
+                "TASK-018",
+                worker=fake,
+                pytest_runner=_passing_pytest,
+                diff_check_runner=_passing_diff_check,
+                max_repair_attempts=2,
+            )
+
+        assert result.status == AutoPipelineStatus.NON_REPAIRABLE
+        assert len(fake.recorded) == 1
+        assert result.repair_attempts == []
+
+    def test_out_of_scope_changes_non_repairable(self, tmp_path: Path):
+        repo_root = tmp_path / "repo"
+        tasks_dir = repo_root / "tasks"
+        tasks_dir.mkdir(parents=True)
+        _write_task(
+            tasks_dir,
+            "TASK-018",
+            "Auto Pipeline Task",
+            "READY",
+            allowed_scope=["advancore/agent_runner/auto_pipeline.py"],
+        )
+        pre = _git_info(repo_root)
+        post = _git_info(
+            repo_root,
+            clean=False,
+            status_lines=[" M advancore/agent_runner/other.py"],
+        )
+        fake = FakeWorkerAdapter()
+
+        with _patch_sequence_git_info(pre, post), _patch_detect_staged_paths([]):
+            result = run_auto_pipeline(
+                tasks_dir,
+                "TASK-018",
+                worker=fake,
+                pytest_runner=_passing_pytest,
+                diff_check_runner=_passing_diff_check,
+                max_repair_attempts=2,
+            )
+
+        assert result.status == AutoPipelineStatus.NON_REPAIRABLE
+        assert len(fake.recorded) == 1
+        assert result.repair_attempts == []
+        assert "advancore/agent_runner/other.py" in result.scope_result.out_of_scope_paths
+
+    def test_repair_budget_exhausted(self, tmp_path: Path):
+        repo_root = tmp_path / "repo"
+        tasks_dir = repo_root / "tasks"
+        tasks_dir.mkdir(parents=True)
+        _write_task(
+            tasks_dir,
+            "TASK-018",
+            "Auto Pipeline Task",
+            "READY",
+            allowed_scope=["advancore/agent_runner/auto_pipeline.py"],
+        )
+        pre = _git_info(repo_root)
+        post = _git_info(repo_root)
+        repair1_pre = _git_info(repo_root)
+        repair1_post = _git_info(repo_root)
+        repair2_pre = _git_info(repo_root)
+        repair2_post = _git_info(repo_root)
+        fake = FakeWorkerAdapter()
+        pytest_runner = _sequence_runner(
+            [
+                _failing_pytest(repo_root),
+                _failing_pytest(repo_root),
+                _failing_pytest(repo_root),
+            ]
+        )
+
+        with _patch_sequence_git_info_for_repair(
+            pre, post, repair1_pre, repair1_post, repair2_pre, repair2_post
+        ), _patch_detect_staged_paths([]):
+            result = run_auto_pipeline(
+                tasks_dir,
+                "TASK-018",
+                worker=fake,
+                pytest_runner=pytest_runner,
+                diff_check_runner=_passing_diff_check,
+                max_repair_attempts=2,
+            )
+
+        assert result.status == AutoPipelineStatus.REPAIR_EXHAUSTED
+        assert len(fake.recorded) == 3  # initial + 2 repairs
+        assert len(result.repair_attempts) == 2
+        assert result.repair_attempts[0].status == RepairStatus.FAILED
+        assert result.repair_attempts[1].status == RepairStatus.FAILED
+
+    def test_non_repairable_failure_does_not_consume_budget(self, tmp_path: Path):
+        repo_root = tmp_path / "repo"
+        tasks_dir = repo_root / "tasks"
+        tasks_dir.mkdir(parents=True)
+        _write_task(
+            tasks_dir,
+            "TASK-018",
+            "Auto Pipeline Task",
+            "READY",
+            allowed_scope=["advancore/agent_runner/auto_pipeline.py"],
+        )
+        pre = _git_info(repo_root, head_sha="pre000000000000000000000000000000000000")
+        post = _git_info(repo_root, head_sha="post00000000000000000000000000000000000")
+        fake = FakeWorkerAdapter()
+
+        with _patch_sequence_git_info(pre, post), _patch_detect_staged_paths([]):
+            result = run_auto_pipeline(
+                tasks_dir,
+                "TASK-018",
+                worker=fake,
+                pytest_runner=_passing_pytest,
+                diff_check_runner=_passing_diff_check,
+                max_repair_attempts=2,
+            )
+
+        assert result.status == AutoPipelineStatus.NON_REPAIRABLE
+        assert len(fake.recorded) == 1
+        assert len(result.repair_attempts) == 0
+
+
+class TestRepairLoopVerification:
+    def test_full_pytest_reruns_after_repair(self, tmp_path: Path):
+        repo_root = tmp_path / "repo"
+        tasks_dir = repo_root / "tasks"
+        tasks_dir.mkdir(parents=True)
+        _write_task(
+            tasks_dir,
+            "TASK-018",
+            "Auto Pipeline Task",
+            "READY",
+            allowed_scope=["advancore/agent_runner/auto_pipeline.py"],
+        )
+        pre = _git_info(repo_root)
+        post = _git_info(repo_root)
+        repair_pre = _git_info(repo_root)
+        repair_post = _git_info(repo_root)
+        fake = FakeWorkerAdapter()
+        pytest_runs: list[Path] = []
+
+        def _tracking_pytest(repo_root: Path):
+            pytest_runs.append(repo_root)
+            if len(pytest_runs) == 1:
+                return _failing_pytest(repo_root)
+            return _passing_pytest(repo_root)
+
+        with _patch_sequence_git_info_for_repair(
+            pre, post, repair_pre, repair_post
+        ), _patch_detect_staged_paths([]):
+            result = run_auto_pipeline(
+                tasks_dir,
+                "TASK-018",
+                worker=fake,
+                pytest_runner=_tracking_pytest,
+                diff_check_runner=_passing_diff_check,
+                max_repair_attempts=2,
+            )
+
+        assert result.status == AutoPipelineStatus.READY_FOR_APPROVAL
+        assert len(pytest_runs) == 2
+
+    def test_diff_check_reruns_after_repair(self, tmp_path: Path):
+        repo_root = tmp_path / "repo"
+        tasks_dir = repo_root / "tasks"
+        tasks_dir.mkdir(parents=True)
+        _write_task(
+            tasks_dir,
+            "TASK-018",
+            "Auto Pipeline Task",
+            "READY",
+            allowed_scope=["advancore/agent_runner/auto_pipeline.py"],
+        )
+        pre = _git_info(repo_root)
+        post = _git_info(repo_root)
+        repair_pre = _git_info(repo_root)
+        repair_post = _git_info(repo_root)
+        fake = FakeWorkerAdapter()
+        diff_check_runs: list[Path] = []
+
+        def _tracking_diff_check(repo_root: Path):
+            diff_check_runs.append(repo_root)
+            if len(diff_check_runs) == 1:
+                return _failing_diff_check(repo_root)
+            return _passing_diff_check(repo_root)
+
+        with _patch_sequence_git_info_for_repair(
+            pre, post, repair_pre, repair_post
+        ), _patch_detect_staged_paths([]):
+            result = run_auto_pipeline(
+                tasks_dir,
+                "TASK-018",
+                worker=fake,
+                pytest_runner=_passing_pytest,
+                diff_check_runner=_tracking_diff_check,
+                max_repair_attempts=2,
+            )
+
+        assert result.status == AutoPipelineStatus.READY_FOR_APPROVAL
+        assert len(diff_check_runs) == 2
+
+    def test_scope_verification_reruns_after_repair(self, tmp_path: Path):
+        repo_root = tmp_path / "repo"
+        tasks_dir = repo_root / "tasks"
+        tasks_dir.mkdir(parents=True)
+        _write_task(
+            tasks_dir,
+            "TASK-018",
+            "Auto Pipeline Task",
+            "READY",
+            allowed_scope=["advancore/agent_runner/auto_pipeline.py"],
+        )
+        pre = _git_info(repo_root)
+        post = _git_info(repo_root, clean=False, status_lines=["?? secret.txt"])
+        repair_pre = _git_info(repo_root)
+        repair_post = _git_info(repo_root)
+        fake = FakeWorkerAdapter()
+
+        with _patch_sequence_git_info_for_repair(
+            pre, post, repair_pre, repair_post
+        ), _patch_detect_staged_paths([]):
+            result = run_auto_pipeline(
+                tasks_dir,
+                "TASK-018",
+                worker=fake,
+                pytest_runner=_passing_pytest,
+                diff_check_runner=_passing_diff_check,
+                max_repair_attempts=2,
+            )
+
+        assert result.status == AutoPipelineStatus.NON_REPAIRABLE
+        # Initial scope failed; non-repairable, so scope verification ran once.
+        assert result.scope_result is not None
+        assert "secret.txt" in result.scope_result.out_of_scope_paths
+
+
+class TestRepairLoopAuditAndReport:
+    def test_auto_artifact_contains_repair_metadata(self, tmp_path: Path):
+        repo_root = tmp_path / "repo"
+        tasks_dir = repo_root / "tasks"
+        tasks_dir.mkdir(parents=True)
+        _write_task(
+            tasks_dir,
+            "TASK-018",
+            "Auto Pipeline Task",
+            "READY",
+            allowed_scope=["advancore/agent_runner/auto_pipeline.py"],
+        )
+        pre = _git_info(repo_root)
+        post = _git_info(repo_root)
+        repair_pre = _git_info(repo_root)
+        repair_post = _git_info(repo_root)
+        fake = FakeWorkerAdapter()
+        pytest_runner = _sequence_runner(
+            [_failing_pytest(repo_root), _passing_pytest(repo_root)]
+        )
+
+        with _patch_sequence_git_info_for_repair(
+            pre, post, repair_pre, repair_post
+        ), _patch_detect_staged_paths([]):
+            result = run_auto_pipeline(
+                tasks_dir,
+                "TASK-018",
+                worker=fake,
+                pytest_runner=pytest_runner,
+                diff_check_runner=_passing_diff_check,
+                max_repair_attempts=2,
+            )
+
+        assert result.status == AutoPipelineStatus.READY_FOR_APPROVAL
+        assert result.auto_artifact_path is not None
+        lines = result.auto_artifact_path.read_text(encoding="utf-8").strip().splitlines()
+        last_record = json.loads(lines[-1])
+        assert last_record["max_repair_attempts"] == 2
+        assert len(last_record["repair_attempts"]) == 1
+        assert last_record["repair_attempts"][0]["attempt_number"] == 1
+        assert last_record["repair_attempts"][0]["status"] == "SUCCEEDED"
+
+    def test_report_shows_repair_attempts_and_status(self, tmp_path: Path):
+        repo_root = tmp_path / "repo"
+        tasks_dir = repo_root / "tasks"
+        tasks_dir.mkdir(parents=True)
+        _write_task(
+            tasks_dir,
+            "TASK-018",
+            "Auto Pipeline Task",
+            "READY",
+            allowed_scope=["advancore/agent_runner/auto_pipeline.py"],
+        )
+        pre = _git_info(repo_root)
+        post = _git_info(repo_root)
+        repair_pre = _git_info(repo_root)
+        repair_post = _git_info(repo_root)
+        fake = FakeWorkerAdapter()
+        pytest_runner = _sequence_runner(
+            [_failing_pytest(repo_root), _passing_pytest(repo_root)]
+        )
+
+        with _patch_sequence_git_info_for_repair(
+            pre, post, repair_pre, repair_post
+        ), _patch_detect_staged_paths([]):
+            result = run_auto_pipeline(
+                tasks_dir,
+                "TASK-018",
+                worker=fake,
+                pytest_runner=pytest_runner,
+                diff_check_runner=_passing_diff_check,
+                max_repair_attempts=2,
+            )
+
+        report = format_auto_pipeline_report(result)
+        assert "Repair attempts used: 1" in report
+        assert "attempt 1: SUCCEEDED" in report
+        assert "READY FOR CONTROLLER/OWNER REVIEW" in report
+        assert "Controller/owner action required: no" in report
+
+    def test_exhausted_report_shows_owner_action_required(self, tmp_path: Path):
+        repo_root = tmp_path / "repo"
+        tasks_dir = repo_root / "tasks"
+        tasks_dir.mkdir(parents=True)
+        _write_task(
+            tasks_dir,
+            "TASK-018",
+            "Auto Pipeline Task",
+            "READY",
+            allowed_scope=["advancore/agent_runner/auto_pipeline.py"],
+        )
+        pre = _git_info(repo_root)
+        post = _git_info(repo_root)
+        repair_pre = _git_info(repo_root)
+        repair_post = _git_info(repo_root)
+        fake = FakeWorkerAdapter()
+
+        with _patch_sequence_git_info_for_repair(
+            pre, post, repair_pre, repair_post
+        ), _patch_detect_staged_paths([]):
+            result = run_auto_pipeline(
+                tasks_dir,
+                "TASK-018",
+                worker=fake,
+                pytest_runner=_failing_pytest,
+                diff_check_runner=_passing_diff_check,
+                max_repair_attempts=1,
+            )
+
+        assert result.status == AutoPipelineStatus.REPAIR_EXHAUSTED
+        report = format_auto_pipeline_report(result)
+        assert "Repair attempts used: 1" in report
+        assert "REPAIR_EXHAUSTED" in report
+        assert "Controller/owner action required: yes" in report
+
+
+class TestRepairLoopNoPublication:
+    def test_repair_never_runs_git_publication_commands(self, tmp_path: Path):
+        repo_root = tmp_path / "repo"
+        tasks_dir = repo_root / "tasks"
+        tasks_dir.mkdir(parents=True)
+        _write_task(
+            tasks_dir,
+            "TASK-018",
+            "Auto Pipeline Task",
+            "READY",
+            allowed_scope=["advancore/agent_runner/auto_pipeline.py"],
+        )
+        pre = _git_info(repo_root)
+        post = _git_info(repo_root)
+        repair_pre = _git_info(repo_root)
+        repair_post = _git_info(repo_root)
+        fake = FakeWorkerAdapter()
+        pytest_runner = _sequence_runner(
+            [_failing_pytest(repo_root), _passing_pytest(repo_root)]
+        )
+
+        with _patch_sequence_git_info_for_repair(
+            pre, post, repair_pre, repair_post
+        ), _patch_detect_staged_paths([]), patch(
+            "advancore.agent_runner.auto_pipeline._run"
+        ) as mock_run:
+            mock_run.return_value = MagicMock(
+                returncode=0,
+                stdout="",
+                stderr="",
+            )
+            run_auto_pipeline(
+                tasks_dir,
+                "TASK-018",
+                worker=fake,
+                pytest_runner=pytest_runner,
+                diff_check_runner=_passing_diff_check,
+                max_repair_attempts=2,
+            )
+
+        for call in mock_run.call_args_list:
+            args = call.args[0]
+            assert args[0] == "git"
+            assert "add" not in args
+            assert "commit" not in args
+            assert "push" not in args
+            assert "merge" not in args
+            assert "checkout" not in args
+            assert "switch" not in args
+            assert "reset" not in args
+            assert "rebase" not in args
+
+
+class TestRepairCLIOption:
+    def test_cli_auto_supports_repair_attempts_option(self):
+        from advancore.agent_runner.__main__ import main
+
+        with patch("advancore.agent_runner.__main__.run_auto_pipeline") as mock_run, patch(
+            "advancore.agent_runner.__main__.get_git_info"
+        ) as mock_git:
+            mock_git.return_value = GitInfo(
+                repo_root=Path("/tmp/repo"),
+                current_branch="agent-control-foundation",
+                head_sha="abc123",
+                is_clean=True,
+                status_lines=[],
+            )
+            mock_run.return_value = AutoPipelineResult(
+                status=AutoPipelineStatus.READY_FOR_APPROVAL,
+                max_repair_attempts=2,
+            )
+            with patch("advancore.agent_runner.__main__.print"):
+                exit_code = main(["auto", "TASK-018", "--repair-attempts", "2"])
+
+        assert exit_code == 0
+        mock_run.assert_called_once()
+        assert mock_run.call_args.kwargs["max_repair_attempts"] == 2
