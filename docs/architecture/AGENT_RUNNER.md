@@ -112,7 +112,8 @@ resetting, merging, or broadening scope.
 | `advancore/agent_runner/decision_lifecycle_bridge.py` | Fail-closed bridge from a validated controller decision record to the existing task lifecycle; preview by default, explicit `--apply` required to mutate. |
 | `advancore/agent_runner/controller_adapter.py` | Replaceable controller-adapter boundary and built-in `manual` adapter; dispatches a handoff request to one adapter and reconciles any returned decision through TASK-013. |
 | `advancore/agent_runner/controller_transport.py` | Versioned, transport-neutral controller request/response envelope around the TASK-014 adapter boundary; deterministic serialization, validation, local file round-trip, and response reconciliation delegation. |
-| `advancore/agent_runner/__main__.py` | CLI entry point: `python -m advancore.agent_runner plan TASK-005`, `transition TASK-009 --to ...`, `review-bundle show`, `controller-decision record/show/apply`, `controller-handoff prepare/show/reconcile`, `controller-adapter dispatch/status`, or `controller-transport request/show/validate-response`. |
+| `advancore/agent_runner/controller_transport_driver.py` | Replaceable controller transport-driver contract plus a bounded local-filesystem driver that separates envelope semantics from delivery mechanics. |
+| `advancore/agent_runner/__main__.py` | CLI entry point: `python -m advancore.agent_runner plan TASK-005`, `transition TASK-009 --to ...`, `review-bundle show`, `controller-decision record/show/apply`, `controller-handoff prepare/show/reconcile`, `controller-adapter dispatch/status`, or `controller-transport request/show/validate-response/driver-send/driver-receive/driver-show`. |
 
 ---
 
@@ -400,6 +401,64 @@ Validate a transport response envelope and reconcile any returned decision:
 ```bash
 .venv/bin/python -m advancore.agent_runner controller-transport validate-response
 .venv/bin/python -m advancore.agent_runner controller-transport validate-response .agent_runner/controller_transport/20260821T130000_TASK-015_CTE-xxxx_response.json
+```
+
+### Controller transport-driver boundary
+
+The `controller_transport_driver` module adds a small, replaceable transport-driver
+contract around the TASK-015 envelope. It separates envelope semantics from
+delivery mechanics so that a future remote transport can be added without changing
+controller authority, handoff reconciliation, lifecycle authority, or
+Git-publication governance.
+
+The driver contract is intentionally minimal:
+
+- `send(request)` writes a validated TASK-015 request envelope to the transport
+  store and returns the artifact path.
+- `receive(request)` loads the single TASK-015 response envelope bound to a
+  request, validating it against the expected correlation ID, task ID, handoff
+  path, and review-bundle path.
+- `show(request_id)` inspects driver artifacts for a correlation ID without
+  mutation.
+
+The built-in `LocalFilesystemTransportDriver` uses two bounded directories under
+`.agent_runner/controller_transport/`:
+
+- `outbox/` for request envelopes.
+- `inbox/` for response envelopes.
+
+It is local-filesystem only: no HTTP, webhooks, sockets, queues, background
+polling, model calls, credentials, or subprocess transport. It is deterministic
+and idempotent for identical requests, fails closed on conflicting duplicates,
+missing/ambiguous responses, malformed files, unknown schema/version/state, or
+reference mismatches, and rejects path traversal or symlink escape outside the
+bounded directories.
+
+The driver is delivery plumbing only. It does not create, infer, approve,
+reconcile, apply, publish, or deploy. A returned `DECISION_RECEIVED` response is
+still only evidence of a returned decision; it must flow through the existing
+TASK-011/TASK-013/TASK-014/TASK-015 validation/reconciliation helpers before any
+lifecycle action is considered.
+
+Send a transport request envelope through the local driver:
+
+```bash
+.venv/bin/python -m advancore.agent_runner controller-transport driver-send
+.venv/bin/python -m advancore.agent_runner controller-transport driver-send .agent_runner/controller_handoff/20260821T120000_TASK-016_WAITING_DECISION.json
+```
+
+Receive a transport response envelope through the local driver:
+
+```bash
+.venv/bin/python -m advancore.agent_runner controller-transport driver-receive
+.venv/bin/python -m advancore.agent_runner controller-transport driver-receive CTE-xxxx
+```
+
+Show local driver artifacts for a request id (read-only):
+
+```bash
+.venv/bin/python -m advancore.agent_runner controller-transport driver-show
+.venv/bin/python -m advancore.agent_runner controller-transport driver-show CTE-xxxx
 ```
 
 ### Controller decision records
@@ -713,6 +772,27 @@ Validate the latest transport response envelope and reconcile any returned decis
 .venv/bin/python -m advancore.agent_runner controller-transport validate-response .agent_runner/controller_transport/20260821T130000_TASK-015_CTE-xxxx_response.json
 ```
 
+Send a transport request envelope through the local driver:
+
+```bash
+.venv/bin/python -m advancore.agent_runner controller-transport driver-send
+.venv/bin/python -m advancore.agent_runner controller-transport driver-send .agent_runner/controller_handoff/20260821T120000_TASK-016_WAITING_DECISION.json
+```
+
+Receive a transport response envelope through the local driver:
+
+```bash
+.venv/bin/python -m advancore.agent_runner controller-transport driver-receive
+.venv/bin/python -m advancore.agent_runner controller-transport driver-receive CTE-xxxx
+```
+
+Show local driver artifacts for a request id (read-only):
+
+```bash
+.venv/bin/python -m advancore.agent_runner controller-transport driver-show
+.venv/bin/python -m advancore.agent_runner controller-transport driver-show CTE-xxxx
+```
+
 ---
 
 ## 8. Task lifecycle state model
@@ -808,6 +888,12 @@ auditable and easy to test.
   TASK-013, authority separation (PENDING/BLOCKED create no authority;
   DECISION_RECEIVED requires a valid decision record), read-only inspection,
   audit behavior, and absence of Git/lifecycle/task mutation.
+- The controller transport-driver boundary is tested for interface behavior,
+  local-filesystem send/receive round-trip, idempotency, conflict detection,
+  correlation/reference binding, path safety, symlink escape rejection where
+  supported, read-only inspection, authority separation (driver never treats
+  transport success as approval and never mutates lifecycle/Git/database state),
+  and delegation of decision reconciliation to existing TASK-015/TASK-013 helpers.
 - CLI tests patch `get_git_info` directly and verify exit codes.
 
 ---
@@ -853,6 +939,12 @@ auditable and easy to test.
 | Path traversal via envelope artifact paths | Envelope path resolution rejects paths that escape the repository root; generated filenames are sanitized. |
 | Transport response applied without reconciling decision | `apply_transport_response()` delegates decision validation/reconciliation to existing TASK-013 logic; worker-authored or mismatched decisions remain rejected. |
 | Transport envelope operations mutate Git/lifecycle/database state | Envelope operations write only local `.agent_runner/controller_transport/` artifacts and audit metadata; they do not mutate task files, Git state, lifecycle state, or database state. |
+| Transport driver assumes controller authority | The driver is delivery plumbing only; it does not create, infer, approve, reconcile, apply, publish, or deploy. |
+| Driver send/receive mutates lifecycle/Git/database state | Driver operations write only local `.agent_runner/controller_transport/outbox/` and `inbox/` artifacts; they do not invoke the TASK-012 lifecycle bridge or mutate task files, Git state, or database state. |
+| Driver treats `DECISION_RECEIVED` as approval | A `DECISION_RECEIVED` response returned by the driver still requires existing TASK-011/TASK-013/TASK-014/TASK-015 validation/reconciliation before any lifecycle action. |
+| Driver silently overwrites conflicting artifacts | Identical request resend is idempotent; divergent requests or ambiguous responses for the same correlation id fail closed. |
+| Path traversal/symlink escape via driver artifacts | Driver read/write paths are resolved and checked against the bounded `outbox/` and `inbox/` directories; escapes are rejected. |
+| Unintended remote transport via driver | Only the local-filesystem driver is implemented; no HTTP, webhooks, sockets, queues, background polling, or subprocess transport is added. |
 
 ---
 
@@ -868,6 +960,9 @@ auditable and easy to test.
 - Remote controller transport implementations that consume the versioned
   `controller_transport` request/response envelope and serialize it over an
   approved network mechanism (e.g. HTTP, webhook, queue) in a future task.
+- Additional transport-driver implementations that satisfy the
+  `ControllerTransportDriver` contract for other delivery mechanisms, while
+  preserving the same envelope and authority boundaries.
 
 ---
 
@@ -927,6 +1022,20 @@ auditable and easy to test.
 - `apply_transport_response()` delegates controller-decision validation and reconciliation to the existing TASK-013 `reconcile_controller_handoff()` logic.
 - Transport envelope operations write only local `.agent_runner/controller_transport/` artifacts and `mode: "controller_transport"` audit records; they do not mutate task files, Git state, lifecycle state, or database state.
 - `controller-transport show` is read-only and does not write artifacts, reconcile decisions, or mutate repository state.
+- The controller transport-driver boundary lives in `advancore/agent_runner/controller_transport_driver.py`.
+- The transport-driver contract is defined by the abstract `ControllerTransportDriver` class with `send`, `receive`, and `show` operations.
+- The built-in transport driver is `LocalFilesystemTransportDriver`, which stores requests under `.agent_runner/controller_transport/outbox/` and responses under `.agent_runner/controller_transport/inbox/`.
+- The driver consumes the existing TASK-015 `ControllerTransportRequest` and `ControllerTransportResponse` envelope types rather than inventing a second envelope model.
+- Driver `send` validates the request through the existing TASK-015 helper and writes only under the bounded local transport directory.
+- Driver `receive` validates the response through the existing TASK-015 helper and binds it to the expected task, correlation/request id, handoff path, and review-bundle path.
+- Identical request resend is idempotent; conflicting duplicates for the same correlation id fail closed.
+- Missing, ambiguous, malformed, or reference-mismatched responses fail closed.
+- Driver read/write paths are resolved and checked against the bounded `outbox/` and `inbox/` directories; path traversal and symlink escape are rejected.
+- Driver `show` is read-only and does not mutate artifacts, reconcile decisions, or invoke the lifecycle bridge.
+- Driver send/receive does not invoke the TASK-012 lifecycle bridge and does not mutate task files, Git state, or database state.
+- A `DECISION_RECEIVED` response from the driver still requires existing TASK-011/TASK-013/TASK-014/TASK-015 validation/reconciliation before any lifecycle action.
+- The local-filesystem driver performs no network, subprocess, credential, or background-polling operations.
+- `controller-transport driver-send`, `driver-receive`, and `driver-show` are local-only CLI operations that reuse the existing `controller_transport` audit mode.
 
 ### ASSUMPTION
 

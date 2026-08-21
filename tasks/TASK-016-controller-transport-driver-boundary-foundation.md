@@ -1,6 +1,6 @@
 # TASK-016 — Controller Transport Driver Boundary Foundation
 
-STATUS: READY
+STATUS: COMPLETE
 
 ## Objective
 
@@ -202,3 +202,103 @@ To be completed by the worker. Report:
 - Decisions required
 - Recommended next step
 - `git status --short`
+
+
+---
+
+**Implemented**
+
+- Added `advancore/agent_runner/controller_transport_driver.py` defining a
+  replaceable `ControllerTransportDriver` abstract contract and a bounded
+  local-filesystem implementation, `LocalFilesystemTransportDriver`.
+- The driver separates envelope semantics from delivery mechanics:
+  - `send(request)` validates through the existing TASK-015 helper and writes
+    request envelopes under `.agent_runner/controller_transport/outbox/`.
+  - `receive(request)` loads the single matching response from
+    `.agent_runner/controller_transport/inbox/` and validates it against the
+    expected request/task/handoff/bundle references.
+  - `show(request_id)` returns a read-only `DriverArtifactView` of request and
+    response artifacts.
+- Implemented fail-closed behavior for malformed files, unknown
+  schema/version/state, correlation/task/handoff/bundle mismatches, missing or
+  ambiguous responses, path traversal, and symlink escape outside the bounded
+  transport directories.
+- Implemented idempotent identical request resend and conflict detection for
+  divergent duplicate artifacts sharing the same correlation id.
+- Added CLI subcommands under the existing `controller-transport` command:
+  `driver-send`, `driver-receive`, and `driver-show`. All remain local-only and
+  reuse existing `controller_transport` audit behavior.
+- Updated `advancore/agent_runner/__init__.py` to export the driver contract,
+  implementation, exceptions, result type, and helpers.
+- Added `tests/test_controller_transport_driver.py` with 32 deterministic tests
+  covering interface behavior, local driver round-trip, idempotency/conflict
+  handling, correlation/reference binding, path safety, symlink escape, read-only
+  inspection, authority separation, absence of lifecycle/Git/network side
+  effects, and reconciliation delegation.
+- Updated `docs/architecture/AGENT_RUNNER.md` with module description, CLI
+  examples, testing approach, threat-boundary rows, and FACT entries.
+- Added `docs/decisions/ADR-016-controller-transport-driver-boundary.md`
+  documenting the architectural decision and rejected alternatives.
+
+**Files changed**
+
+- `advancore/agent_runner/controller_transport_driver.py` (new)
+- `advancore/agent_runner/__init__.py`
+- `advancore/agent_runner/__main__.py`
+- `tests/test_controller_transport_driver.py` (new)
+- `docs/architecture/AGENT_RUNNER.md`
+- `docs/decisions/ADR-016-controller-transport-driver-boundary.md` (new)
+- `tasks/TASK-016-controller-transport-driver-boundary-foundation.md`
+
+**Database changes**
+
+None. No schema, model, migration, or production database change was authorized
+or made.
+
+**Tests executed and results**
+
+```bash
+.venv/bin/python -m pytest tests/ -v
+```
+
+Result: **354 passed in 7.29s** (322 pre-existing + 32 new transport-driver tests).
+All existing TASK-009 through TASK-015 tests and non-runner tests remain passing.
+
+**Assumptions**
+
+- Future remote controller transports will implement the `ControllerTransportDriver`
+  contract and consume the TASK-015 JSON envelope rather than bypassing it.
+- The existing `.agent_runner/` gitignore rule is sufficient to keep driver
+  outbox/inbox artifacts out of the repository index.
+
+**Risks / unresolved issues**
+
+- The local-filesystem driver is not a real remote transport; actual network
+  delivery is untested by design (out of scope).
+- The driver does not include cryptographic signing or checksums. If
+  tamper-evident handoff becomes a requirement, a future task should add it.
+
+**Decisions required**
+
+None. No owner-level policy or credential/transport decisions are required to
+begin or complete this task.
+
+**Recommended next step**
+
+- Review and approve this task.
+- Optional future task: implement an approved remote controller transport driver
+  that consumes the TASK-015 envelope contract over an approved network
+  mechanism, after an explicit owner choice of transport and authentication
+  policy.
+
+**`git status --short`**
+
+```
+ M advancore/agent_runner/__init__.py
+ M advancore/agent_runner/__main__.py
+ M docs/architecture/AGENT_RUNNER.md
+ M tasks/TASK-016-controller-transport-driver-boundary-foundation.md
+?? advancore/agent_runner/controller_transport_driver.py
+?? docs/decisions/ADR-016-controller-transport-driver-boundary.md
+?? tests/test_controller_transport_driver.py
+```

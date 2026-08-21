@@ -30,6 +30,8 @@ from advancore.agent_runner.controller_transport import (
     TRANSPORT_REQUEST_SCHEMA,
     TRANSPORT_RESPONSE_SCHEMA,
     ControllerTransportError,
+    ControllerTransportRequest,
+    ControllerTransportValidationError,
     ControllerTransportWriteError,
     apply_transport_response,
     build_transport_request,
@@ -42,10 +44,23 @@ from advancore.agent_runner.controller_transport import (
     handoff_to_transport_request,
     load_transport_request,
     load_transport_response,
+    serialize_transport_request,
     validate_transport_request,
     validate_transport_response,
     write_transport_request,
     write_transport_response,
+)
+from advancore.agent_runner.controller_transport_driver import (
+    ControllerTransportDriverAmbiguousError,
+    ControllerTransportDriverConflictError,
+    ControllerTransportDriverError,
+    ControllerTransportDriverNotFoundError,
+    DriverArtifactView,
+    LocalFilesystemTransportDriver,
+    default_driver_dirs,
+    format_driver_view_summary,
+    load_driver_request_by_id,
+    write_driver_response,
 )
 from advancore.agent_runner.controller_decision import (
     ControllerDecisionError,
@@ -496,6 +511,102 @@ def _format_transport_response_result(result: ControllerAdapterResult) -> str:
     return "\n".join(lines)
 
 
+def _format_driver_receive_result(response: ControllerTransportResponse) -> str:
+    return format_transport_response_summary(response)
+
+
+def _format_driver_send_result(path: Path | None, error: str | None = None) -> str:
+    lines: list[str] = []
+    lines.append("=" * 64)
+    lines.append("AdvanCore Local Agent Runner — Controller Transport Driver Send")
+    lines.append("=" * 64)
+    if error:
+        lines.append("Result: FAIL")
+        lines.append(f"Error:  {error}")
+    elif path:
+        lines.append("Result: OK")
+        lines.append(f"Path:   {path}")
+    else:
+        lines.append("Result: FAIL")
+        lines.append("Error:  request was not sent")
+    lines.append("=" * 64)
+    return "\n".join(lines)
+
+
+def _resolve_transport_request_target(
+    target: str,
+    repo_root: Path,
+    outbox_dir: Path,
+    handoff_dir: Path,
+    *,
+    latest_from_outbox: bool = False,
+) -> ControllerTransportRequest:
+    """Resolve a CLI target into a validated transport request envelope.
+
+    *target* may be:
+      - ``latest``: the latest handoff request (or latest outbox request if
+        *latest_from_outbox* is True) converted to/used as a transport request.
+      - A request id: load the matching request from *outbox_dir*.
+      - A path to a transport request envelope.
+      - A path to a handoff request (converted to a transport request).
+    """
+    target_str = target.strip()
+    if target_str.lower() == "latest":
+        if latest_from_outbox:
+            latest_request = find_latest_transport_request(outbox_dir)
+            if latest_request is None:
+                raise ControllerTransportDriverError(
+                    f"No transport requests found in {outbox_dir}"
+                )
+            return load_transport_request(latest_request)
+
+        latest_handoff = find_latest_handoff(handoff_dir)
+        if latest_handoff is None:
+            raise ControllerTransportDriverError(
+                f"No handoff requests found in {handoff_dir}"
+            )
+        handoff = load_controller_handoff(latest_handoff)
+        return handoff_to_transport_request(
+            handoff_path=latest_handoff,
+            handoff=handoff,
+            adapter_name="manual",
+            adapter_type="local",
+            repo_root=repo_root,
+        )
+
+    # If the target looks like a path, try it first.
+    if "/" in target_str or "\\" in target_str or Path(target_str).suffix:
+        path = Path(target_str)
+        if not path.is_absolute():
+            path = Path.cwd() / path
+        if path.exists():
+            # Try as a transport request envelope first.
+            try:
+                data = json.loads(path.read_text(encoding="utf-8"))
+                if data.get("schema") == TRANSPORT_REQUEST_SCHEMA:
+                    return validate_transport_request(data)
+            except Exception:
+                pass
+            # Otherwise treat as a handoff request.
+            try:
+                handoff = load_controller_handoff(path)
+                return handoff_to_transport_request(
+                    handoff_path=path,
+                    handoff=handoff,
+                    adapter_name="manual",
+                    adapter_type="local",
+                    repo_root=repo_root,
+                )
+            except Exception as exc:
+                raise ControllerTransportDriverError(
+                    f"Cannot resolve target as request or handoff: {path} ({exc})"
+                ) from exc
+        raise ControllerTransportDriverError(f"Target path does not exist: {path}")
+
+    # Treat as a request id and load from the outbox.
+    return load_driver_request_by_id(target_str, outbox_dir)
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         prog="python -m advancore.agent_runner",
@@ -739,6 +850,39 @@ def main(argv: list[str] | None = None) -> int:
         help='Path to a transport response envelope, or "latest" for the most recent response (default: latest).',
     )
 
+    driver_send_parser = controller_transport_subparsers.add_parser(
+        "driver-send",
+        help="Send a transport request envelope through the local driver.",
+    )
+    driver_send_parser.add_argument(
+        "target",
+        nargs="?",
+        default="latest",
+        help='Path to a request envelope or handoff request, or "latest" for the latest handoff (default: latest).',
+    )
+
+    driver_receive_parser = controller_transport_subparsers.add_parser(
+        "driver-receive",
+        help="Receive a transport response envelope through the local driver.",
+    )
+    driver_receive_parser.add_argument(
+        "target",
+        nargs="?",
+        default="latest",
+        help='Path to a request envelope, a request id, or "latest" for the latest outbox request (default: latest).',
+    )
+
+    driver_show_parser = controller_transport_subparsers.add_parser(
+        "driver-show",
+        help="Show local driver artifacts for a request id (read-only).",
+    )
+    driver_show_parser.add_argument(
+        "target",
+        nargs="?",
+        default="latest",
+        help='Path to a request envelope, a request id, or "latest" for the latest outbox request (default: latest).',
+    )
+
     args = parser.parse_args(argv)
 
     if args.command == "controller-transport":
@@ -929,6 +1073,158 @@ def main(argv: list[str] | None = None) -> int:
             )
             print(_format_transport_response_result(result))
             return 0 if result else 1
+
+        if args.controller_transport_command == "driver-send":
+            outbox_dir, inbox_dir = default_driver_dirs(git_info.repo_root)
+            handoff_dir = git_info.repo_root / ".agent_runner" / "controller_handoff"
+            driver = LocalFilesystemTransportDriver(git_info.repo_root)
+
+            try:
+                request = _resolve_transport_request_target(
+                    args.target,
+                    git_info.repo_root,
+                    outbox_dir,
+                    handoff_dir,
+                    latest_from_outbox=False,
+                )
+            except ControllerTransportDriverError as exc:
+                print(
+                    _format_driver_send_result(None, error=str(exc)),
+                    file=sys.stderr,
+                )
+                return 1
+
+            try:
+                sent_path = driver.send(request)
+            except ControllerTransportDriverConflictError as exc:
+                print(
+                    _format_driver_send_result(None, error=f"conflict: {exc}"),
+                    file=sys.stderr,
+                )
+                return 1
+            except (ControllerTransportError, ControllerTransportWriteError) as exc:
+                print(
+                    _format_driver_send_result(None, error=str(exc)),
+                    file=sys.stderr,
+                )
+                return 1
+
+            audit_path: Path | None = None
+            audit_write_error: str | None = None
+            try:
+                audit_payload = build_controller_transport_audit_payload(
+                    task_id=request.task_id,
+                    task_filename=request.task_filename,
+                    request_id=request.request_id,
+                    state=request.handoff_state,
+                    request_path=request.handoff_request_path,
+                    bundle_path=request.review_bundle_path,
+                    branch=git_info.current_branch,
+                    head_sha=git_info.head_sha,
+                )
+                audit_path = write_audit_record(
+                    audit_payload, default_audit_dir(git_info.repo_root)
+                )
+            except AuditWriteError as exc:
+                audit_write_error = str(exc)
+
+            rel_path = sent_path
+            try:
+                rel_path = sent_path.relative_to(git_info.repo_root)
+            except ValueError:
+                pass
+
+            print(_format_driver_send_result(rel_path))
+            if audit_path:
+                print(f"Audit record: {audit_path}")
+            elif audit_write_error:
+                print(f"Audit record: NOT WRITTEN ({audit_write_error})")
+            return 0
+
+        if args.controller_transport_command == "driver-receive":
+            outbox_dir, inbox_dir = default_driver_dirs(git_info.repo_root)
+            handoff_dir = git_info.repo_root / ".agent_runner" / "controller_handoff"
+            driver = LocalFilesystemTransportDriver(git_info.repo_root)
+
+            try:
+                request = _resolve_transport_request_target(
+                    args.target,
+                    git_info.repo_root,
+                    outbox_dir,
+                    handoff_dir,
+                    latest_from_outbox=True,
+                )
+            except ControllerTransportDriverError as exc:
+                print(
+                    _format_driver_send_result(None, error=str(exc)),
+                    file=sys.stderr,
+                )
+                return 1
+
+            try:
+                response = driver.receive(request)
+            except (
+                ControllerTransportDriverNotFoundError,
+                ControllerTransportDriverAmbiguousError,
+                ControllerTransportValidationError,
+            ) as exc:
+                print(
+                    _format_driver_send_result(None, error=str(exc)),
+                    file=sys.stderr,
+                )
+                return 1
+
+            audit_path = None
+            audit_write_error = None
+            try:
+                audit_payload = build_controller_transport_audit_payload(
+                    task_id=request.task_id,
+                    task_filename=request.task_filename,
+                    request_id=request.request_id,
+                    state=response.result_state,
+                    request_path=request.handoff_request_path,
+                    bundle_path=request.review_bundle_path,
+                    decision_path=response.decision_path,
+                    decision=response.decision,
+                    branch=git_info.current_branch,
+                    head_sha=git_info.head_sha,
+                )
+                audit_path = write_audit_record(
+                    audit_payload, default_audit_dir(git_info.repo_root)
+                )
+            except AuditWriteError as exc:
+                audit_write_error = str(exc)
+
+            print(_format_driver_receive_result(response))
+            if audit_path:
+                print(f"Audit record: {audit_path}")
+            elif audit_write_error:
+                print(f"Audit record: NOT WRITTEN ({audit_write_error})")
+            return 0
+
+        if args.controller_transport_command == "driver-show":
+            outbox_dir, inbox_dir = default_driver_dirs(git_info.repo_root)
+            handoff_dir = git_info.repo_root / ".agent_runner" / "controller_handoff"
+            driver = LocalFilesystemTransportDriver(git_info.repo_root)
+
+            try:
+                request = _resolve_transport_request_target(
+                    args.target,
+                    git_info.repo_root,
+                    outbox_dir,
+                    handoff_dir,
+                    latest_from_outbox=True,
+                )
+            except ControllerTransportDriverError as exc:
+                print(
+                    _format_driver_send_result(None, error=str(exc)),
+                    file=sys.stderr,
+                )
+                return 1
+
+            view = driver.show(request.request_id)
+            print(format_driver_view_summary(view))
+            return 0
 
         print(
             f"FAIL: unknown controller-transport command: {args.controller_transport_command}",
