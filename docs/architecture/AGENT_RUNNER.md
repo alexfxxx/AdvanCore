@@ -948,7 +948,97 @@ auditable and easy to test.
 
 ---
 
-## 12. Future extension points
+## 12. Governed auto-pipeline
+
+TASK-017 adds a single-command governed development pipeline that automates the
+repetitive gates between task discovery and controller review while preserving
+the authority boundaries established by TASK-005 through TASK-016.
+
+### 12.1 Command
+
+```bash
+.venv/bin/python -m advancore.agent_runner auto TASK-018 --worker kimi-swarm
+```
+
+The default worker is `dry-run`. Use `--worker kimi` for the standard Kimi
+prompt adapter or `--worker kimi-swarm` for the swarm-mode adapter.
+
+### 12.2 Gates (executed in order, fail-closed)
+
+1. Resolve and parse the approved task file.
+2. Parse and validate the task's `Allowed changed-file scope` section.
+3. Validate branch is not `main`, working tree is clean, and task status is
+   executable (`READY`/`REWORK`).
+4. Launch the selected worker adapter.
+5. Capture pre/post Git snapshots (reuse TASK-005/TASK-007 verification).
+6. Generate the review bundle and audit record (reuse TASK-006/TASK-010).
+7. Detect any staged/index changes created by the worker.
+8. Run the full repository pytest suite.
+9. Run `git diff --check` for unstaged and staged changes.
+10. Compare actual changed paths against the allowed scope.
+11. Write a bounded auto-pipeline artifact and produce a consolidated
+    controller-ready report.
+
+The pipeline stops at the first failing gate and never stages, commits, pushes,
+merges, switches branches, deploys, or mutates lifecycle state.
+
+### 12.3 Allowed changed-file scope
+
+Auto mode requires an explicit `## Allowed changed-file scope` section in the
+task file. The section lists backtick-quoted repository-relative paths that the
+worker is permitted to modify. The pipeline fails closed if:
+
+- the section is missing,
+- an allowed path is absolute, contains `..`, or otherwise escapes the repo,
+- any actual changed path (tracked modification, untracked file, deletion, or
+  rename target) is outside the allowed set.
+
+### 12.4 Worker adapters
+
+- `DryRunWorkerAdapter` — default; performs no real work.
+- `KimiWorkerAdapter` — bounded `kimi --prompt` invocation.
+- `KimiSwarmWorkerAdapter` — uses the same safe `kimi --prompt` boundary
+  because the installed Kimi CLI does not expose a documented non-interactive
+  swarm subcommand. It sends a canonical instruction that explicitly requests
+  Kimi's AgentSwarm capability and restates the task scope and prohibited
+  actions. It never adds `--auto`, `--yolo`, or other permission-bypass flags.
+
+### 12.5 Pipeline result states
+
+- `READY_FOR_APPROVAL` — all gates passed; the work awaits controller/owner
+  review.
+- `VALIDATION_FAILED` — branch, working-tree, or task-status gate failed.
+- `WORKER_FAILED` — the worker returned a non-zero result.
+- `POST_WORKER_VERIFICATION_FAILED` — branch/HEAD moved unexpectedly.
+- `TEST_FAILED` — pytest failed.
+- `DIFF_CHECK_FAILED` — `git diff --check` detected whitespace errors.
+- `SCOPE_FAILED` — scope missing/unsafe or actual changes exceed allowed paths.
+- `ARTIFACT_FAILED` — the auto-pipeline artifact could not be written.
+
+### 12.6 Auto artifact
+
+Each run appends a bounded JSON Lines record to
+`.agent_runner/auto/auto_pipeline.jsonl` (gitignored). The record contains only
+safe metadata: task identity, branch, HEAD SHAs, worker type, pytest/diff-check
+results, allowed/actual paths, scope result, and a statement that no publication
+occurred. It excludes full task bodies, worker transcripts, secrets, environment
+dumps, and customer data.
+
+### 12.7 Authority boundary
+
+A successful auto run means only:
+
+```
+IMPLEMENTATION + VERIFICATION COMPLETE → READY FOR CONTROLLER/OWNER REVIEW
+```
+
+It does **not** mean approved, committed, pushed, merged, or deployed. The
+AdvanCore runner remains the policy authority; Kimi/Kimi Swarm remains a bounded
+implementation worker.
+
+---
+
+## 13. Future extension points
 
 - Additional `WorkerAdapter` implementations for other local or remote workers.
 - Integration with GitHub Issues/PRs for task discovery (read-only first).
@@ -966,7 +1056,7 @@ auditable and easy to test.
 
 ---
 
-## 13. Reasoning labels
+## 14. Reasoning labels
 
 ### FACT
 
@@ -1011,6 +1101,15 @@ auditable and easy to test.
 - Adapter dispatch/status does not stage, commit, push, merge, deploy, switch branches, or access secrets.
 - Adapter dispatch attempts append a safe metadata audit record with mode `controller_adapter` to `.agent_runner/audit/runner.jsonl`.
 - `controller-adapter status` is read-only and does not reconcile decisions or write artifacts.
+- The governed auto-pipeline lives in `advancore/agent_runner/auto_pipeline.py` and is invoked through the `auto` subcommand.
+- Auto mode requires an explicit `Allowed changed-file scope` section in the task file and enforces it fail-closed.
+- The auto-pipeline runs validation, worker execution, review-bundle generation, full pytest, `git diff --check`, and exact scope verification in order and stops immediately on any failed gate.
+- The auto-pipeline reuses existing `execute()`, audit, and review-bundle semantics from TASK-005 through TASK-010.
+- The auto-pipeline writes a bounded JSON Lines artifact under `.agent_runner/auto/auto_pipeline.jsonl` and excludes full task bodies, worker transcripts, secrets, environment dumps, and customer/business data.
+- Auto-pipeline success means only `READY_FOR_APPROVAL`; it never means `APPROVED`, `COMMITTED`, `PUSHED`, `MERGED`, or `DEPLOYED`.
+- The `KimiSwarmWorkerAdapter` uses the documented `kimi --prompt` boundary because the installed Kimi CLI does not expose a documented non-interactive swarm subcommand.
+- The swarm adapter instruction explicitly requests AgentSwarm capability, restates the allowed changed-file scope, and forbids staging, commit, push, merge, branch switch, credential access, deployment, and self-approval.
+- The swarm adapter never adds `--auto`, `--yolo`, or equivalent permission-bypass flags.
 - The controller-transport envelope lives in `advancore/agent_runner/controller_transport.py`.
 - Transport request and response envelopes are versioned (`envelope_version: "1"`) and schema-tagged (`advancore.controller.transport.request` / `.response`).
 - Transport envelopes carry only bounded safe metadata: correlation/request ID, task identity, handoff and review-bundle references, adapter name/type, bundle branch/HEAD/recommended-action/handoff-state, and bounded messages.

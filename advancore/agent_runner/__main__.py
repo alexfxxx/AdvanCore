@@ -104,7 +104,17 @@ from advancore.agent_runner.review_bundle import (
     load_review_bundle,
 )
 from advancore.agent_runner.runner import RunnerResult, RunnerStatus, execute, plan
-from advancore.agent_runner.worker import DryRunWorkerAdapter, KimiWorkerAdapter
+from advancore.agent_runner.worker import (
+    DryRunWorkerAdapter,
+    KimiSwarmWorkerAdapter,
+    KimiWorkerAdapter,
+    WorkerAdapter,
+)
+from advancore.agent_runner.auto_pipeline import (
+    AutoPipelineStatus,
+    format_auto_pipeline_report,
+    run_auto_pipeline,
+)
 
 
 def _format_result(result: RunnerResult) -> str:
@@ -626,6 +636,18 @@ def main(argv: list[str] | None = None) -> int:
     plan_parser.add_argument(
         "--worker",
         choices=["dry-run", "kimi"],
+        default="dry-run",
+        help="Worker adapter to use (default: dry-run).",
+    )
+
+    auto_parser = subparsers.add_parser(
+        "auto",
+        help="Run the governed auto-pipeline (validate, worker, pytest, diff-check, scope).",
+    )
+    auto_parser.add_argument("task_id", help="Task identifier, e.g. TASK-018")
+    auto_parser.add_argument(
+        "--worker",
+        choices=["dry-run", "kimi", "kimi-swarm"],
         default="dry-run",
         help="Worker adapter to use (default: dry-run).",
     )
@@ -1688,6 +1710,30 @@ def main(argv: list[str] | None = None) -> int:
         )
         print(_format_lifecycle_result(result))
         return 0 if result.ok else 1
+
+    if args.command == "auto":
+        try:
+            git_info = get_git_info(cwd=tasks_dir)
+        except Exception as exc:
+            print(
+                f"FAIL: cannot inspect Git repository: {exc}", file=sys.stderr
+            )
+            return 1
+
+        if args.worker == "kimi":
+            worker: WorkerAdapter = KimiWorkerAdapter()
+        elif args.worker == "kimi-swarm":
+            worker = KimiSwarmWorkerAdapter()
+        else:
+            worker = DryRunWorkerAdapter()
+
+        result = run_auto_pipeline(
+            tasks_dir,
+            args.task_id,
+            worker=worker,
+        )
+        print(format_auto_pipeline_report(result))
+        return 0 if result.status == AutoPipelineStatus.READY_FOR_APPROVAL else 1
 
     worker = KimiWorkerAdapter() if args.worker == "kimi" else DryRunWorkerAdapter()
 
