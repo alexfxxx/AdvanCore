@@ -115,6 +115,12 @@ from advancore.agent_runner.auto_pipeline import (
     format_auto_pipeline_report,
     run_auto_pipeline,
 )
+from advancore.agent_runner.goal_task import (
+    GoalTaskGenerationResult,
+    GoalTaskGenerationStatus,
+    generate_goal_task,
+    format_goal_task_report,
+)
 
 
 def _format_result(result: RunnerResult) -> str:
@@ -656,6 +662,27 @@ def main(argv: list[str] | None = None) -> int:
         type=int,
         default=0,
         help="Maximum autonomous repair attempts (0-2, default: 0).",
+    )
+
+    goal_task_parser = subparsers.add_parser(
+        "goal-task",
+        help="Convert an owner goal into a bounded DRAFT task (dry-run by default).",
+    )
+    goal_task_parser.add_argument(
+        "--goal",
+        required=True,
+        help="Bounded natural-language owner goal.",
+    )
+    goal_task_parser.add_argument(
+        "--planner",
+        choices=["dry-run", "kimi", "kimi-swarm"],
+        default="dry-run",
+        help="Planner adapter to use (default: dry-run).",
+    )
+    goal_task_parser.add_argument(
+        "--execute",
+        action="store_true",
+        help="Launch the planner and write the DRAFT task after validation.",
     )
 
     transition_parser = subparsers.add_parser(
@@ -1698,6 +1725,36 @@ def main(argv: list[str] | None = None) -> int:
         return 0
 
     tasks_dir = Path.cwd() / "tasks"
+
+    if args.command == "goal-task":
+        try:
+            git_info = get_git_info(cwd=tasks_dir)
+        except Exception as exc:
+            result = GoalTaskGenerationResult(
+                ok=False,
+                status=GoalTaskGenerationStatus.PRECONDITION_FAILED,
+                messages=[f"FAIL: cannot inspect Git repository: {exc}"],
+            )
+            print(format_goal_task_report(result), file=sys.stderr)
+            return 1
+
+        if args.planner == "kimi":
+            planner: WorkerAdapter = KimiWorkerAdapter()
+        elif args.planner == "kimi-swarm":
+            planner = KimiSwarmWorkerAdapter()
+        else:
+            planner = DryRunWorkerAdapter()
+
+        result = generate_goal_task(
+            repo_root=git_info.repo_root,
+            tasks_dir=tasks_dir,
+            goal=args.goal,
+            planner=planner,
+            execute=args.execute,
+        )
+        print(format_goal_task_report(result))
+        success = result.ok or result.status == GoalTaskGenerationStatus.DRY_RUN
+        return 0 if success else 1
 
     if args.command == "transition":
         try:

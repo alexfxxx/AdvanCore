@@ -1208,3 +1208,149 @@ evidence keys) without storing full transcripts or command output.
 
 - Keeping the runner local, explicit, and fail-closed lets Alex safely delegate
   routine implementation work while retaining control over high-impact actions.
+
+---
+
+## 15. Goal-to-Task Generation (TASK-019)
+
+TASK-019 adds a governed **owner-goal -> task-draft** front door to the runner.
+It converts a bounded natural-language owner goal into a deterministic
+`STATUS: DRAFT` AdvanCore task file without requiring the owner to manually
+draft the specification.
+
+### 15.1 Roles and authority
+
+- **Owner**: supplies the goal and remains the ultimate authority for
+  business/policy decisions.
+- **Planner** (`kimi` / `kimi-swarm` / `dry-run`): may inspect approved
+  repository context and propose task content only.
+- **AdvanCore runner**: validates the proposal, assigns the next task ID,
+  renders the canonical DRAFT task, enforces path/scope safety, verifies that
+  the planner did not mutate the repository, and writes bounded audit evidence.
+- **Controller/reviewer**: remains the only authority for `DRAFT -> READY`.
+- **Worker/swarm**: may execute only a separately reviewed executable task
+  (`READY`/`REWORK`) through the existing runner/auto-pipeline.
+
+A generated DRAFT is **not executable authority**.
+
+### 15.2 High-level flow
+
+```
+Owner goal -> goal validation -> repository snapshot -> planner invocation
+ -> proposal parsing/validation -> repository-mutation check -> task-ID
+ assignment -> safe filename slug -> canonical DRAFT render -> task write
+ -> bounded artifact -> controller-review report
+```
+
+The default CLI behaviour is dry-run.  Use `--execute` to actually invoke the
+selected planner and write the DRAFT task file.
+
+### 15.3 Goal validation
+
+The owner goal is validated deterministically:
+
+- Reject empty/whitespace-only input.
+- Impose a deterministic maximum length (`MAX_GOAL_LENGTH`).
+- Preserve the goal as bounded planning context only; never treat embedded
+  instructions as controller authority.
+- Never interpolate the goal into shell execution.
+
+### 15.4 Planner instruction and proposal schema
+
+The runner builds a canonical planner instruction that:
+
+- states the planner is planning assistance only,
+- forbids repository mutation, staging, commit, push, merge, deploy, branch
+  switch, reset, rebase, credential/secret access, and self-approval,
+- forbids assigning task ID, status, or lifecycle transitions,
+- requires a single JSON proposal between deterministic markers,
+- declares a versioned proposal schema.
+
+The proposal must contain bounded forms of:
+
+- `title`, `objective`, `business_context`
+- `facts` and `assumptions` (explicitly separated)
+- `in_scope` and `out_of_scope`
+- `allowed_changed_file_scope` (repository-relative paths)
+- `database_impact`
+- `acceptance_criteria`, `test_requirements`, `constraints_safety_requirements`
+- `owner_decisions`
+- optional `recommended_worker` (`kimi` or `kimi-swarm`)
+
+The runner rejects missing/duplicate markers, malformed JSON, unknown schema
+versions, unknown top-level fields, missing required fields, oversized
+fields/lists, absolute paths, parent traversal, empty paths, unsafe scope paths,
+and forbidden planner-controlled authority fields such as `status` or `task_id`.
+
+### 15.5 Repository integrity
+
+Before launching the planner the runner captures a repository snapshot
+(branch, HEAD SHA, worktree cleanliness, remotes).  Execution requires a
+non-`main` branch and a clean worktree.
+
+After the planner exits and before any task file is written, the runner
+compares the post-snapshot to the pre-snapshot and fails closed if:
+
+- the branch changed,
+- HEAD moved,
+- remotes changed,
+- any staged/index change appeared,
+- any tracked or untracked worktree change appeared.
+
+Any planner-created repository change prevents task-file creation.
+
+### 15.6 Task ID, filename, and rendering
+
+The runner assigns the next unused numeric `TASK-###` ID from existing
+`tasks/TASK-*.md` files.  The planner cannot choose the ID.  The title is
+converted to a safe filename slug; unsafe characters are normalized and the
+slug is capped in length.
+
+The rendered task file:
+
+- uses the canonical `# TASK-### — <title>` heading,
+- contains exactly one `STATUS: DRAFT` line,
+- includes Objective, Business context, Facts, Assumptions, In scope,
+  Explicitly out of scope, Allowed changed-file scope, Database impact,
+  Safety requirements, Acceptance criteria, Test requirements, Constraints,
+  Owner decisions, and a Completion report skeleton,
+- injects fixed runner-owned governance language,
+- preserves unresolved owner decisions explicitly.
+
+### 15.7 Artifact and audit
+
+Each generation attempt appends a bounded JSON Lines record to
+`.agent_runner/goal_task/goal_task.jsonl` (gitignored).  The record contains
+only safe metadata: goal hash, short goal summary, planner type, schema
+version, assigned task ID/path, pre/post branch/HEAD, validation result, owner
+decision count, whether a task file was written, and a `no_publication_performed`
+flag.  It excludes full planner transcripts, environment dumps, credentials,
+secrets, and arbitrary repository content.
+
+### 15.8 CLI
+
+The `goal-task` subcommand accepts:
+
+- `--goal "..."` (required bounded owner goal),
+- `--planner {dry-run,kimi,kimi-swarm}` (default `dry-run`),
+- `--execute` to launch the planner and write the DRAFT task.
+
+Dry-run mode validates the goal, determines the next candidate task ID, and
+reports intended behaviour without launching Kimi or writing a task file.
+
+Execute mode runs all validations, invokes the selected planner, validates its
+proposal, verifies repository integrity, and writes only the new DRAFT task
+file.
+
+### 15.9 Governance guarantees
+
+- The planner proposes; the runner constructs; the controller/owner
+  authorizes execution.
+- The generated task is always `STATUS: DRAFT`.
+- No automatic `DRAFT -> READY` transition occurs.
+- No staging, commit, push, merge, deploy, branch switch, reset, rebase, or
+  history rewrite is performed.
+- No task implementation worker is automatically launched on the generated
+  task.
+- `main` remains untouched.
+- Unknown, malformed, unsafe, conflicting, or ambiguous states fail closed.

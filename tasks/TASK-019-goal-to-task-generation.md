@@ -1,6 +1,6 @@
 # TASK-019 — Goal-to-Task Generation Foundation
 
-STATUS: READY
+STATUS: APPROVED
 
 ## Objective
 
@@ -316,16 +316,86 @@ TASK-019 deliberately keeps generated tasks at `DRAFT`. A later task may reduce 
 
 ## Completion report
 
-To be completed by the worker. Report:
+- **Implemented**
+  - Added `advancore/agent_runner/goal_task.py` with bounded owner-goal
+    validation, versioned planner proposal parsing/validation, deterministic
+    task-ID assignment, safe title slugging, canonical `STATUS: DRAFT` task
+    rendering, pre/post planner repository-mutation detection, bounded artifact
+    writing, and consolidated report formatting.
+  - Added `goal-task` CLI subcommand to `advancore/agent_runner/__main__.py`
+    with `--goal`, `--planner {dry-run,kimi,kimi-swarm}`, and `--execute`.
+  - Exported new public symbols from `advancore/agent_runner/__init__.py`.
+  - Added `tests/test_goal_task.py` covering goal validation, proposal parsing,
+    schema validation, unsafe scope rejection, mutation detection, task
+    rendering, dry-run/execute behaviour, CLI behaviour, and governance
+    guarantees.
+  - Updated `docs/architecture/AGENT_RUNNER.md` with section 15 describing the
+    goal-to-task generation layer.
+  - Added `docs/decisions/ADR-019-goal-to-task-generation.md`.
 
-- Implemented
-- Files changed
-- Database changes
-- Tests executed and results
-- Planner proposal policy chosen
-- Goal/proposal bounds chosen
-- Assumptions
-- Risks / unresolved issues
-- Decisions required
-- Recommended next step
-- `git status --short`
+- **Files changed**
+  1. `advancore/agent_runner/goal_task.py` (new)
+  2. `advancore/agent_runner/__init__.py`
+  3. `advancore/agent_runner/__main__.py`
+  4. `tests/test_goal_task.py` (new)
+  5. `docs/architecture/AGENT_RUNNER.md`
+  6. `docs/decisions/ADR-019-goal-to-task-generation.md` (new)
+  7. `tasks/TASK-019-goal-to-task-generation.md`
+
+- **Database changes**
+  - None.
+
+- **Tests executed and results**
+  - `tests/test_goal_task.py`: 53 passed.
+  - Full suite: `472 passed in 6.69s`.
+
+- **Planner proposal policy chosen**
+  - Planner is untrusted planning assistance only.
+  - Planner receives a canonical instruction that forbids repository mutation,
+    authority assignment, and self-approval.
+  - Planner returns a single JSON proposal between deterministic markers.
+  - Runner enforces schema version `advancore-goal-task-proposal-v1`, rejects
+    unknown/missing/forbidden/oversized fields and unsafe paths, and ignores any
+    planner-supplied task ID or status.
+
+- **Goal/proposal bounds chosen**
+  - Owner goal max length: 2000 normalized characters.
+  - Title max length: 120 characters.
+  - Text fields max length: 4000 characters.
+  - List items max length: 500 characters.
+  - List max length: 100 items.
+  - Scope path max length: 260 characters.
+  - Scope list max length: 50 items.
+  - Filename slug max length: 60 characters.
+
+- **Assumptions**
+  - The existing `WorkerAdapter` boundary and Git snapshot helpers are suitable
+    for planner invocation and integrity verification.
+  - Kimi Code's `kimi --prompt` mode remains a suitable bounded invocation.
+  - Controller/owner review remains the authority for `DRAFT -> READY`.
+
+- **Risks / unresolved issues**
+  - Real planner output quality depends on the underlying model and the
+    canonical instruction; the runner fails closed on malformed/unsafe output.
+  - A future task may connect generated drafts to the existing controller
+    decision/lifecycle path more tightly.
+
+- **Decisions required**
+  - Controller/owner must review generated DRAFT task(s) and approve the
+    `DRAFT -> READY` transition before any worker execution.
+
+- **Recommended next step**
+  - Review the generated DRAFT task(s) and, when appropriate, use the existing
+    `transition` subcommand with `--actor controller --to READY --apply` to
+    promote a generated task to executable status.
+
+- **`git status --short`**
+  ```
+   M advancore/agent_runner/__init__.py
+   M advancore/agent_runner/__main__.py
+   M docs/architecture/AGENT_RUNNER.md
+   M tasks/TASK-019-goal-to-task-generation.md
+  ?? advancore/agent_runner/goal_task.py
+  ?? docs/decisions/ADR-019-goal-to-task-generation.md
+  ?? tests/test_goal_task.py
+  ```
