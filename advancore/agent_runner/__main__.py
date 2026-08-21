@@ -7,12 +7,14 @@ a worker adapter, and choose the worker with ``--worker``.
 from __future__ import annotations
 
 import argparse
+import json
 import sys
 from pathlib import Path
 
 from advancore.agent_runner.audit import (
     AuditWriteError,
     build_controller_decision_audit_payload,
+    build_controller_transport_audit_payload,
     build_handoff_audit_payload,
     default_audit_dir,
     write_audit_record,
@@ -23,6 +25,27 @@ from advancore.agent_runner.controller_adapter import (
     dispatch_controller_adapter,
     format_adapter_result,
     inspect_controller_adapter_status,
+)
+from advancore.agent_runner.controller_transport import (
+    TRANSPORT_REQUEST_SCHEMA,
+    TRANSPORT_RESPONSE_SCHEMA,
+    ControllerTransportError,
+    ControllerTransportWriteError,
+    apply_transport_response,
+    build_transport_request,
+    build_transport_response,
+    default_transport_dir,
+    find_latest_transport_request,
+    find_latest_transport_response,
+    format_transport_request_summary,
+    format_transport_response_summary,
+    handoff_to_transport_request,
+    load_transport_request,
+    load_transport_response,
+    validate_transport_request,
+    validate_transport_response,
+    write_transport_request,
+    write_transport_response,
 )
 from advancore.agent_runner.controller_decision import (
     ControllerDecisionError,
@@ -406,6 +429,73 @@ def _format_controller_adapter_result(result: ControllerAdapterResult) -> str:
     return "\n".join(lines)
 
 
+def _format_transport_request_result(
+    envelope_path: Path | None,
+    audit_path: Path | None,
+    audit_write_error: str | None,
+    error: str | None = None,
+) -> str:
+    lines: list[str] = []
+    lines.append("=" * 64)
+    lines.append("AdvanCore Local Agent Runner — Controller Transport Request")
+    lines.append("=" * 64)
+    if error:
+        lines.append("Result: FAIL")
+        lines.append(f"Error:  {error}")
+    elif envelope_path:
+        lines.append("Result: OK")
+        lines.append(f"Envelope: {envelope_path}")
+    else:
+        lines.append("Result: FAIL")
+        lines.append("Error:  transport request envelope was not created")
+    if audit_path:
+        try:
+            rel_path = audit_path.relative_to(Path.cwd())
+        except ValueError:
+            rel_path = audit_path
+        lines.append(f"Audit record: {rel_path}")
+    elif audit_write_error:
+        lines.append("Audit record: NOT WRITTEN")
+        lines.append(f"  error: {audit_write_error}")
+    lines.append("=" * 64)
+    return "\n".join(lines)
+
+
+def _format_transport_response_result(result: ControllerAdapterResult) -> str:
+    lines: list[str] = []
+    lines.append("=" * 64)
+    lines.append("AdvanCore Local Agent Runner — Controller Transport Response")
+    lines.append("=" * 64)
+    lines.append(f"Result state:  {result.state}")
+    lines.append(f"Task:          {result.task_id or 'n/a'}")
+    lines.append(f"File:          {result.task_filename or 'n/a'}")
+    lines.append(f"Handoff:       {result.request_path or 'n/a'}")
+    lines.append(f"Bundle:        {result.bundle_path or 'n/a'}")
+    if result.decision_path:
+        lines.append(f"Decision:      {result.decision or 'n/a'}")
+        lines.append(f"Decision path: {result.decision_path}")
+    lines.append(f"Reconciled:    {'yes' if result.reconciled else 'no'}")
+    if result.audit_path:
+        try:
+            rel_path = Path(result.audit_path).relative_to(Path.cwd())
+        except ValueError:
+            rel_path = result.audit_path
+        lines.append(f"Audit record:  {rel_path}")
+    elif not result.audit_write_ok:
+        lines.append("Audit record:  NOT WRITTEN")
+        if result.audit_write_error:
+            lines.append(f"  error: {result.audit_write_error}")
+    lines.append("-" * 64)
+    lines.append("Messages:")
+    if result.messages:
+        for msg in result.messages:
+            lines.append(f"  {msg}")
+    else:
+        lines.append("  (none)")
+    lines.append("=" * 64)
+    return "\n".join(lines)
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         prog="python -m advancore.agent_runner",
@@ -601,7 +691,250 @@ def main(argv: list[str] | None = None) -> int:
         help='Path to a handoff request, or "latest" for the most recent request (default: latest).',
     )
 
+    controller_transport_parser = subparsers.add_parser(
+        "controller-transport",
+        help="Create, inspect, or validate controller transport envelopes.",
+    )
+    controller_transport_subparsers = controller_transport_parser.add_subparsers(
+        dest="controller_transport_command", required=True
+    )
+    transport_request_parser = controller_transport_subparsers.add_parser(
+        "request",
+        help="Create a transport request envelope from a handoff request.",
+    )
+    transport_request_parser.add_argument(
+        "target",
+        nargs="?",
+        default="latest",
+        help='Path to a handoff request, or "latest" for the most recent request (default: latest).',
+    )
+    transport_request_parser.add_argument(
+        "--adapter",
+        default="manual",
+        help="Controller adapter name the envelope is addressed to (default: manual).",
+    )
+    transport_request_parser.add_argument(
+        "--adapter-type",
+        default=None,
+        help="Optional transport adapter type hint (e.g. local, remote).",
+    )
+    transport_show_parser = controller_transport_subparsers.add_parser(
+        "show",
+        help="Show a transport request or response envelope (read-only).",
+    )
+    transport_show_parser.add_argument(
+        "target",
+        nargs="?",
+        default="latest",
+        help='Path to a transport envelope, or "latest" for the most recent envelope (default: latest).',
+    )
+    transport_validate_parser = controller_transport_subparsers.add_parser(
+        "validate-response",
+        help="Validate a transport response envelope and reconcile any decision.",
+    )
+    transport_validate_parser.add_argument(
+        "target",
+        nargs="?",
+        default="latest",
+        help='Path to a transport response envelope, or "latest" for the most recent response (default: latest).',
+    )
+
     args = parser.parse_args(argv)
+
+    if args.command == "controller-transport":
+        try:
+            git_info = get_git_info(cwd=Path.cwd())
+        except Exception as exc:
+            print(
+                _format_transport_request_result(
+                    None, None, None, error=f"cannot inspect Git repository: {exc}"
+                ),
+                file=sys.stderr,
+            )
+            return 1
+
+        transport_dir = default_transport_dir(git_info.repo_root)
+
+        if args.controller_transport_command == "request":
+            handoff_dir = git_info.repo_root / ".agent_runner" / "controller_handoff"
+            target = args.target
+            if target.lower() == "latest":
+                handoff_path = find_latest_handoff(handoff_dir)
+                if handoff_path is None:
+                    print(
+                        _format_transport_request_result(
+                            None, None, None,
+                            error=f"no handoff requests found in {handoff_dir}",
+                        ),
+                        file=sys.stderr,
+                    )
+                    return 1
+            else:
+                handoff_path = Path(target)
+                if not handoff_path.is_absolute():
+                    handoff_path = Path.cwd() / handoff_path
+
+            try:
+                handoff = load_controller_handoff(handoff_path)
+            except ControllerHandoffError as exc:
+                print(
+                    _format_transport_request_result(
+                        None, None, None, error=f"cannot load handoff request: {exc}"
+                    ),
+                    file=sys.stderr,
+                )
+                return 1
+
+            try:
+                envelope = handoff_to_transport_request(
+                    handoff_path=handoff_path,
+                    handoff=handoff,
+                    adapter_name=args.adapter,
+                    adapter_type=args.adapter_type,
+                    repo_root=git_info.repo_root,
+                )
+            except ControllerTransportError as exc:
+                print(
+                    _format_transport_request_result(
+                        None, None, None, error=str(exc)
+                    ),
+                    file=sys.stderr,
+                )
+                return 1
+
+            try:
+                envelope_path = write_transport_request(envelope, transport_dir)
+            except ControllerTransportWriteError as exc:
+                print(
+                    _format_transport_request_result(
+                        None, None, None, error=str(exc)
+                    ),
+                    file=sys.stderr,
+                )
+                return 1
+
+            audit_path: Path | None = None
+            audit_write_error: str | None = None
+            try:
+                audit_payload = build_controller_transport_audit_payload(
+                    task_id=envelope.task_id,
+                    task_filename=envelope.task_filename,
+                    request_id=envelope.request_id,
+                    state=envelope.handoff_state,
+                    request_path=envelope.handoff_request_path,
+                    bundle_path=envelope.review_bundle_path,
+                    branch=git_info.current_branch,
+                    head_sha=git_info.head_sha,
+                )
+                audit_path = write_audit_record(
+                    audit_payload, default_audit_dir(git_info.repo_root)
+                )
+            except AuditWriteError as exc:
+                audit_write_error = str(exc)
+
+            rel_envelope_path = envelope_path
+            try:
+                rel_envelope_path = envelope_path.relative_to(git_info.repo_root)
+            except ValueError:
+                pass
+
+            print(
+                _format_transport_request_result(
+                    rel_envelope_path, audit_path, audit_write_error
+                )
+            )
+            return 0
+
+        if args.controller_transport_command == "show":
+            target = args.target
+            if target.lower() == "latest":
+                envelope_path = find_latest_transport_request(transport_dir)
+                if envelope_path is None:
+                    envelope_path = find_latest_transport_response(transport_dir)
+                if envelope_path is None:
+                    print(
+                        f"FAIL: no transport envelopes found in {transport_dir}",
+                        file=sys.stderr,
+                    )
+                    return 1
+            else:
+                envelope_path = Path(target)
+                if not envelope_path.is_absolute():
+                    envelope_path = Path.cwd() / envelope_path
+
+            try:
+                data = json.loads(envelope_path.read_text(encoding="utf-8"))
+            except Exception as exc:
+                print(
+                    f"FAIL: cannot read transport envelope {envelope_path}: {exc}",
+                    file=sys.stderr,
+                )
+                return 1
+
+            schema = data.get("schema")
+            try:
+                if schema == TRANSPORT_REQUEST_SCHEMA:
+                    request = validate_transport_request(data)
+                    print(format_transport_request_summary(request))
+                elif schema == TRANSPORT_RESPONSE_SCHEMA:
+                    response = validate_transport_response(data)
+                    print(format_transport_response_summary(response))
+                else:
+                    print(
+                        f"FAIL: unknown transport envelope schema: {schema!r}",
+                        file=sys.stderr,
+                    )
+                    return 1
+            except ControllerTransportError as exc:
+                print(
+                    f"FAIL: invalid transport envelope: {exc}",
+                    file=sys.stderr,
+                )
+                return 1
+
+            return 0
+
+        if args.controller_transport_command == "validate-response":
+            target = args.target
+            if target.lower() == "latest":
+                envelope_path = find_latest_transport_response(transport_dir)
+                if envelope_path is None:
+                    print(
+                        f"FAIL: no transport response envelopes found in {transport_dir}",
+                        file=sys.stderr,
+                    )
+                    return 1
+            else:
+                envelope_path = Path(target)
+                if not envelope_path.is_absolute():
+                    envelope_path = Path.cwd() / envelope_path
+
+            try:
+                response = load_transport_response(envelope_path)
+            except ControllerTransportError as exc:
+                print(
+                    _format_transport_response_result(
+                        ControllerAdapterResult(
+                            adapter_name="transport",
+                            state=AdapterResultState.BLOCKED.value,
+                            messages=[f"cannot load transport response: {exc}"],
+                        )
+                    ),
+                    file=sys.stderr,
+                )
+                return 1
+
+            result = apply_transport_response(
+                response, repo_root=git_info.repo_root, git_info=git_info
+            )
+            print(_format_transport_response_result(result))
+            return 0 if result else 1
+
+        print(
+            f"FAIL: unknown controller-transport command: {args.controller_transport_command}",
+            file=sys.stderr,
+        )
+        return 1
 
     if args.command == "controller-adapter":
         try:

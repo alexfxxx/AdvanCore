@@ -183,3 +183,104 @@ To be completed by the worker. Report:
 - Decisions required
 - Recommended next step
 - `git status --short`
+
+---
+
+**Implemented**
+
+- Added `advancore/agent_runner/controller_transport.py` defining a versioned,
+  transport-neutral controller request/response envelope around the TASK-014
+  controller-adapter boundary.
+- Defined `ControllerTransportRequest` and `ControllerTransportResponse`
+  dataclasses with bounded safe fields only: schema/version, correlation/request
+  ID, task identity, handoff request reference, review-bundle reference, adapter
+  name/type, bounded bundle evidence/metadata, and result state limited to
+  `PENDING`, `DECISION_RECEIVED`, `BLOCKED`.
+- Added deterministic JSON serialize/load/validate helpers that fail closed on
+  unknown versions, unknown schemas, unknown states, malformed JSON, missing
+  required fields, and correlation/reference mismatches.
+- Added local file write/load helpers under `.agent_runner/controller_transport/`
+  with sanitized filenames and path-traversal rejection.
+- Added `handoff_to_transport_request()` orchestration helper that converts a
+  validated TASK-013/TASK-014 handoff into a request envelope without changing
+  authority semantics.
+- Added `convert_response_to_adapter_result()` and `apply_transport_response()`
+  helpers. `apply_transport_response()` delegates controller-decision
+  validation/reconciliation to existing TASK-013 logic when a response reports
+  `DECISION_RECEIVED` with a decision path.
+- Added `build_controller_transport_audit_payload()` to `audit.py` and wired
+  transport operations into the local audit trail with `mode: "controller_transport"`.
+- Added `controller-transport` CLI subcommand in `__main__.py` with `request`,
+  `show`, and `validate-response` commands.
+- Added `tests/test_controller_transport.py` with 50 deterministic tests covering
+  construction, serialization round-trip, validation, correlation/reference
+  mismatches, safe-field policy, path safety, authority separation,
+  reconciliation delegation, read-only inspection, audit behavior, and absence
+  of Git/lifecycle side effects.
+- Updated `docs/architecture/AGENT_RUNNER.md` with module description, updated
+  flow diagram, envelope section, CLI usage, testing approach, threat
+  boundaries, and FACT entries.
+- Added `docs/decisions/ADR-015-controller-transport-envelope.md` documenting
+  the architectural decision.
+
+**Files changed**
+
+- `advancore/agent_runner/controller_transport.py` (new)
+- `advancore/agent_runner/audit.py`
+- `advancore/agent_runner/__main__.py`
+- `tests/test_controller_transport.py` (new)
+- `docs/architecture/AGENT_RUNNER.md`
+- `docs/decisions/ADR-015-controller-transport-envelope.md` (new)
+- `tasks/TASK-015-controller-transport-envelope-foundation.md`
+
+**Database changes**
+
+None. No schema, model, migration, or production database change was authorized
+or made.
+
+**Tests executed and results**
+
+```bash
+.venv/bin/python -m pytest tests/ -v
+```
+
+Result: **322 passed in 5.92s** (272 pre-existing + 50 new transport-envelope tests).
+All existing TASK-009 through TASK-014 tests remain passing.
+
+**Assumptions**
+
+- Future remote controller transports will consume the JSON envelope contract
+  defined here rather than bypassing it.
+- The existing `.agent_runner/` gitignore rule is sufficient to keep transport
+  envelope artifacts out of the repository index.
+
+**Risks / unresolved issues**
+
+- The envelope does not include cryptographic signing or checksums. If
+  tamper-evident handoff becomes a requirement, a future task should add it.
+- The envelope is local-file-only in this task; actual network transport is
+  untested by design (out of scope).
+
+**Decisions required**
+
+None. No owner-level policy or credential/transport decisions are required to
+begin or complete this task.
+
+**Recommended next step**
+
+- Review and approve this task.
+- Optional future task: implement an approved remote controller transport
+  adapter that consumes this envelope contract over an approved network
+  mechanism (e.g. HTTP, webhook, queue) while preserving TASK-011/TASK-012/
+  TASK-013/TASK-014 authority boundaries.
+
+**`git status --short`**
+
+```
+ M advancore/agent_runner/__main__.py
+ M advancore/agent_runner/audit.py
+ M docs/architecture/AGENT_RUNNER.md
+?? advancore/agent_runner/controller_transport.py
+?? docs/decisions/ADR-015-controller-transport-envelope.md
+?? tests/test_controller_transport.py
+```

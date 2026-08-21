@@ -217,6 +217,45 @@ def build_controller_adapter_audit_payload(
     }
 
 
+def build_controller_transport_audit_payload(
+    *,
+    timestamp: datetime | None = None,
+    task_id: str | None,
+    task_filename: str | None,
+    request_id: str | None,
+    state: str | None,
+    request_path: str | None,
+    bundle_path: str | None,
+    decision_path: str | None = None,
+    decision: str | None = None,
+    reconciled: bool = False,
+    branch: str | None = None,
+    head_sha: str | None = None,
+) -> dict[str, Any]:
+    """Return a safe metadata payload for a controller-transport operation.
+
+    The payload intentionally excludes the full task body, worker transcripts,
+    credentials, environment dumps, arbitrary notes, and business or customer
+    data. It records only the transport envelope reference, result state, and
+    whether a returned decision was reconciled through existing TASK-013 logic.
+    """
+    return {
+        "timestamp": (timestamp or datetime.now(timezone.utc)).isoformat(),
+        "task_id": task_id,
+        "task_filename": task_filename,
+        "mode": "controller_transport",
+        "request_id": request_id,
+        "state": state,
+        "request_path": request_path,
+        "bundle_path": bundle_path,
+        "decision_path": decision_path,
+        "decision": decision,
+        "reconciled": reconciled,
+        "branch": branch,
+        "head_sha": head_sha,
+    }
+
+
 def build_handoff_audit_payload(
     *,
     timestamp: datetime | None = None,

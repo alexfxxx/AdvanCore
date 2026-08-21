@@ -70,6 +70,16 @@ resetting, merging, or broadening scope.
                                 ▼
                         ┌──────────────────┐
                         │ Controller       │
+                        │ transport        │
+                        │ envelope         │
+                        │ (.agent_runner/  │
+                        │  controller_tran │
+                        │      sport)      │
+                        └──────────────────┘
+                                │
+                                ▼
+                        ┌──────────────────┐
+                        │ Controller       │
                         │ decision record  │
                         │ (.agent_runner/  │
                         │    decisions/)   │
@@ -101,7 +111,8 @@ resetting, merging, or broadening scope.
 | `advancore/agent_runner/lifecycle.py` | Task-status enum, actor-role enum, transition matrix, and authority-aware status update helper. |
 | `advancore/agent_runner/decision_lifecycle_bridge.py` | Fail-closed bridge from a validated controller decision record to the existing task lifecycle; preview by default, explicit `--apply` required to mutate. |
 | `advancore/agent_runner/controller_adapter.py` | Replaceable controller-adapter boundary and built-in `manual` adapter; dispatches a handoff request to one adapter and reconciles any returned decision through TASK-013. |
-| `advancore/agent_runner/__main__.py` | CLI entry point: `python -m advancore.agent_runner plan TASK-005`, `transition TASK-009 --to ...`, `review-bundle show`, `controller-decision record/show/apply`, `controller-handoff prepare/show/reconcile`, or `controller-adapter dispatch/status`. |
+| `advancore/agent_runner/controller_transport.py` | Versioned, transport-neutral controller request/response envelope around the TASK-014 adapter boundary; deterministic serialization, validation, local file round-trip, and response reconciliation delegation. |
+| `advancore/agent_runner/__main__.py` | CLI entry point: `python -m advancore.agent_runner plan TASK-005`, `transition TASK-009 --to ...`, `review-bundle show`, `controller-decision record/show/apply`, `controller-handoff prepare/show/reconcile`, `controller-adapter dispatch/status`, or `controller-transport request/show/validate-response`. |
 
 ---
 
@@ -314,6 +325,82 @@ lifecycle bridge and does not mutate task files, Git state, or database state.
 
 `status`/inspection is read-only and does not reconcile decisions or write
 artifacts.
+
+### Controller transport envelope
+
+The `controller_transport` module defines a deterministic, bounded,
+transport-neutral request/response envelope around the existing TASK-014
+controller-adapter boundary. It lets a future remote controller transport
+exchange safe artifacts without redesigning controller authority, handoff,
+decision, lifecycle, or Git-publication semantics.
+
+A request envelope carries only bounded safe metadata:
+
+- envelope version and schema;
+- unique transport correlation/request ID;
+- task identity (ID and filename);
+- source handoff-request path and ID;
+- linked review-bundle path;
+- target controller adapter name and optional adapter type;
+- bounded bundle evidence (branch, pre/post HEAD, recommended action, handoff state);
+- created timestamp.
+
+A response envelope carries only bounded safe metadata:
+
+- envelope version and schema;
+- matching correlation/request ID;
+- task identity;
+- source handoff-request path and linked review-bundle path;
+- result state limited to `PENDING`, `DECISION_RECEIVED`, or `BLOCKED`;
+- optional controller-decision record reference/path and decision value;
+- bounded failure/blocking messages.
+
+The envelope is data exchange only. It is not controller authority: it does not
+make a worker a controller, infer `APPROVE`, treat `DECISION_RECEIVED` as
+sufficient authority without a separately valid TASK-011 decision record, or
+bypass TASK-012 lifecycle authority or TASK-013 handoff reconciliation.
+
+Serialization is deterministic JSON with sorted keys. The module provides:
+
+- `build_transport_request()` / `handoff_to_transport_request()` — convert a
+  validated handoff request into a transport request envelope.
+- `write_transport_request()` / `load_transport_request()` — local file round-trip.
+- `build_transport_response()` — build a response envelope from a request and
+  result state.
+- `write_transport_response()` / `load_transport_response()` — local file round-trip.
+- `validate_transport_request()` / `validate_transport_response()` — fail-closed
+  schema, version, required-field, and correlation/reference validation.
+- `convert_response_to_adapter_result()` — pure conversion to a bounded
+  TASK-014 adapter result.
+- `apply_transport_response()` — validate a response envelope and, if it reports
+  `DECISION_RECEIVED` with a decision path, reconcile the decision through the
+  existing TASK-013 `reconcile_controller_handoff()` logic.
+
+Local envelope artifacts are stored under `.agent_runner/controller_transport/`
+and gitignored through the existing `.agent_runner/` rule. Envelope operations
+write only local artifacts and audit metadata; they do not mutate task files,
+Git state, lifecycle state, or database state.
+
+Create a transport request envelope from the latest handoff request:
+
+```bash
+.venv/bin/python -m advancore.agent_runner controller-transport request
+.venv/bin/python -m advancore.agent_runner controller-transport request .agent_runner/controller_handoff/20260821T120000_TASK-015_WAITING_DECISION.json --adapter manual
+```
+
+Inspect a transport envelope (read-only):
+
+```bash
+.venv/bin/python -m advancore.agent_runner controller-transport show
+.venv/bin/python -m advancore.agent_runner controller-transport show .agent_runner/controller_transport/20260821T120000_TASK-015_CTE-xxxx_request.json
+```
+
+Validate a transport response envelope and reconcile any returned decision:
+
+```bash
+.venv/bin/python -m advancore.agent_runner controller-transport validate-response
+.venv/bin/python -m advancore.agent_runner controller-transport validate-response .agent_runner/controller_transport/20260821T130000_TASK-015_CTE-xxxx_response.json
+```
 
 ### Controller decision records
 
@@ -605,6 +692,27 @@ Read-only inspection of a handoff request through the controller adapter:
 .venv/bin/python -m advancore.agent_runner controller-adapter status .agent_runner/controller_handoff/20260821T120000_TASK-014_WAITING_DECISION.json
 ```
 
+Create a transport request envelope from the latest handoff request:
+
+```bash
+.venv/bin/python -m advancore.agent_runner controller-transport request
+.venv/bin/python -m advancore.agent_runner controller-transport request .agent_runner/controller_handoff/20260821T120000_TASK-015_WAITING_DECISION.json --adapter manual
+```
+
+Inspect the latest transport envelope (read-only):
+
+```bash
+.venv/bin/python -m advancore.agent_runner controller-transport show
+.venv/bin/python -m advancore.agent_runner controller-transport show .agent_runner/controller_transport/20260821T120000_TASK-015_CTE-xxxx_request.json
+```
+
+Validate the latest transport response envelope and reconcile any returned decision:
+
+```bash
+.venv/bin/python -m advancore.agent_runner controller-transport validate-response
+.venv/bin/python -m advancore.agent_runner controller-transport validate-response .agent_runner/controller_transport/20260821T130000_TASK-015_CTE-xxxx_response.json
+```
+
 ---
 
 ## 8. Task lifecycle state model
@@ -693,6 +801,13 @@ auditable and easy to test.
   authority separation, handoff linkage, reconciliation delegation, read-only
   inspection, failure handling, audit behavior, and absence of Git/lifecycle side
   effects.
+- The controller-transport envelope is tested for request/response construction,
+  deterministic serialization round-trip, schema/version/state validation,
+  correlation/reference mismatch rejection, safe-field policy, path traversal
+  rejection, response conversion, response reconciliation delegation through
+  TASK-013, authority separation (PENDING/BLOCKED create no authority;
+  DECISION_RECEIVED requires a valid decision record), read-only inspection,
+  audit behavior, and absence of Git/lifecycle/task mutation.
 - CLI tests patch `get_git_info` directly and verify exit codes.
 
 ---
@@ -732,6 +847,12 @@ auditable and easy to test.
 | Adapter treated as approval authority | Adapters return only `PENDING`, `DECISION_RECEIVED`, or `BLOCKED`; the built-in `manual` adapter never synthesizes an `APPROVE` decision. |
 | Remote/network transport introduced unintentionally | The built-in adapter is `manual`; no HTTP client/server, webhook, or subprocess execution is implemented. |
 | Adapter dispatch mutates lifecycle/Git/database state | Dispatch only reads the handoff and reconciles a returned decision through TASK-013; it never calls the TASK-012 bridge or Git publication commands. |
+| Transport envelope treated as controller authority | The envelope is data exchange only; `DECISION_RECEIVED` still requires a separately valid TASK-011 decision record reconciled through TASK-013. |
+| Transport envelope carries full task body or secrets | Envelope fields are bounded to references and metadata already authorized by TASK-010/TASK-013/TASK-014; full bodies, transcripts, credentials, and customer data are excluded. |
+| Unknown/mismatched envelope version, schema, state, or references | Envelope validation fails closed on unknown versions/schemas, unknown states, missing fields, and correlation/reference mismatches. |
+| Path traversal via envelope artifact paths | Envelope path resolution rejects paths that escape the repository root; generated filenames are sanitized. |
+| Transport response applied without reconciling decision | `apply_transport_response()` delegates decision validation/reconciliation to existing TASK-013 logic; worker-authored or mismatched decisions remain rejected. |
+| Transport envelope operations mutate Git/lifecycle/database state | Envelope operations write only local `.agent_runner/controller_transport/` artifacts and audit metadata; they do not mutate task files, Git state, lifecycle state, or database state. |
 
 ---
 
@@ -744,6 +865,9 @@ auditable and easy to test.
 - Optional bundle signing or checksums if tamper-evident handoff is required.
 - Controller adapter or remote transport layered on top of the existing handoff
   request/decision linkage contract without redesigning governance.
+- Remote controller transport implementations that consume the versioned
+  `controller_transport` request/response envelope and serialize it over an
+  approved network mechanism (e.g. HTTP, webhook, queue) in a future task.
 
 ---
 
@@ -792,6 +916,17 @@ auditable and easy to test.
 - Adapter dispatch/status does not stage, commit, push, merge, deploy, switch branches, or access secrets.
 - Adapter dispatch attempts append a safe metadata audit record with mode `controller_adapter` to `.agent_runner/audit/runner.jsonl`.
 - `controller-adapter status` is read-only and does not reconcile decisions or write artifacts.
+- The controller-transport envelope lives in `advancore/agent_runner/controller_transport.py`.
+- Transport request and response envelopes are versioned (`envelope_version: "1"`) and schema-tagged (`advancore.controller.transport.request` / `.response`).
+- Transport envelopes carry only bounded safe metadata: correlation/request ID, task identity, handoff and review-bundle references, adapter name/type, bundle branch/HEAD/recommended-action/handoff-state, and bounded messages.
+- Transport envelopes exclude full task bodies, worker transcripts, credentials, environment dumps, secrets, customer/business data, and arbitrary repository contents.
+- Allowed transport response result states are `PENDING`, `DECISION_RECEIVED`, and `BLOCKED`.
+- Envelope validation fails closed on unknown versions, unknown schemas, unknown states, malformed JSON, missing required fields, and mismatched correlation/task/handoff/bundle references.
+- Path traversal/escape is rejected when resolving envelope artifact paths against the repository root.
+- A transport response envelope is never itself an approval or lifecycle authorization.
+- `apply_transport_response()` delegates controller-decision validation and reconciliation to the existing TASK-013 `reconcile_controller_handoff()` logic.
+- Transport envelope operations write only local `.agent_runner/controller_transport/` artifacts and `mode: "controller_transport"` audit records; they do not mutate task files, Git state, lifecycle state, or database state.
+- `controller-transport show` is read-only and does not write artifacts, reconcile decisions, or mutate repository state.
 
 ### ASSUMPTION
 
