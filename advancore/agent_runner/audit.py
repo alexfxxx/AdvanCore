@@ -99,6 +99,50 @@ def build_lifecycle_audit_payload(
     }
 
 
+def build_bridge_audit_payload(
+    *,
+    timestamp: datetime | None = None,
+    task_id: str | None,
+    task_filename: str | None,
+    actor_role: str | None,
+    decision: str | None,
+    target_status: str | None,
+    transition_allowed: bool,
+    applied: bool,
+    branch: str | None,
+    head_sha: str | None,
+    decision_path: str | None,
+    bundle_path: str | None,
+    bundle_pre_head: str | None,
+    bundle_post_head: str | None,
+) -> dict[str, Any]:
+    """Return a safe metadata payload for a decision-lifecycle bridge attempt.
+
+    The payload intentionally excludes the task body, worker transcripts,
+    credentials, environment dumps, arbitrary notes, and business or customer
+    data. It records that a bridge preview/apply was attempted, the decision
+    and target status, whether the transition was allowed/applied, and the
+    linked artifact paths.
+    """
+    return {
+        "timestamp": (timestamp or datetime.now(timezone.utc)).isoformat(),
+        "task_id": task_id,
+        "task_filename": task_filename,
+        "mode": "bridge",
+        "actor_role": actor_role,
+        "decision": decision,
+        "target_status": target_status,
+        "transition_allowed": transition_allowed,
+        "applied": applied,
+        "branch": branch,
+        "head_sha": head_sha,
+        "decision_path": decision_path,
+        "bundle_path": bundle_path,
+        "bundle_pre_head": bundle_pre_head,
+        "bundle_post_head": bundle_post_head,
+    }
+
+
 def build_controller_decision_audit_payload(
     *,
     timestamp: datetime | None = None,

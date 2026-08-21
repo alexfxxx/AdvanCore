@@ -59,6 +59,13 @@ resetting, merging, or broadening scope.
                         │ (.agent_runner/  │
                         │    decisions/)   │
                         └──────────────────┘
+                                │
+                                ▼
+                        ┌──────────────────┐     ┌──────────────┐
+                        │ Decision →       │────▶│ Lifecycle    │
+                        │ lifecycle bridge │     │ mutation     │
+                        │ (preview/apply)  │     │ (STATUS only)│
+                        └──────────────────┘     └──────────────┘
 ```
 
 ---
@@ -76,7 +83,8 @@ resetting, merging, or broadening scope.
 | `advancore/agent_runner/review_bundle.py` | Controller review bundle model, serializer, builder, writer, loader, and inspection formatter. |
 | `advancore/agent_runner/controller_decision.py` | Controller decision record model, serializer, builder, writer, loader, and inspection formatter. |
 | `advancore/agent_runner/lifecycle.py` | Task-status enum, actor-role enum, transition matrix, and authority-aware status update helper. |
-| `advancore/agent_runner/__main__.py` | CLI entry point: `python -m advancore.agent_runner plan TASK-005`, `transition TASK-009 --to ...`, `review-bundle show`, or `controller-decision record/show`. |
+| `advancore/agent_runner/decision_lifecycle_bridge.py` | Fail-closed bridge from a validated controller decision record to the existing task lifecycle; preview by default, explicit `--apply` required to mutate. |
+| `advancore/agent_runner/__main__.py` | CLI entry point: `python -m advancore.agent_runner plan TASK-005`, `transition TASK-009 --to ...`, `review-bundle show`, `controller-decision record/show`, or `controller-decision apply`. |
 
 ---
 
@@ -115,6 +123,12 @@ resetting, merging, or broadening scope.
     control plane. It does not perform commit, push, merge, deployment, or
     automatic task transition, and workers cannot create controller decision
     records.
+15. **Decision-to-lifecycle bridge is fail-closed and preview-first.** A
+    controller decision record may be bridged into the existing lifecycle state
+    machine only after all linkage evidence validates. Preview is the default;
+    an explicit `--apply` is required to mutate the task file, and only the
+    `STATUS:` line is changed. The bridge reuses the existing TASK-009 authority
+    model and cannot bypass it.
 
 ### Validation outcomes
 
@@ -224,6 +238,56 @@ Recording a decision requires an explicit `record` invocation; inspection via
 Decision records exclude credentials, environment dumps, connection strings,
 full task bodies, full worker transcripts, customer/business data, and arbitrary
 command output. Decision-record creation is appended to the local audit trail.
+
+### Controller decision lifecycle bridge
+
+A controller decision record is evidence of a controller decision; it is not
+permission to bypass lifecycle state. The `decision_lifecycle_bridge` module
+connects a validated decision record to the existing authority-aware lifecycle
+state machine through a bounded, fail-closed bridge.
+
+The bridge is invoked through the `controller-decision apply` subcommand. By
+default it previews the mapped lifecycle transition; an explicit `--apply` flag
+is required to request a mutation, and then only the linked task file's
+`STATUS:` line is rewritten through the existing `transition_task()` helper.
+
+Before any mutation, the bridge validates:
+
+- the decision record exists and parses correctly,
+- the decision value is one of `APPROVE`, `REWORK`, or `BLOCKED`,
+- the actor role is `controller` or `owner`, never `worker`,
+- the linked review bundle exists and parses correctly,
+- decision, bundle, and task task IDs agree,
+- decision, bundle, and task filenames agree,
+- the current branch matches the branch captured in the review bundle,
+- the linked task file exists and its identity matches,
+- the requested lifecycle transition is valid for the task's current status and
+decision actor.
+
+The bridge surfaces HEAD/branch freshness evidence (current HEAD, bundle pre
+HEAD, bundle post HEAD) without silently inventing or enforcing a new owner
+policy about HEAD equality. Missing, malformed, inconsistent, stale, or
+ambiguous linkage evidence fails closed.
+
+Controller decisions map to requested lifecycle targets as follows:
+
+- `APPROVE` → `APPROVED`
+- `REWORK` → `REWORK`
+- `BLOCKED` → `BLOCKED`
+
+The bridge reuses `is_transition_allowed()` and `transition_task()` from the
+TASK-009 lifecycle module; it does not create a parallel authority model. For
+example, an `APPROVE` decision against a task in `REVIEW` may preview or apply
+`REVIEW → APPROVED`, but the same decision against a task in `READY`,
+`IN_PROGRESS`, or `REWORK` is denied because the existing state machine does not
+permit a direct transition to `APPROVED` from those states.
+
+Every bridge preview/apply attempt appends a safe metadata record to
+`.agent_runner/audit/runner.jsonl`. The record contains the task identity,
+decision, target status, transition allowed/applied flags, branch, HEAD, and
+paths to the decision record and review bundle. It excludes task bodies, worker
+transcripts, credentials, environment dumps, arbitrary notes, and business or
+customer data.
 
 ---
 
@@ -354,6 +418,24 @@ Inspect a specific decision record:
 .venv/bin/python -m advancore.agent_runner controller-decision show .agent_runner/decisions/20260821T120000_TASK-011_APPROVE.json
 ```
 
+Preview the lifecycle effect of the latest controller decision:
+
+```bash
+.venv/bin/python -m advancore.agent_runner controller-decision apply
+```
+
+Preview the effect of a specific decision record:
+
+```bash
+.venv/bin/python -m advancore.agent_runner controller-decision apply .agent_runner/decisions/20260821T120000_TASK-012_APPROVE.json
+```
+
+Explicitly apply the decision to the linked task lifecycle:
+
+```bash
+.venv/bin/python -m advancore.agent_runner controller-decision apply --apply
+```
+
 ---
 
 ## 8. Task lifecycle state model
@@ -433,6 +515,10 @@ auditable and easy to test.
   explicit write-failure reporting.
 - Lifecycle transitions are tested for allowed/denied authority, dry-run
   behaviour, applied mutation, malformed-file rejection, and audit metadata.
+- The decision-lifecycle bridge is tested for decision mapping, preview/apply
+  behaviour, authority restrictions, identity/branch linkage validation,
+  lifecycle-state obedience, HEAD evidence surfacing, audit metadata, and
+  absence of Git-publication side effects.
 - CLI tests patch `get_git_info` directly and verify exit codes.
 
 ---
@@ -458,6 +544,11 @@ auditable and easy to test.
 | Worker self-approval through decision record | Decision records reject `worker` actors; `APPROVE` does not mutate Git, remote, or task lifecycle state. |
 | Missing or inconsistent review bundle evidence | Decision-record builder validates bundle linkage and fails closed on missing/inconsistent task identity, branch, or HEAD. |
 | Decision record leaks secrets or full content | Decision records exclude credentials, env dumps, full task bodies, worker transcripts, and arbitrary output. |
+| Decision applied to wrong task or branch | Bridge re-validates decision/bundle/task identity and current branch; mismatches fail closed. |
+| `APPROVE` decision bypassing lifecycle state | Bridge maps `APPROVE` to `APPROVED` and reuses `transition_task()`; invalid current states are denied. |
+| Worker self-approval through bridge | Bridge rejects `worker` actors; only `controller`/`owner` may apply a decision. |
+| Hidden task mutation by bridge | Bridge default is preview; explicit `--apply` is required and only the `STATUS:` line is rewritten. |
+| Bridge audit leaks secrets or full content | Bridge audit records exclude task bodies, transcripts, credentials, env dumps, notes, and business/customer data. |
 
 ---
 
@@ -493,6 +584,13 @@ auditable and easy to test.
 - Allowed controller decisions are exactly `APPROVE`, `REWORK`, and `BLOCKED`.
 - The actor role `worker` cannot create a controller decision record.
 - An `APPROVE` decision record does not stage, commit, push, merge, deploy, or automatically transition a task.
+- The `controller-decision apply` subcommand previews the mapped lifecycle transition by default.
+- An explicit `--apply` flag is required for the bridge to mutate the linked task file.
+- The bridge maps `APPROVE` → `APPROVED`, `REWORK` → `REWORK`, and `BLOCKED` → `BLOCKED`.
+- The bridge reuses `is_transition_allowed()` and `transition_task()` from the TASK-009 lifecycle module.
+- The bridge validates decision record existence/parseability, actor role, decision value, review-bundle linkage, task identity, current branch, and lifecycle transition validity before applying any mutation.
+- The bridge surfaces HEAD/branch freshness evidence but does not enforce a current-HEAD-equals-bundle-HEAD policy.
+- Bridge preview/apply attempts append a safe metadata audit record with mode `bridge` to `.agent_runner/audit/runner.jsonl`.
 
 ### ASSUMPTION
 

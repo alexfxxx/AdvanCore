@@ -201,18 +201,66 @@ None required to begin. If a stricter current-HEAD freshness rule is considered 
 
 ### Implemented
 
+- Added `advancore/agent_runner/decision_lifecycle_bridge.py`, a fail-closed bridge from a validated controller decision record to the existing TASK-009 task lifecycle state machine.
+- Added decision-to-target mapping: `APPROVE` → `APPROVED`, `REWORK` → `REWORK`, `BLOCKED` → `BLOCKED`.
+- Reused `transition_task()` / `is_transition_allowed()` for all lifecycle authority checks and task-file mutation; no parallel authority model introduced.
+- Added preview-by-default behavior with explicit `--apply` required for mutation.
+- Validated decision record parseability, actor role (`controller`/`owner` only), decision value, linked review bundle existence/parseability, decision/bundle/task identity agreement, current branch vs. bundle branch, and lifecycle transition validity.
+- Surfaced HEAD/branch freshness evidence without enforcing a new HEAD-equality policy.
+- Added bridge-specific audit metadata via `build_bridge_audit_payload()` with `mode: "bridge"`.
+- Wired `controller-decision apply <path-or-latest>` CLI subcommand into `advancore/agent_runner/__main__.py`.
+- Exported bridge symbols from `advancore/agent_runner/__init__.py`.
+- Added deterministic tests covering mapping, preview/apply, authority restrictions, lifecycle obedience, linkage validation, HEAD evidence, audit behavior, and no-Git-publication side effects.
+- Updated `docs/architecture/AGENT_RUNNER.md` with bridge flow, safety principles, CLI usage, threat boundaries, and facts.
+- Added `docs/decisions/ADR-012-controller-decision-lifecycle-bridge.md`.
+
 ### Files changed
+
+- `advancore/agent_runner/decision_lifecycle_bridge.py` (new)
+- `advancore/agent_runner/audit.py`
+- `advancore/agent_runner/__main__.py`
+- `advancore/agent_runner/__init__.py`
+- `docs/architecture/AGENT_RUNNER.md`
+- `docs/decisions/ADR-012-controller-decision-lifecycle-bridge.md` (new)
+- `tests/test_decision_lifecycle_bridge.py` (new)
+- `tasks/TASK-012-controller-decision-lifecycle-bridge.md` (completion report)
 
 ### Database changes
 
+None. No schema, model, migration, or production database change was authorized or made.
+
 ### Tests and results
+
+- New tests: `tests/test_decision_lifecycle_bridge.py` — 30 passed.
+- Full suite: `.venv/bin/python -m pytest tests/ -v` — 200 passed, 0 failed.
 
 ### Assumptions
 
+- The existing TASK-009 lifecycle authority matrix remains the single source of truth for transition permission; the bridge does not invent new rules.
+- HEAD freshness is evidence to surface, not a policy to enforce automatically; a stricter HEAD-equality rule would require an explicit owner decision.
+- The review bundle path stored in a decision record is either absolute or relative to the repository root (consistent with `build_controller_decision` behavior).
+
 ### Risks / unresolved issues
+
+- The bridge trusts the local decision record and review bundle files; tamper-evident signatures/checksums are a future extension point.
+- Branch mismatch is enforced strictly; working-tree cleanliness is not enforced by the bridge itself (the underlying lifecycle helper does not require it either).
+- Audit-write failures are reported but do not block the bridge result.
 
 ### Decisions required
 
+None at this time. If a stricter current-HEAD freshness rule is desired, it should be proposed and approved as an owner-level policy rather than silently enforced by the bridge.
+
 ### Recommended next step
 
+- Manual review of the bridge behavior with a real controller decision record and review bundle.
+- Optional: add tamper-evident checksums or signing to decision records and bundles if handoff integrity becomes a higher concern.
+
 ### git status --short
+
+ M advancore/agent_runner/__init__.py
+ M advancore/agent_runner/__main__.py
+ M advancore/agent_runner/audit.py
+ M docs/architecture/AGENT_RUNNER.md
+?? advancore/agent_runner/decision_lifecycle_bridge.py
+?? docs/decisions/ADR-012-controller-decision-lifecycle-bridge.md
+?? tests/test_decision_lifecycle_bridge.py

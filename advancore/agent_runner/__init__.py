@@ -22,6 +22,11 @@ from advancore.agent_runner.controller_decision import (
     load_controller_decision,
     write_controller_decision,
 )
+from advancore.agent_runner.decision_lifecycle_bridge import (
+    DecisionLifecycleBridgeError,
+    DecisionLifecycleResult,
+    apply_controller_decision,
+)
 from advancore.agent_runner.git_info import GitInfo, get_git_info
 from advancore.agent_runner.review_bundle import (
     ControllerAction,
@@ -65,9 +70,12 @@ __all__ = [
     "ControllerDecision",
     "ControllerDecisionError",
     "ControllerDecisionWriteError",
+    "DecisionLifecycleBridgeError",
+    "DecisionLifecycleResult",
     "DecisionValue",
     "GitInfo",
     "LifecycleResult",
+    "apply_controller_decision",
     "ReviewBundle",
     "ReviewBundleError",
     "ReviewBundleWriteError",

@@ -27,6 +27,10 @@ from advancore.agent_runner.controller_decision import (
     load_controller_decision,
     write_controller_decision,
 )
+from advancore.agent_runner.decision_lifecycle_bridge import (
+    DecisionLifecycleResult,
+    apply_controller_decision,
+)
 from advancore.agent_runner.git_info import GitInfo, get_git_info
 from advancore.agent_runner.lifecycle import (
     ActorRole,
@@ -237,6 +241,50 @@ def _format_decision_record_result(
     return "\n".join(lines)
 
 
+def _format_bridge_result(result: DecisionLifecycleResult) -> str:
+    lines: list[str] = []
+    lines.append("=" * 64)
+    lines.append("AdvanCore Local Agent Runner — Controller Decision Lifecycle Bridge")
+    lines.append("=" * 64)
+    lines.append(f"Task:            {result.task_id or 'n/a'}")
+    lines.append(f"File:            {result.task_filename or 'n/a'}")
+    lines.append(f"Current state:   {result.current_status or 'n/a'}")
+    lines.append(f"Decision:        {result.decision or 'n/a'}")
+    lines.append(f"Actor role:      {result.actor_role or 'n/a'}")
+    lines.append(f"Target state:    {result.target_status or 'n/a'}")
+    lines.append(f"Permitted:       {'yes' if result.transition_allowed else 'no'}")
+    lines.append(f"Mode:            {'applied' if result.applied else result.mode}")
+    if result.decision_path:
+        lines.append(f"Decision record: {result.decision_path}")
+    if result.bundle_path:
+        lines.append(f"Review bundle:   {result.bundle_path}")
+    head = result.head_evidence
+    if head:
+        lines.append(f"Current branch:  {head.get('current_branch') or 'n/a'}")
+        lines.append(f"Current HEAD:    {head.get('current_head') or 'n/a'}")
+        lines.append(f"Bundle pre HEAD: {head.get('bundle_pre_head') or 'n/a'}")
+        lines.append(f"Bundle post HEAD: {head.get('bundle_post_head') or 'n/a'}")
+    lines.append("-" * 64)
+    lines.append("Messages:")
+    if result.messages:
+        for msg in result.messages:
+            lines.append(f"  {msg}")
+    else:
+        lines.append("  (none)")
+    if result.audit_path:
+        try:
+            rel_path = result.audit_path.relative_to(Path.cwd())
+        except ValueError:
+            rel_path = result.audit_path
+        lines.append(f"Bridge audit: {rel_path}")
+    elif not result.audit_write_ok:
+        lines.append("Bridge audit: NOT WRITTEN")
+        if result.audit_write_error:
+            lines.append(f"  error: {result.audit_write_error}")
+    lines.append("=" * 64)
+    return "\n".join(lines)
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         prog="python -m advancore.agent_runner",
@@ -341,6 +389,21 @@ def main(argv: list[str] | None = None) -> int:
         nargs="?",
         default="latest",
         help='Path to a decision record, or "latest" for the most recent record (default: latest).',
+    )
+    apply_parser = controller_decision_subparsers.add_parser(
+        "apply", help="Preview or apply a controller decision to a task lifecycle."
+    )
+    apply_parser.add_argument(
+        "target",
+        nargs="?",
+        default="latest",
+        help='Path to a decision record, or "latest" for the most recent record (default: latest).',
+    )
+    apply_parser.add_argument(
+        "--apply",
+        action="store_true",
+        dest="apply_bridge",
+        help="Actually request the lifecycle transition (default is preview only).",
     )
 
     args = parser.parse_args(argv)
@@ -474,6 +537,38 @@ def main(argv: list[str] | None = None) -> int:
 
             print(format_decision_summary(decision))
             return 0
+
+        if args.controller_decision_command == "apply":
+            decisions_dir = git_info.repo_root / ".agent_runner" / "decisions"
+            tasks_dir = git_info.repo_root / "tasks"
+            target = args.target
+            if target.lower() == "latest":
+                decision_path = find_latest_decision(decisions_dir)
+                if decision_path is None:
+                    print(
+                        _format_bridge_result(
+                            DecisionLifecycleResult(
+                                ok=False,
+                                messages=[f"no decision records found in {decisions_dir}"],
+                            )
+                        ),
+                        file=sys.stderr,
+                    )
+                    return 1
+            else:
+                decision_path = Path(target)
+                if not decision_path.is_absolute():
+                    decision_path = Path.cwd() / decision_path
+
+            result = apply_controller_decision(
+                repo_root=git_info.repo_root,
+                tasks_dir=tasks_dir,
+                decision_path=decision_path,
+                apply=args.apply_bridge,
+                git_info=git_info,
+            )
+            print(_format_bridge_result(result))
+            return 0 if result.ok else 1
 
         print(
             f"FAIL: unknown controller-decision command: {args.controller_decision_command}",
