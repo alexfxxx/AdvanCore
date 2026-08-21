@@ -10,6 +10,23 @@ import argparse
 import sys
 from pathlib import Path
 
+from advancore.agent_runner.audit import (
+    AuditWriteError,
+    build_controller_decision_audit_payload,
+    default_audit_dir,
+    write_audit_record,
+)
+from advancore.agent_runner.controller_decision import (
+    ControllerDecisionError,
+    ControllerDecisionWriteError,
+    DecisionValue,
+    build_controller_decision,
+    default_decisions_dir,
+    find_latest_decision,
+    format_decision_summary,
+    load_controller_decision,
+    write_controller_decision,
+)
 from advancore.agent_runner.git_info import GitInfo, get_git_info
 from advancore.agent_runner.lifecycle import (
     ActorRole,
@@ -187,6 +204,39 @@ def _format_lifecycle_result(result: LifecycleResult) -> str:
     return "\n".join(lines)
 
 
+def _format_decision_record_result(
+    decision_path: Path | None,
+    audit_path: Path | None,
+    audit_write_error: str | None,
+    error: str | None = None,
+) -> str:
+    lines: list[str] = []
+    lines.append("=" * 64)
+    lines.append("AdvanCore Local Agent Runner — Controller Decision Record")
+    lines.append("=" * 64)
+    if error:
+        lines.append(f"Result: FAIL")
+        lines.append(f"Error:  {error}")
+    elif decision_path:
+        lines.append(f"Result: OK")
+        lines.append(f"Decision record: {decision_path}")
+    else:
+        lines.append("Result: FAIL")
+        lines.append("Error:  decision record was not created")
+    if audit_path:
+        rel_path = audit_path
+        try:
+            rel_path = audit_path.relative_to(Path.cwd())
+        except ValueError:
+            pass
+        lines.append(f"Audit record: {rel_path}")
+    elif audit_write_error:
+        lines.append("Audit record: NOT WRITTEN")
+        lines.append(f"  error: {audit_write_error}")
+    lines.append("=" * 64)
+    return "\n".join(lines)
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         prog="python -m advancore.agent_runner",
@@ -250,7 +300,186 @@ def main(argv: list[str] | None = None) -> int:
         help='Path to a bundle file, or "latest" for the most recent bundle (default: latest).',
     )
 
+    controller_decision_parser = subparsers.add_parser(
+        "controller-decision",
+        help="Record or inspect a controller decision against a review bundle.",
+    )
+    controller_decision_subparsers = controller_decision_parser.add_subparsers(
+        dest="controller_decision_command", required=True
+    )
+    record_parser = controller_decision_subparsers.add_parser(
+        "record", help="Record a controller decision against a review bundle."
+    )
+    record_parser.add_argument(
+        "target",
+        nargs="?",
+        default="latest",
+        help='Path to a review bundle, or "latest" for the most recent bundle (default: latest).',
+    )
+    record_parser.add_argument(
+        "--decision",
+        required=True,
+        choices=[d.value for d in DecisionValue],
+        help="Controller decision value.",
+    )
+    record_parser.add_argument(
+        "--actor",
+        required=True,
+        choices=[r.value for r in ActorRole],
+        help="Actor role recording the decision (controller = controller/reviewer).",
+    )
+    record_parser.add_argument(
+        "--note",
+        default=None,
+        help="Optional bounded rationale for the decision.",
+    )
+    decision_show_parser = controller_decision_subparsers.add_parser(
+        "show", help="Show a controller decision record (read-only)."
+    )
+    decision_show_parser.add_argument(
+        "target",
+        nargs="?",
+        default="latest",
+        help='Path to a decision record, or "latest" for the most recent record (default: latest).',
+    )
+
     args = parser.parse_args(argv)
+
+    if args.command == "controller-decision":
+        try:
+            git_info = get_git_info(cwd=Path.cwd())
+        except Exception as exc:
+            print(
+                _format_decision_record_result(None, None, None, error=f"cannot inspect Git repository: {exc}"),
+                file=sys.stderr,
+            )
+            return 1
+
+        if args.controller_decision_command == "record":
+            review_dir = git_info.repo_root / ".agent_runner" / "review"
+            target = args.target
+            if target.lower() == "latest":
+                bundle_path = find_latest_bundle(review_dir)
+                if bundle_path is None:
+                    print(
+                        _format_decision_record_result(
+                            None, None, None, error=f"no review bundles found in {review_dir}"
+                        ),
+                        file=sys.stderr,
+                    )
+                    return 1
+            else:
+                bundle_path = Path(target)
+                if not bundle_path.is_absolute():
+                    bundle_path = Path.cwd() / bundle_path
+
+            try:
+                bundle = load_review_bundle(bundle_path)
+            except ReviewBundleError as exc:
+                print(
+                    _format_decision_record_result(
+                        None, None, None, error=f"cannot load review bundle: {exc}"
+                    ),
+                    file=sys.stderr,
+                )
+                return 1
+
+            try:
+                decision = build_controller_decision(
+                    bundle_path,
+                    bundle,
+                    decision=args.decision,
+                    actor_role=args.actor,
+                    note=args.note,
+                    repo_root=git_info.repo_root,
+                )
+            except ControllerDecisionError as exc:
+                print(
+                    _format_decision_record_result(
+                        None, None, None, error=str(exc)
+                    ),
+                    file=sys.stderr,
+                )
+                return 1
+
+            decisions_dir = default_decisions_dir(git_info.repo_root)
+            try:
+                decision_path = write_controller_decision(decision, decisions_dir)
+            except ControllerDecisionWriteError as exc:
+                print(
+                    _format_decision_record_result(
+                        None, None, None, error=str(exc)
+                    ),
+                    file=sys.stderr,
+                )
+                return 1
+
+            audit_path: Path | None = None
+            audit_write_error: str | None = None
+            try:
+                audit_payload = build_controller_decision_audit_payload(
+                    task_id=decision.task_id,
+                    task_filename=decision.task_filename,
+                    actor_role=decision.actor_role,
+                    decision=decision.decision,
+                    bundle_path=decision.bundle_path,
+                    bundle_branch=decision.bundle_branch,
+                    bundle_pre_head=decision.bundle_pre_head,
+                    bundle_post_head=decision.bundle_post_head,
+                    decision_path=str(decision_path.relative_to(git_info.repo_root)),
+                )
+                audit_path = write_audit_record(
+                    audit_payload, default_audit_dir(git_info.repo_root)
+                )
+            except AuditWriteError as exc:
+                audit_write_error = str(exc)
+
+            rel_decision_path = decision_path
+            try:
+                rel_decision_path = decision_path.relative_to(git_info.repo_root)
+            except ValueError:
+                pass
+
+            print(_format_decision_record_result(rel_decision_path, audit_path, audit_write_error))
+            return 0
+
+        if args.controller_decision_command == "show":
+            decisions_dir = git_info.repo_root / ".agent_runner" / "decisions"
+            target = args.target
+            if target.lower() == "latest":
+                decision_path = find_latest_decision(decisions_dir)
+                if decision_path is None:
+                    print(
+                        _format_decision_record_result(
+                            None, None, None, error=f"no decision records found in {decisions_dir}"
+                        ),
+                        file=sys.stderr,
+                    )
+                    return 1
+            else:
+                decision_path = Path(target)
+                if not decision_path.is_absolute():
+                    decision_path = Path.cwd() / decision_path
+
+            try:
+                decision = load_controller_decision(decision_path)
+            except ControllerDecisionError as exc:
+                print(
+                    _format_decision_record_result(
+                        None, None, None, error=str(exc)
+                    ),
+                    file=sys.stderr,
+                )
+                return 1
+
+            print(format_decision_summary(decision))
+            return 0
+
+        print(
+            f"FAIL: unknown controller-decision command: {args.controller_decision_command}",
+            file=sys.stderr,
+        )
+        return 1
 
     if args.command == "review-bundle":
         if args.review_bundle_command != "show":

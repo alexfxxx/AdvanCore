@@ -51,6 +51,14 @@ resetting, merging, or broadening scope.
                         │  (.agent_runner/ │
                         │     review/)     │
                         └──────────────────┘
+                                │
+                                ▼
+                        ┌──────────────────┐
+                        │ Controller       │
+                        │ decision record  │
+                        │ (.agent_runner/  │
+                        │    decisions/)   │
+                        └──────────────────┘
 ```
 
 ---
@@ -66,8 +74,9 @@ resetting, merging, or broadening scope.
 | `advancore/agent_runner/runner.py` | Orchestration, post-worker verification, and `plan()` / `execute()` entry points. |
 | `advancore/agent_runner/audit.py` | Durable local JSON Lines audit records under `.agent_runner/audit/`. |
 | `advancore/agent_runner/review_bundle.py` | Controller review bundle model, serializer, builder, writer, loader, and inspection formatter. |
+| `advancore/agent_runner/controller_decision.py` | Controller decision record model, serializer, builder, writer, loader, and inspection formatter. |
 | `advancore/agent_runner/lifecycle.py` | Task-status enum, actor-role enum, transition matrix, and authority-aware status update helper. |
-| `advancore/agent_runner/__main__.py` | CLI entry point: `python -m advancore.agent_runner plan TASK-005`, `transition TASK-009 --to ...`, or `review-bundle show`. |
+| `advancore/agent_runner/__main__.py` | CLI entry point: `python -m advancore.agent_runner plan TASK-005`, `transition TASK-009 --to ...`, `review-bundle show`, or `controller-decision record/show`. |
 
 ---
 
@@ -101,6 +110,11 @@ resetting, merging, or broadening scope.
     are validated against the state machine and actor role. The default
     `transition` command is preview-only; `--apply` is required to mutate the
     task file, and only the `STATUS:` line is changed.
+14. **Controller decisions are local records, not actions.** A controller
+    decision record carries an independent review decision back into the local
+    control plane. It does not perform commit, push, merge, deployment, or
+    automatic task transition, and workers cannot create controller decision
+    records.
 
 ### Validation outcomes
 
@@ -175,6 +189,41 @@ Inspect a bundle with:
 ```
 
 The `show` command is read-only and never mutates repository state.
+
+### Controller decision records
+
+After a controller/reviewer reviews a bundle, they may record a deterministic,
+machine-readable decision under `.agent_runner/decisions/`. The decision record
+links unambiguously to one existing review bundle and captures only bounded safe
+metadata:
+
+- timestamp,
+- task ID and filename,
+- review-bundle path/reference,
+- review-bundle task identity,
+- review-bundle branch,
+- review-bundle pre/post HEAD when available,
+- controller decision (`APPROVE`, `REWORK`, or `BLOCKED`),
+- bounded rationale/note,
+- actor role,
+- decision-record version.
+
+Allowed controller decisions are exactly:
+
+- `APPROVE` — independent controller accepts the implementation for the next
+  human-gated publication step.
+- `REWORK` — implementation requires further worker changes.
+- `BLOCKED` — review cannot proceed safely or required evidence/decision is
+  missing.
+
+The `APPROVE` value is a decision-record value only. It does **not** stage,
+commit, push, merge, deploy, or automatically transition the task lifecycle.
+Recording a decision requires an explicit `record` invocation; inspection via
+`show` is read-only.
+
+Decision records exclude credentials, environment dumps, connection strings,
+full task bodies, full worker transcripts, customer/business data, and arbitrary
+command output. Decision-record creation is appended to the local audit trail.
 
 ---
 
@@ -272,6 +321,37 @@ Inspect a specific review bundle:
 
 ```bash
 .venv/bin/python -m advancore.agent_runner review-bundle show .agent_runner/review/20260820T120000_TASK-010.json
+```
+
+Record a controller decision against the latest review bundle:
+
+```bash
+.venv/bin/python -m advancore.agent_runner controller-decision record \
+  --decision APPROVE \
+  --actor controller \
+  --note "Accepted for next human-gated publication step"
+```
+
+Record a decision against a specific review bundle:
+
+```bash
+.venv/bin/python -m advancore.agent_runner controller-decision record \
+  .agent_runner/review/20260820T120000_TASK-010.json \
+  --decision REWORK \
+  --actor controller \
+  --note "Add more tests for edge cases"
+```
+
+Inspect the latest controller decision record:
+
+```bash
+.venv/bin/python -m advancore.agent_runner controller-decision show
+```
+
+Inspect a specific decision record:
+
+```bash
+.venv/bin/python -m advancore.agent_runner controller-decision show .agent_runner/decisions/20260821T120000_TASK-011_APPROVE.json
 ```
 
 ---
@@ -375,6 +455,9 @@ auditable and easy to test.
 | Review bundle contains secrets or full transcripts | Bundle excludes credentials, env dumps, full task body, worker stdout/stderr, and customer data. |
 | Worker self-approval through bundle | Bundle recommends only `REVIEW`, `REWORK`, or `BLOCKED`; `APPROVED` is never emitted. |
 | Unauthorized task-status changes | `transition` validates state machine and actor role; default is preview-only and `--apply` is required. |
+| Worker self-approval through decision record | Decision records reject `worker` actors; `APPROVE` does not mutate Git, remote, or task lifecycle state. |
+| Missing or inconsistent review bundle evidence | Decision-record builder validates bundle linkage and fails closed on missing/inconsistent task identity, branch, or HEAD. |
+| Decision record leaks secrets or full content | Decision records exclude credentials, env dumps, full task bodies, worker transcripts, and arbitrary output. |
 
 ---
 
@@ -406,6 +489,10 @@ auditable and easy to test.
 - Every `execute()` invocation that reaches post-worker verification writes a JSON review bundle under `.agent_runner/review/`.
 - The review bundle recommends only `REVIEW`, `REWORK`, or `BLOCKED`; it never recommends or asserts `APPROVED`.
 - The review bundle excludes credentials, environment dumps, full task bodies, worker transcripts, and customer/business data.
+- Controller decision records are stored under `.agent_runner/decisions/` and contain only bounded safe metadata.
+- Allowed controller decisions are exactly `APPROVE`, `REWORK`, and `BLOCKED`.
+- The actor role `worker` cannot create a controller decision record.
+- An `APPROVE` decision record does not stage, commit, push, merge, deploy, or automatically transition a task.
 
 ### ASSUMPTION
 

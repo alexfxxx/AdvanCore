@@ -10,6 +10,18 @@ opt-in and still leaves commit, push, merge, and other high-impact actions
 gated for explicit human approval.
 """
 
+from advancore.agent_runner.controller_decision import (
+    ControllerDecision,
+    ControllerDecisionError,
+    ControllerDecisionWriteError,
+    DecisionValue,
+    build_controller_decision,
+    default_decisions_dir,
+    find_latest_decision,
+    format_decision_summary,
+    load_controller_decision,
+    write_controller_decision,
+)
 from advancore.agent_runner.git_info import GitInfo, get_git_info
 from advancore.agent_runner.review_bundle import (
     ControllerAction,
@@ -50,16 +62,26 @@ from advancore.agent_runner.worker import (
 __all__ = [
     "ActorRole",
     "ControllerAction",
+    "ControllerDecision",
+    "ControllerDecisionError",
+    "ControllerDecisionWriteError",
+    "DecisionValue",
     "GitInfo",
     "LifecycleResult",
     "ReviewBundle",
     "ReviewBundleError",
     "ReviewBundleWriteError",
+    "build_controller_decision",
     "build_review_bundle",
+    "default_decisions_dir",
     "default_review_dir",
+    "find_latest_decision",
     "find_latest_bundle",
+    "format_decision_summary",
     "format_bundle_summary",
+    "load_controller_decision",
     "load_review_bundle",
+    "write_controller_decision",
     "write_review_bundle",
     "PostWorkerVerification",
     "RunnerResult",

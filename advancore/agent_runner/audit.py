@@ -99,6 +99,41 @@ def build_lifecycle_audit_payload(
     }
 
 
+def build_controller_decision_audit_payload(
+    *,
+    timestamp: datetime | None = None,
+    task_id: str | None,
+    task_filename: str | None,
+    actor_role: str | None,
+    decision: str | None,
+    bundle_path: str | None,
+    bundle_branch: str | None,
+    bundle_pre_head: str | None,
+    bundle_post_head: str | None,
+    decision_path: str | None,
+) -> dict[str, Any]:
+    """Return a safe metadata payload for a controller decision record.
+
+    The payload intentionally excludes the full task body, worker transcripts,
+    credentials, environment dumps, arbitrary notes, and business or customer
+    data. It records only that a decision was recorded, by whom, against which
+    bundle, and where the resulting decision record is stored.
+    """
+    return {
+        "timestamp": (timestamp or datetime.now(timezone.utc)).isoformat(),
+        "task_id": task_id,
+        "task_filename": task_filename,
+        "mode": "controller_decision",
+        "actor_role": actor_role,
+        "decision": decision,
+        "bundle_path": bundle_path,
+        "bundle_branch": bundle_branch,
+        "bundle_pre_head": bundle_pre_head,
+        "bundle_post_head": bundle_post_head,
+        "decision_path": decision_path,
+    }
+
+
 def write_audit_record(
     payload: dict[str, Any],
     audit_dir: Path,

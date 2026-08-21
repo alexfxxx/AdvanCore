@@ -170,18 +170,77 @@ None required to begin.
 
 ### Implemented
 
+- Added `advancore/agent_runner/controller_decision.py` with `DecisionValue`,
+  `ControllerDecision`, `ControllerDecisionError`, `ControllerDecisionWriteError`,
+  deterministic serialization, validation, writing/loading/inspection helpers.
+- Extended `advancore/agent_runner/audit.py` with
+  `build_controller_decision_audit_payload()` for decision audit metadata.
+- Updated `advancore/agent_runner/__init__.py` to export the new public symbols.
+- Added `controller-decision record|show` CLI to
+  `advancore/agent_runner/__main__.py` with explicit success/failure output and
+  audit integration.
+- Added `tests/test_controller_decision.py` covering all TASK-011 test
+  requirements.
+- Added `docs/decisions/ADR-007-controller-decision-record.md`.
+- Updated `docs/architecture/AGENT_RUNNER.md` with the new module, flow,
+  safety-model principle, CLI usage, threat boundaries, and facts.
+
 ### Files changed
+
+- `advancore/agent_runner/__init__.py`
+- `advancore/agent_runner/__main__.py`
+- `advancore/agent_runner/audit.py`
+- `advancore/agent_runner/controller_decision.py` (new)
+- `docs/architecture/AGENT_RUNNER.md`
+- `docs/decisions/ADR-007-controller-decision-record.md` (new)
+- `tasks/TASK-011-controller-decision-record-foundation.md`
+- `tests/test_controller_decision.py` (new)
 
 ### Database changes
 
+None. No schema, model, migration, or production database changes were made.
+
 ### Tests and results
+
+```bash
+.venv/bin/python -m pytest tests/ -v
+```
+
+Result: **170 passed in 2.64s**.
 
 ### Assumptions
 
+- The controller decision record remains a local artifact under
+  `.agent_runner/decisions/`; future tasks will define any cross-machine or
+  signed transport if required.
+- `owner` may record controller decisions because owner authority already
+  subsumes controller/reviewer authority in the lifecycle model.
+
 ### Risks / unresolved issues
+
+- Decision records are not cryptographically signed; tamper-evidence is not yet
+  implemented.
+- The CLI does not invoke the controller automatically; human controller input
+  is still required.
 
 ### Decisions required
 
+None at this time.
+
 ### Recommended next step
 
+Review this task and, once approved, the controller may transition TASK-011 to
+`APPROVED` through the existing `transition` command and proceed to the next
+approved task.
+
 ### git status --short
+
+```
+ M advancore/agent_runner/__init__.py
+ M advancore/agent_runner/__main__.py
+ M advancore/agent_runner/audit.py
+ M docs/architecture/AGENT_RUNNER.md
+?? advancore/agent_runner/controller_decision.py
+?? docs/decisions/ADR-007-controller-decision-record.md
+?? tests/test_controller_decision.py
+```
