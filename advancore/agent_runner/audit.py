@@ -178,6 +178,45 @@ def build_controller_decision_audit_payload(
     }
 
 
+def build_controller_adapter_audit_payload(
+    *,
+    timestamp: datetime | None = None,
+    task_id: str | None,
+    task_filename: str | None,
+    adapter_name: str | None,
+    state: str | None,
+    request_path: str | None,
+    bundle_path: str | None,
+    decision_path: str | None = None,
+    decision: str | None = None,
+    reconciled: bool = False,
+    branch: str | None = None,
+    head_sha: str | None = None,
+) -> dict[str, Any]:
+    """Return a safe metadata payload for a controller-adapter dispatch attempt.
+
+    The payload intentionally excludes the full task body, worker transcripts,
+    credentials, environment dumps, arbitrary notes, and business or customer
+    data. It records only the adapter invoked, the handoff reference, the
+    adapter result state, and whether a decision was reconciled.
+    """
+    return {
+        "timestamp": (timestamp or datetime.now(timezone.utc)).isoformat(),
+        "task_id": task_id,
+        "task_filename": task_filename,
+        "mode": "controller_adapter",
+        "adapter_name": adapter_name,
+        "state": state,
+        "request_path": request_path,
+        "bundle_path": bundle_path,
+        "decision_path": decision_path,
+        "decision": decision,
+        "reconciled": reconciled,
+        "branch": branch,
+        "head_sha": head_sha,
+    }
+
+
 def build_handoff_audit_payload(
     *,
     timestamp: datetime | None = None,

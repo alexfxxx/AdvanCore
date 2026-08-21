@@ -17,6 +17,13 @@ from advancore.agent_runner.audit import (
     default_audit_dir,
     write_audit_record,
 )
+from advancore.agent_runner.controller_adapter import (
+    AdapterResultState,
+    ControllerAdapterResult,
+    dispatch_controller_adapter,
+    format_adapter_result,
+    inspect_controller_adapter_status,
+)
 from advancore.agent_runner.controller_decision import (
     ControllerDecisionError,
     ControllerDecisionWriteError,
@@ -363,6 +370,42 @@ def _format_handoff_reconcile_result(result: HandoffReconciliationResult) -> str
     return "\n".join(lines)
 
 
+def _format_controller_adapter_result(result: ControllerAdapterResult) -> str:
+    lines: list[str] = []
+    lines.append("=" * 64)
+    lines.append("AdvanCore Local Agent Runner — Controller Adapter")
+    lines.append("=" * 64)
+    lines.append(f"Adapter:       {result.adapter_name}")
+    lines.append(f"Task:          {result.task_id or 'n/a'}")
+    lines.append(f"File:          {result.task_filename or 'n/a'}")
+    lines.append(f"Handoff:       {result.request_path or 'n/a'}")
+    lines.append(f"Bundle:        {result.bundle_path or 'n/a'}")
+    lines.append(f"Adapter state: {result.state}")
+    if result.decision_path:
+        lines.append(f"Decision:      {result.decision or 'n/a'}")
+        lines.append(f"Decision path: {result.decision_path}")
+    lines.append(f"Reconciled:    {'yes' if result.reconciled else 'no'}")
+    if result.audit_path:
+        try:
+            rel_path = Path(result.audit_path).relative_to(Path.cwd())
+        except ValueError:
+            rel_path = result.audit_path
+        lines.append(f"Audit record:  {rel_path}")
+    elif not result.audit_write_ok:
+        lines.append("Audit record:  NOT WRITTEN")
+        if result.audit_write_error:
+            lines.append(f"  error: {result.audit_write_error}")
+    lines.append("-" * 64)
+    lines.append("Messages:")
+    if result.messages:
+        for msg in result.messages:
+            lines.append(f"  {msg}")
+    else:
+        lines.append("  (none)")
+    lines.append("=" * 64)
+    return "\n".join(lines)
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         prog="python -m advancore.agent_runner",
@@ -525,7 +568,81 @@ def main(argv: list[str] | None = None) -> int:
         help='Path to a decision record, or "latest" for the most recent record (default: latest).',
     )
 
+    controller_adapter_parser = subparsers.add_parser(
+        "controller-adapter",
+        help="Dispatch or inspect a controller adapter against a handoff request.",
+    )
+    controller_adapter_subparsers = controller_adapter_parser.add_subparsers(
+        dest="controller_adapter_command", required=True
+    )
+    adapter_dispatch_parser = controller_adapter_subparsers.add_parser(
+        "dispatch",
+        help="Dispatch a controller adapter for a handoff request.",
+    )
+    adapter_dispatch_parser.add_argument(
+        "target",
+        nargs="?",
+        default="latest",
+        help='Path to a handoff request, or "latest" for the most recent request (default: latest).',
+    )
+    adapter_dispatch_parser.add_argument(
+        "--adapter",
+        default="manual",
+        help="Controller adapter to use (default: manual).",
+    )
+    adapter_status_parser = controller_adapter_subparsers.add_parser(
+        "status",
+        help="Inspect a handoff request through the controller adapter (read-only).",
+    )
+    adapter_status_parser.add_argument(
+        "target",
+        nargs="?",
+        default="latest",
+        help='Path to a handoff request, or "latest" for the most recent request (default: latest).',
+    )
+
     args = parser.parse_args(argv)
+
+    if args.command == "controller-adapter":
+        try:
+            git_info = get_git_info(cwd=Path.cwd())
+        except Exception as exc:
+            print(
+                _format_controller_adapter_result(
+                    ControllerAdapterResult(
+                        adapter_name="manual",
+                        state=AdapterResultState.BLOCKED.value,
+                        messages=[f"cannot inspect Git repository: {exc}"],
+                    )
+                ),
+                file=sys.stderr,
+            )
+            return 1
+
+        if args.controller_adapter_command == "dispatch":
+            result = dispatch_controller_adapter(
+                handoff_target=args.target,
+                adapter=args.adapter,
+                repo_root=git_info.repo_root,
+                git_info=git_info,
+            )
+            print(_format_controller_adapter_result(result))
+            return 0 if result else 1
+
+        if args.controller_adapter_command == "status":
+            result = inspect_controller_adapter_status(
+                handoff_target=args.target,
+                repo_root=git_info.repo_root,
+                git_info=git_info,
+            )
+            print(_format_controller_adapter_result(result))
+            return 0 if result else 1
+
+        print(
+            f"FAIL: unknown controller-adapter command: {args.controller_adapter_command}",
+            file=sys.stderr,
+        )
+        return 1
 
     if args.command == "controller-handoff":
         try:

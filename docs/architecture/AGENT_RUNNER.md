@@ -63,6 +63,13 @@ resetting, merging, or broadening scope.
                                 ▼
                         ┌──────────────────┐
                         │ Controller       │
+                        │ adapter boundary │
+                        │ (manual / future)│
+                        └──────────────────┘
+                                │
+                                ▼
+                        ┌──────────────────┐
+                        │ Controller       │
                         │ decision record  │
                         │ (.agent_runner/  │
                         │    decisions/)   │
@@ -93,7 +100,8 @@ resetting, merging, or broadening scope.
 | `advancore/agent_runner/controller_decision.py` | Controller decision record model, serializer, builder, writer, loader, and inspection formatter. |
 | `advancore/agent_runner/lifecycle.py` | Task-status enum, actor-role enum, transition matrix, and authority-aware status update helper. |
 | `advancore/agent_runner/decision_lifecycle_bridge.py` | Fail-closed bridge from a validated controller decision record to the existing task lifecycle; preview by default, explicit `--apply` required to mutate. |
-| `advancore/agent_runner/__main__.py` | CLI entry point: `python -m advancore.agent_runner plan TASK-005`, `transition TASK-009 --to ...`, `review-bundle show`, `controller-decision record/show/apply`, or `controller-handoff prepare/show/reconcile`. |
+| `advancore/agent_runner/controller_adapter.py` | Replaceable controller-adapter boundary and built-in `manual` adapter; dispatches a handoff request to one adapter and reconciles any returned decision through TASK-013. |
+| `advancore/agent_runner/__main__.py` | CLI entry point: `python -m advancore.agent_runner plan TASK-005`, `transition TASK-009 --to ...`, `review-bundle show`, `controller-decision record/show/apply`, `controller-handoff prepare/show/reconcile`, or `controller-adapter dispatch/status`. |
 
 ---
 
@@ -138,6 +146,13 @@ resetting, merging, or broadening scope.
     an explicit `--apply` is required to mutate the task file, and only the
     `STATUS:` line is changed. The bridge reuses the existing TASK-009 authority
     model and cannot bypass it.
+16. **Controller adapter is a transport boundary, not an authority source.** A
+    controller adapter consumes a validated handoff request and returns a bounded
+    result. It does not make a worker into a controller, treat a handoff request
+    as approval, fabricate an `APPROVE` decision, bypass TASK-011 decision
+    validation, bypass TASK-012 lifecycle authority, or mutate task/Git/database
+    state. The built-in `manual` adapter performs no network or subprocess
+    execution.
 
 ### Validation outcomes
 
@@ -268,6 +283,37 @@ Inspect the latest handoff request:
 The `show` command is read-only. `prepare` and `reconcile` write only local
 `.agent_runner/` artifacts and do not mutate task files, Git state, or lifecycle
 state.
+
+### Controller adapter boundary
+
+The `controller_adapter` module defines a replaceable boundary between the local
+handoff queue and an independent controller. A controller adapter consumes a
+validated handoff request and returns a bounded adapter result. It is a
+transport/orchestration layer, not an authority source.
+
+The adapter result state model is intentionally small:
+
+- `PENDING` — the handoff request is valid but no controller decision has been
+  returned yet.
+- `DECISION_RECEIVED` — a valid controller decision has been returned or was
+  already reconciled to the request.
+- `BLOCKED` — adapter execution failed, the returned evidence is missing,
+  malformed, inconsistent, unauthorized, or unsafe.
+
+The built-in `manual` adapter is local, read-only, and performs no network or
+subprocess execution. It validates the handoff request, exposes bounded handoff
+metadata, and returns `PENDING` until a separately valid controller decision
+exists. It never infers an `APPROVE` decision from the review-bundle
+recommendation.
+
+Dispatching an adapter loads the handoff request, invokes exactly one selected
+adapter, validates the returned result state, and—if the adapter reports
+`DECISION_RECEIVED` with a decision path—reconciles the decision through the
+existing TASK-013 handoff reconciliation logic. It does not invoke the TASK-012
+lifecycle bridge and does not mutate task files, Git state, or database state.
+
+`status`/inspection is read-only and does not reconcile decisions or write
+artifacts.
 
 ### Controller decision records
 
@@ -539,6 +585,26 @@ Inspect a specific handoff request:
 .venv/bin/python -m advancore.agent_runner controller-handoff show .agent_runner/controller_handoff/20260821T120000_TASK-013_WAITING_DECISION.json
 ```
 
+Dispatch the built-in manual controller adapter for the latest handoff request:
+
+```bash
+.venv/bin/python -m advancore.agent_runner controller-adapter dispatch
+.venv/bin/python -m advancore.agent_runner controller-adapter dispatch latest --adapter manual
+```
+
+Dispatch the adapter for a specific handoff request:
+
+```bash
+.venv/bin/python -m advancore.agent_runner controller-adapter dispatch .agent_runner/controller_handoff/20260821T120000_TASK-014_WAITING_DECISION.json --adapter manual
+```
+
+Read-only inspection of a handoff request through the controller adapter:
+
+```bash
+.venv/bin/python -m advancore.agent_runner controller-adapter status
+.venv/bin/python -m advancore.agent_runner controller-adapter status .agent_runner/controller_handoff/20260821T120000_TASK-014_WAITING_DECISION.json
+```
+
 ---
 
 ## 8. Task lifecycle state model
@@ -622,6 +688,11 @@ auditable and easy to test.
   behaviour, authority restrictions, identity/branch linkage validation,
   lifecycle-state obedience, HEAD evidence surfacing, audit metadata, and
   absence of Git-publication side effects.
+- The controller-adapter boundary is tested for interface behavior, the built-in
+  `manual` adapter, fake/stub adapters, result-state validation, worker/controller
+  authority separation, handoff linkage, reconciliation delegation, read-only
+  inspection, failure handling, audit behavior, and absence of Git/lifecycle side
+  effects.
 - CLI tests patch `get_git_info` directly and verify exit codes.
 
 ---
@@ -657,6 +728,10 @@ auditable and easy to test.
 | Worker self-approval through handoff queue | Reconciliation rejects `worker` actors and validates decision/task/bundle linkage. |
 | Silent replacement of a reconciled decision | Reconciliation is idempotent for the same decision and fails closed for a different decision. |
 | Handoff artifacts leak secrets or full content | Handoff requests exclude task bodies, transcripts, credentials, env dumps, and business/customer data. |
+| Worker self-approval through controller adapter | Adapter dispatch delegates decision validation/reconciliation to TASK-013, which rejects `worker` actors and task/bundle mismatches. |
+| Adapter treated as approval authority | Adapters return only `PENDING`, `DECISION_RECEIVED`, or `BLOCKED`; the built-in `manual` adapter never synthesizes an `APPROVE` decision. |
+| Remote/network transport introduced unintentionally | The built-in adapter is `manual`; no HTTP client/server, webhook, or subprocess execution is implemented. |
+| Adapter dispatch mutates lifecycle/Git/database state | Dispatch only reads the handoff and reconciles a returned decision through TASK-013; it never calls the TASK-012 bridge or Git publication commands. |
 
 ---
 
@@ -708,6 +783,15 @@ auditable and easy to test.
 - Reconciliation is idempotent when the same decision is reconciled again and fails closed when a different decision is already reconciled.
 - Handoff prepare/reconcile write only local `.agent_runner/` artifacts and do not mutate task files, Git state, or lifecycle state.
 - Handoff prepare/reconcile attempts append safe metadata audit records with modes `handoff_prepare` and `handoff_reconcile` to `.agent_runner/audit/runner.jsonl`.
+- The controller-adapter boundary lives in `advancore/agent_runner/controller_adapter.py`.
+- Allowed controller-adapter result states are `PENDING`, `DECISION_RECEIVED`, and `BLOCKED`.
+- The built-in controller adapter is `manual`; it is local, performs no network or subprocess execution, and does not synthesize controller decisions.
+- Controller adapters receive only bounded handoff metadata and safe references; they do not receive full task bodies, worker transcripts, credentials, environment dumps, or arbitrary repository contents.
+- Adapter dispatch loads exactly one selected adapter, validates the returned result state, and reconciles any reported decision through the existing TASK-013 handoff reconciliation logic.
+- Adapter dispatch does not invoke the TASK-012 lifecycle bridge and does not mutate task lifecycle state.
+- Adapter dispatch/status does not stage, commit, push, merge, deploy, switch branches, or access secrets.
+- Adapter dispatch attempts append a safe metadata audit record with mode `controller_adapter` to `.agent_runner/audit/runner.jsonl`.
+- `controller-adapter status` is read-only and does not reconcile decisions or write artifacts.
 
 ### ASSUMPTION
 

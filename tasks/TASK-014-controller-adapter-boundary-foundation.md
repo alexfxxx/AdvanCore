@@ -1,6 +1,6 @@
 # TASK-014 — Controller Adapter Boundary Foundation
 
-STATUS: READY
+STATUS: COMPLETED
 
 ## Objective
 
@@ -241,18 +241,63 @@ None required to begin.
 
 ### Implemented
 
+- Added `advancore/agent_runner/controller_adapter.py` with:
+  - `ControllerAdapter` abstract boundary and built-in `ManualControllerAdapter`.
+  - `FakeControllerAdapter` for deterministic unit tests.
+  - Adapter registry (`register_controller_adapter`, `get_controller_adapter`).
+  - `AdapterResultState` enum: `PENDING`, `DECISION_RECEIVED`, `BLOCKED`.
+  - Bounded `ControllerAdapterInput` and `ControllerAdapterResult` models.
+  - `dispatch_controller_adapter()` orchestration helper that loads a handoff request, invokes one adapter, validates the result state, and reconciles any returned decision through existing TASK-013 logic.
+  - `inspect_controller_adapter_status()` read-only inspection helper.
+  - `format_adapter_result()` human-readable formatter.
+- Extended `advancore/agent_runner/audit.py` with `build_controller_adapter_audit_payload()` (mode `controller_adapter`).
+- Extended `advancore/agent_runner/__main__.py` with `controller-adapter dispatch` and `controller-adapter status` CLI subcommands; default adapter is `manual`.
+- Added `tests/test_controller_adapter.py` covering interface behavior, manual adapter, fake adapter, result validation, authority separation, handoff linkage, reconciliation delegation, read-only inspection, failure handling, audit behavior, and absence of Git/lifecycle side effects.
+- Updated `docs/architecture/AGENT_RUNNER.md` with the new module, flow diagram, safety principle, CLI usage, testing approach, threat boundaries, and FACTs.
+- Added `docs/decisions/ADR-014-controller-adapter-boundary.md` documenting the architectural decision.
+
 ### Files changed
+
+- `advancore/agent_runner/__main__.py`
+- `advancore/agent_runner/audit.py`
+- `advancore/agent_runner/controller_adapter.py` (new)
+- `docs/architecture/AGENT_RUNNER.md`
+- `docs/decisions/ADR-014-controller-adapter-boundary.md` (new)
+- `tests/test_controller_adapter.py` (new)
+- `tasks/TASK-014-controller-adapter-boundary-foundation.md`
 
 ### Database changes
 
+None. No schema, model, migration, or production database change was authorized or made.
+
 ### Tests and results
+
+- New tests: `tests/test_controller_adapter.py` — 32 passed.
+- Full suite: `.venv/bin/python -m pytest tests/ -v` — 272 passed, 0 failed.
 
 ### Assumptions
 
+- Future remote controller adapters will implement the same `ControllerAdapter` interface and register themselves; the boundary is designed to make this straightforward without changing governance rules.
+- The built-in `manual` adapter is sufficient for local fail-closed operation until a future task authorizes a network transport.
+
 ### Risks / unresolved issues
+
+- None identified. The implementation stays within the scoped boundary and does not introduce network, secrets, subprocess, or lifecycle-mutation behavior.
 
 ### Decisions required
 
+- None. All implementation decisions are documented in ADR-014 and are within the approved task scope.
+
 ### Recommended next step
 
+- Reviewer approval of this task and the ADR.
+- A future task may add a remote controller adapter (e.g., HTTP/API-based) on top of this boundary once policy and transport requirements are approved.
+
 ### git status --short
+
+ M advancore/agent_runner/__main__.py
+ M advancore/agent_runner/audit.py
+ M docs/architecture/AGENT_RUNNER.md
+?? advancore/agent_runner/controller_adapter.py
+?? docs/decisions/ADR-014-controller-adapter-boundary.md
+?? tests/test_controller_adapter.py
