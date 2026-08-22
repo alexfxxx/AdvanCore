@@ -34,7 +34,11 @@ from advancore.agent_runner.runner import (
 )
 from advancore.agent_runner.task import Task, TaskError, find_task
 from advancore.agent_runner.validation import ValidationResult, validate
-from advancore.agent_runner.worker import WorkerAdapter
+from advancore.agent_runner.worker import (
+    WorkerAdapter,
+    WorkerResult,
+    validate_worker_policy,
+)
 
 if TYPE_CHECKING:
     from advancore.agent_runner.review_bundle import ReviewBundle
@@ -62,6 +66,27 @@ class RepairStatus(str, Enum):
     NON_REPAIRABLE = "NON_REPAIRABLE"
     SUCCEEDED = "SUCCEEDED"
     FAILED = "FAILED"
+
+
+class ProviderFailure(str, Enum):
+    """Bounded worker failures that may permit an explicitly selected fallback."""
+
+    EXECUTABLE_UNAVAILABLE = "EXECUTABLE_UNAVAILABLE"
+    QUOTA_OR_CAPACITY = "QUOTA_OR_CAPACITY"
+    AUTHENTICATION_UNAVAILABLE = "AUTHENTICATION_UNAVAILABLE"
+    UNKNOWN = "UNKNOWN"
+
+
+@dataclass
+class FallbackAttempt:
+    """Bounded evidence for one primary-to-fallback decision."""
+
+    primary_worker: str
+    failure: ProviderFailure
+    integrity_ok: bool
+    fallback_worker: str | None
+    terminal_worker: str
+    messages: list[str] = field(default_factory=list)
 
 
 @dataclass
@@ -164,6 +189,10 @@ class AutoPipelineResult:
     messages: list[str] = field(default_factory=list)
     repair_attempts: list[RepairAttempt] = field(default_factory=list)
     max_repair_attempts: int = 0
+    primary_worker: str | None = None
+    fallback_worker: str | None = None
+    terminal_worker: str | None = None
+    fallback_attempt: FallbackAttempt | None = None
 
     def __bool__(self) -> bool:
         return self.status == AutoPipelineStatus.READY_FOR_APPROVAL
@@ -469,6 +498,64 @@ def detect_staged_paths(repo_root: Path) -> list[str]:
     return [line.strip() for line in result.stdout.splitlines() if line.strip()]
 
 
+def _remote_fingerprint(repo_root: Path) -> tuple[str, ...] | None:
+    """Return bounded remote configuration evidence, or None on ambiguity."""
+    result = _run(["git", "remote", "-v"], cwd=repo_root)
+    if result.returncode != 0:
+        return None
+    return tuple(
+        sorted(line.strip() for line in result.stdout.splitlines() if line.strip())
+    )
+
+
+def classify_provider_failure(result: WorkerResult | None) -> ProviderFailure:
+    """Deterministically classify only approved provider-availability failures."""
+    if result is None:
+        return ProviderFailure.UNKNOWN
+    evidence = " ".join(
+        part for part in (result.message, result.stdout, result.stderr) if part
+    ).lower()[:4000]
+    if "not found in path" in evidence or "no such file or directory" in evidence:
+        return ProviderFailure.EXECUTABLE_UNAVAILABLE
+    if any(token in evidence for token in (
+        "quota", "rate limit", "rate-limit", "capacity", "overloaded",
+        "resource exhausted", "too many requests",
+    )):
+        return ProviderFailure.QUOTA_OR_CAPACITY
+    if any(token in evidence for token in (
+        "authentication unavailable", "not authenticated", "authentication required",
+        "unauthorized", "invalid api key", "login required",
+    )):
+        return ProviderFailure.AUTHENTICATION_UNAVAILABLE
+    return ProviderFailure.UNKNOWN
+
+
+def _fallback_integrity_ok(
+    runner_result: RunnerResult,
+    before_remotes: tuple[str, ...] | None,
+    after_remotes: tuple[str, ...] | None,
+) -> tuple[bool, list[str]]:
+    """Require an independently unmodified repository before fallback."""
+    messages: list[str] = []
+    pre = runner_result.pre_git_info
+    post = runner_result.post_git_info
+    if pre is None or post is None:
+        return False, ["FAIL: missing Git snapshot after primary attempt"]
+    checks = {
+        "branch": pre.current_branch == post.current_branch,
+        "HEAD": pre.head_sha == post.head_sha,
+        "worktree": pre.status_lines == post.status_lines and post.is_clean,
+        "remotes": before_remotes is not None and before_remotes == after_remotes,
+    }
+    try:
+        checks["index"] = not detect_staged_paths(pre.repo_root)
+    except Exception:
+        checks["index"] = False
+    for name, ok in checks.items():
+        messages.append(f"{'PASS' if ok else 'FAIL'}: fallback {name} integrity")
+    return all(checks.values()), messages
+
+
 # ---------------------------------------------------------------------------
 # Auto artifact and audit
 # ---------------------------------------------------------------------------
@@ -508,6 +595,19 @@ def build_auto_artifact_payload(result: AutoPipelineResult) -> dict[str, Any]:
         "pre_head": result.pre_git_info.head_sha if result.pre_git_info else None,
         "post_head": result.post_git_info.head_sha if result.post_git_info else None,
         "worker_type": result.worker_type,
+        "primary_worker": result.primary_worker,
+        "fallback_worker": result.fallback_worker,
+        "terminal_worker": result.terminal_worker,
+        "fallback_attempt": (
+            {
+                "primary_worker": result.fallback_attempt.primary_worker,
+                "failure": result.fallback_attempt.failure.value,
+                "integrity_ok": result.fallback_attempt.integrity_ok,
+                "fallback_worker": result.fallback_attempt.fallback_worker,
+                "terminal_worker": result.fallback_attempt.terminal_worker,
+            }
+            if result.fallback_attempt else None
+        ),
         "worker_success": result.worker_result.success if result.worker_result else None,
         "review_bundle_path": str(result.review_bundle_path)
         if result.review_bundle_path
@@ -593,6 +693,14 @@ def format_auto_pipeline_report(result: AutoPipelineResult) -> str:
         lines.append(f"Post HEAD:         {result.post_git_info.head_sha}")
 
     lines.append(f"Worker type:       {result.worker_type or 'n/a'}")
+    lines.append(f"Primary worker:    {result.primary_worker or result.worker_type or 'n/a'}")
+    lines.append(f"Fallback worker:   {result.fallback_worker or 'none'}")
+    lines.append(f"Terminal worker:   {result.terminal_worker or result.worker_type or 'n/a'}")
+    if result.fallback_attempt:
+        lines.append(f"Primary failure:   {result.fallback_attempt.failure.value}")
+        lines.append(
+            f"Fallback integrity: {'PASS' if result.fallback_attempt.integrity_ok else 'FAIL'}"
+        )
     if result.worker_result is not None:
         lines.append(f"Worker success:    {result.worker_result.success}")
         lines.append(f"Worker message:    {result.worker_result.message}")
@@ -1039,6 +1147,7 @@ def run_auto_pipeline(
     pytest_runner: Callable[[Path], PytestResult] | None = None,
     diff_check_runner: Callable[[Path], DiffCheckResult] | None = None,
     max_repair_attempts: int = 0,
+    fallback_worker: WorkerAdapter | None = None,
 ) -> AutoPipelineResult:
     """Run the full governed auto-pipeline for *task_id* with optional repair.
 
@@ -1105,10 +1214,49 @@ def run_auto_pipeline(
             ],
         )
 
+    if fallback_worker is not None:
+        validate_worker_policy(worker.name, fallback_worker.name)
+    for configured_worker in (worker, fallback_worker):
+        if configured_worker is not None and hasattr(configured_worker, "allowed_scope"):
+            configured_worker.allowed_scope = list(safe_allowed)
+
     # Step 3: launch worker via the existing runner execute path.
     # ``execute()`` validates branch/clean/status, captures pre/post Git snapshots,
     # writes an audit record, and produces a review bundle.
+    before_remotes = _remote_fingerprint(repo_root) if fallback_worker else None
     runner_result = execute(tasks_dir, task_id, worker=worker)
+    primary_worker_name = worker.name
+    fallback_attempt: FallbackAttempt | None = None
+
+    if (
+        fallback_worker is not None
+        and runner_result.worker_result is not None
+        and not runner_result.worker_result.success
+    ):
+        failure = classify_provider_failure(runner_result.worker_result)
+        after_remotes = _remote_fingerprint(repo_root)
+        integrity_ok, integrity_messages = _fallback_integrity_ok(
+            runner_result, before_remotes, after_remotes
+        )
+        fallback_attempt = FallbackAttempt(
+            primary_worker=primary_worker_name,
+            failure=failure,
+            integrity_ok=integrity_ok,
+            fallback_worker=fallback_worker.name if fallback_worker else None,
+            terminal_worker=primary_worker_name,
+            messages=integrity_messages,
+        )
+        if failure != ProviderFailure.UNKNOWN and integrity_ok:
+            runner_result = execute(tasks_dir, task_id, worker=fallback_worker)
+            worker = fallback_worker
+            fallback_attempt.terminal_worker = fallback_worker.name
+            fallback_attempt.messages.append(
+                f"Fallback selected explicitly: {primary_worker_name} -> {fallback_worker.name}"
+            )
+        else:
+            fallback_attempt.messages.append(
+                "Fallback blocked: failure classification or repository integrity was not eligible"
+            )
 
     result = AutoPipelineResult(
         status=AutoPipelineStatus.READY_FOR_APPROVAL,
@@ -1127,7 +1275,13 @@ def run_auto_pipeline(
         audit_write_error=runner_result.audit_write_error,
         messages=list(runner_result.messages or []),
         max_repair_attempts=repair_config.max_attempts,
+        primary_worker=primary_worker_name,
+        fallback_worker=fallback_worker.name if fallback_worker else None,
+        terminal_worker=runner_result.worker_type,
+        fallback_attempt=fallback_attempt,
     )
+    if fallback_attempt:
+        result.messages.extend(fallback_attempt.messages)
 
     if runner_result.status == RunnerStatus.FAILED:
         result.status = AutoPipelineStatus.VALIDATION_FAILED

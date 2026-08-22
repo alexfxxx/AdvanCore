@@ -1609,3 +1609,25 @@ automation, or vendor credential management is embedded in AdvanCore.
   closed with one exact next action.
 - The coordinator never directly stages, commits, pushes, merges, deploys,
   force-pushes, manages credentials, or targets `main`.
+
+---
+
+## 18. Governed Worker Fallback Boundary (TASK-022)
+
+An orchestration run may explicitly select one primary implementation worker
+and at most one fallback from the code-owned adapter registry. There is no
+fallback by default. The fallback is attempted only for a recognised provider
+availability failure (missing executable, quota/capacity, or unavailable
+authentication) and only when branch, HEAD, index, worktree, and remotes remain
+unchanged. Unknown failures or any ambiguous mutation stop the run.
+
+The local Codex adapter uses fixed argv, an ephemeral session, workspace-write
+sandboxing, and non-interactive approval denial. It cannot accept arbitrary
+commands, sandbox bypasses, extra writable roots, cloud execution, web search,
+or credentials from task or CLI input. Kimi, Kimi-Swarm, Codex, and future
+approved adapters remain implementation workers only; controller decisions and
+TASK-020 publication authority stay separate.
+
+Fallback selection and the terminal worker are included as bounded checkpoint
+and audit evidence. Raw worker transcripts, environment dumps, and credentials
+are not persisted in fallback artifacts.

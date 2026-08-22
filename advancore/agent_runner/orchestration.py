@@ -94,6 +94,8 @@ from advancore.agent_runner.worker import (
     KimiSwarmWorkerAdapter,
     KimiWorkerAdapter,
     WorkerAdapter,
+    build_worker_adapter,
+    validate_worker_policy,
 )
 
 
@@ -164,6 +166,7 @@ class OrchestrationConfig:
     resume_run_id: str | None = None
     planner: str = "dry-run"
     worker: str = "dry-run"
+    fallback_worker: str | None = None
     controller: str = "manual"
     repair_attempts: int = 0
     max_rework: int = 0
@@ -180,6 +183,10 @@ class OrchestrationConfig:
             object.__setattr__(self, "max_rework", 0)
         elif self.max_rework > MAX_REWORK_CYCLES:
             object.__setattr__(self, "max_rework", MAX_REWORK_CYCLES)
+        try:
+            validate_worker_policy(self.worker, self.fallback_worker)
+        except Exception as exc:
+            raise OrchestrationError(str(exc)) from exc
 
 
 @dataclass
@@ -197,6 +204,7 @@ class OrchestrationCheckpoint:
     max_rework: int
     apply: bool
     phase: str
+    fallback_worker: str | None = None
     completed_phases: list[str] = field(default_factory=list)
     status: str = OrchestrationStatus.AWAITING_TASK_APPROVAL.value
     branch: str | None = None
@@ -302,11 +310,7 @@ def _build_planner(name: str) -> WorkerAdapter:
 
 def _build_worker(name: str, allowed_scope: list[str] | None = None) -> WorkerAdapter:
     """Return an implementation worker adapter by name."""
-    if name == "kimi":
-        return KimiWorkerAdapter()
-    if name == "kimi-swarm":
-        return KimiSwarmWorkerAdapter(allowed_scope=allowed_scope or [])
-    return DryRunWorkerAdapter()
+    return build_worker_adapter(name, allowed_scope=allowed_scope)
 
 
 def _count_owner_decisions(task_path: Path) -> int:
@@ -438,6 +442,7 @@ def _new_checkpoint(config: OrchestrationConfig, repo_root: Path) -> Orchestrati
         goal_summary=_short_summary(goal),
         planner=config.planner,
         worker=config.worker,
+        fallback_worker=config.fallback_worker,
         controller=config.controller,
         repair_attempts=config.repair_attempts,
         max_rework=config.max_rework,
@@ -826,6 +831,10 @@ def _phase_task_execution(
 
     allowed_scope = parse_task_allowed_scope(task.path) or []
     worker = _build_worker(config.worker, allowed_scope=allowed_scope)
+    fallback_worker = (
+        _build_worker(config.fallback_worker, allowed_scope=allowed_scope)
+        if config.fallback_worker else None
+    )
 
     if not config.apply:
         return _build_result(
@@ -852,6 +861,7 @@ def _phase_task_execution(
         tasks_dir,
         checkpoint.task_id,
         worker=worker,
+        fallback_worker=fallback_worker,
         max_repair_attempts=config.repair_attempts,
     )
 
@@ -1351,6 +1361,7 @@ def run_orchestration(
             resume_run_id=config.resume_run_id,
             planner=checkpoint.planner,
             worker=checkpoint.worker,
+            fallback_worker=checkpoint.fallback_worker,
             controller=checkpoint.controller,
             repair_attempts=checkpoint.repair_attempts,
             max_rework=checkpoint.max_rework,

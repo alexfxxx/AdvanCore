@@ -111,10 +111,14 @@ from advancore.agent_runner.review_bundle import (
 )
 from advancore.agent_runner.runner import RunnerResult, RunnerStatus, execute, plan
 from advancore.agent_runner.worker import (
+    APPROVED_WORKER_NAMES,
     DryRunWorkerAdapter,
     KimiSwarmWorkerAdapter,
     KimiWorkerAdapter,
     WorkerAdapter,
+    WorkerError,
+    build_worker_adapter,
+    validate_worker_policy,
 )
 from advancore.agent_runner.auto_pipeline import (
     AutoPipelineStatus,
@@ -708,9 +712,15 @@ def main(argv: list[str] | None = None) -> int:
     auto_parser.add_argument("task_id", help="Task identifier, e.g. TASK-018")
     auto_parser.add_argument(
         "--worker",
-        choices=["dry-run", "kimi", "kimi-swarm"],
+        choices=APPROVED_WORKER_NAMES,
         default="dry-run",
         help="Worker adapter to use (default: dry-run).",
+    )
+    auto_parser.add_argument(
+        "--fallback-worker",
+        choices=APPROVED_WORKER_NAMES,
+        default=None,
+        help="Optional explicit provider-availability fallback worker (default: none).",
     )
     auto_parser.add_argument(
         "--repair-attempts",
@@ -784,9 +794,15 @@ def main(argv: list[str] | None = None) -> int:
     )
     orchestrate_parser.add_argument(
         "--worker",
-        choices=["dry-run", "kimi", "kimi-swarm"],
+        choices=APPROVED_WORKER_NAMES,
         default="dry-run",
         help="Implementation worker adapter to use (default: dry-run).",
+    )
+    orchestrate_parser.add_argument(
+        "--fallback-worker",
+        choices=APPROVED_WORKER_NAMES,
+        default=None,
+        help="Optional explicit provider-availability fallback worker (default: none).",
     )
     orchestrate_parser.add_argument(
         "--controller",
@@ -1929,6 +1945,7 @@ def main(argv: list[str] | None = None) -> int:
             resume_run_id=args.resume_run_id,
             planner=args.planner,
             worker=args.worker,
+            fallback_worker=args.fallback_worker,
             controller=args.controller,
             repair_attempts=args.repair_attempts,
             max_rework=args.max_rework,
@@ -1997,17 +2014,22 @@ def main(argv: list[str] | None = None) -> int:
             )
             return 1
 
-        if args.worker == "kimi":
-            worker: WorkerAdapter = KimiWorkerAdapter()
-        elif args.worker == "kimi-swarm":
-            worker = KimiSwarmWorkerAdapter()
-        else:
-            worker = DryRunWorkerAdapter()
+        try:
+            validate_worker_policy(args.worker, args.fallback_worker)
+            worker = build_worker_adapter(args.worker)
+            fallback_worker = (
+                build_worker_adapter(args.fallback_worker)
+                if args.fallback_worker else None
+            )
+        except WorkerError as exc:
+            print(f"FAIL: {exc}", file=sys.stderr)
+            return 1
 
         result = run_auto_pipeline(
             tasks_dir,
             args.task_id,
             worker=worker,
+            fallback_worker=fallback_worker,
             max_repair_attempts=args.repair_attempts,
         )
         print(format_auto_pipeline_report(result))

@@ -226,16 +226,37 @@ The DRAFT specification still requires controller/owner review and an explicit
 
 ### Implemented
 
+- Added a fixed, provider-neutral worker registry with a sandboxed local Codex adapter.
+- Added explicit, single-hop fallback for recognised provider availability failures.
+- Added fail-closed Git integrity checks before fallback and persisted bounded evidence.
+- Added CLI/orchestration configuration and checkpoint resume support.
+
 ### Files changed
+
+- The nine paths listed in the allowed changed-file scope.
 
 ### Database changes
 
+- None.
+
 ### Tests and results
+
+- `tests/test_worker_fallback.py`: 21 passed.
+- Full suite: 562 passed.
+- `git diff --check`: passed.
 
 ### Assumptions
 
+- Approved worker CLIs are installed and authenticated outside AdvanCore.
+
 ### Risks / unresolved issues
+
+- Provider error classification is intentionally conservative and unknown failures stop.
 
 ### Decisions required
 
+- Independent controller review and approval remain required before publication.
+
 ### Recommended next step
+
+- Run independent verification, review the bounded evidence, then use TASK-020 finalization.
