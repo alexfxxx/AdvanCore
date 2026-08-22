@@ -1631,3 +1631,37 @@ TASK-020 publication authority stay separate.
 Fallback selection and the terminal worker are included as bounded checkpoint
 and audit evidence. Raw worker transcripts, environment dumps, and credentials
 are not persisted in fallback artifacts.
+
+---
+
+## 19. Worker Fallback Operational Validation (TASK-023)
+
+TASK-023 validates the TASK-022 boundary at the real adapter/subprocess layer
+without a live provider. Integration fixtures create temporary Git repositories
+and place fake `kimi`, `codex`, and pass-through `git` executables on an isolated
+`PATH`. This proves the production Kimi-Swarm and Codex argv, subprocess return
+handling, Git-integrity snapshots, fallback classification, downstream pytest,
+diff-check, scope verification, report formatting, and persisted auto evidence.
+
+The validation demonstrates:
+
+- a clean quota/capacity failure invokes exactly the explicitly selected Codex
+  fallback and then runs the existing verification path;
+- unknown failures and branch, HEAD, index, worktree, or remote mutations stop
+  after the primary worker;
+- a failed fallback is terminal, so a third worker cannot be chained;
+- CLI omission means no fallback, while duplicate, unknown, or `dry-run`
+  combinations fail closed; and
+- reports and artifacts retain primary, classification, fallback, and terminal
+  identity while excluding raw transcripts and credential-like fixture values.
+
+The permanent/local responsibility split is unchanged. AdvanCore's
+`agent_runner` permanently owns adapter registration, policy validation,
+fallback eligibility, integrity checks, verification, bounded persistence, and
+terminal reporting. A local operator, Codex desktop, or another approved client
+may select an already-approved policy, launch or resume it, and surface
+exceptions. The client does not become a controller and cannot bypass the
+TASK-020 approval and publication gates. See
+`docs/runbooks/WORKER_FALLBACK.md` for the operator procedure and
+`docs/decisions/ADR-023-worker-fallback-operational-validation.md` for the
+validation decision.

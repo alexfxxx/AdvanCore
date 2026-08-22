@@ -1,6 +1,6 @@
 # TASK-023 — Governed Worker Fallback Operational Validation
 
-STATUS: READY
+STATUS: APPROVED
 
 ## Objective
 
@@ -85,16 +85,50 @@ self-approval, unsafe permissions, `main`, merge, or deployment.
 
 ### Implemented
 
+- Added deterministic integration coverage using temporary Git repositories
+  and isolated fake worker executables against the production adapters.
+- Proved eligible fallback, every required fail-closed Git condition, one-hop
+  terminality, CLI policy defaults/validation, downstream verification, and
+  bounded evidence persistence.
+- Added the operator runbook, architecture validation record, and ADR-023.
+
 ### Files changed
+
+- `tests/test_worker_fallback_integration.py`
+- `docs/runbooks/WORKER_FALLBACK.md`
+- `docs/architecture/AGENT_RUNNER.md`
+- `docs/decisions/ADR-023-worker-fallback-operational-validation.md`
+- `tasks/TASK-023-governed-worker-fallback-operational-validation.md`
 
 ### Database changes
 
+- None.
+
 ### Tests and results
+
+- `.venv/bin/python -m pytest tests/test_worker_fallback_integration.py -v`
+  — 11 passed.
+- `.venv/bin/python -m pytest tests/ -v` — 573 passed.
+- `git diff --check` — passed.
 
 ### Assumptions
 
+- The existing TASK-022 production fallback implementation is the approved
+  boundary under validation; TASK-023 adds no new worker or authority.
+- Fake executables on an isolated `PATH` are the intended deterministic
+  substitute for live provider calls.
+
 ### Risks / unresolved issues
+
+- Live provider installation, authentication, quota, and service behavior are
+  deliberately outside automated test coverage.
 
 ### Decisions required
 
+- Independent controller review remains required; this completion report does
+  not approve or finalize TASK-023.
+
 ### Recommended next step
+
+- Review the bounded evidence and, only with independent controller authority,
+  use the existing TASK-020 finalization/publication process.
