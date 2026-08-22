@@ -127,6 +127,14 @@ from advancore.agent_runner.goal_task import (
     generate_goal_task,
     format_goal_task_report,
 )
+from advancore.agent_runner.orchestration import (
+    OrchestrationConfig,
+    OrchestrationError,
+    OrchestrationPhase,
+    OrchestrationResult,
+    OrchestrationStatus,
+    run_orchestration,
+)
 
 
 def _format_result(result: RunnerResult) -> str:
@@ -324,6 +332,43 @@ def _format_decision_record_result(
 
 def _format_finalize_result(result: FinalizationResult) -> str:
     return format_finalization_result(result)
+
+
+def _format_orchestration_result(result: OrchestrationResult) -> str:
+    lines: list[str] = []
+    lines.append("=" * 72)
+    lines.append("AdvanCore End-to-End Controller Orchestration")
+    lines.append("=" * 72)
+    lines.append(f"Run ID:            {result.run_id}")
+    lines.append(f"Task:              {result.task_id or 'n/a'}")
+    lines.append(f"Task path:         {result.task_path or 'n/a'}")
+    lines.append(f"Phase:             {result.phase}")
+    lines.append(f"Status:            {result.status}")
+    lines.append(f"Completed phases:  {', '.join(result.completed_phases) or '(none)'}")
+    lines.append(f"Branch:            {result.branch or 'n/a'}")
+    lines.append(f"HEAD:              {result.head or 'n/a'}")
+    lines.append("-" * 72)
+    lines.append("Evidence paths:")
+    for key, value in result.evidence_paths.items():
+        lines.append(f"  {key}: {value or 'n/a'}")
+    lines.append("-" * 72)
+    lines.append(f"Controller gate:   {result.controller_gate or 'n/a'}")
+    lines.append(f"Mutations:         {', '.join(result.mutations_performed) or 'none'}")
+    lines.append(f"Owner decision:    {'required' if result.owner_decision_required else 'no'}")
+    if result.blocking_reason:
+        lines.append(f"Blocking reason:   {result.blocking_reason}")
+    lines.append("-" * 72)
+    lines.append(f"Next action:       {result.next_action}")
+    lines.append(f"Resume command:    {result.resume_command}")
+    lines.append("-" * 72)
+    lines.append("Messages:")
+    if result.messages:
+        for msg in result.messages:
+            lines.append(f"  {msg}")
+    else:
+        lines.append("  (none)")
+    lines.append("=" * 72)
+    return "\n".join(lines)
 
 
 def _format_bridge_result(result: DecisionLifecycleResult) -> str:
@@ -714,6 +759,56 @@ def main(argv: list[str] | None = None) -> int:
         "--execute",
         action="store_true",
         help="Launch the planner and write the DRAFT task after validation.",
+    )
+
+    orchestrate_parser = subparsers.add_parser(
+        "orchestrate",
+        help="Run the governed end-to-end orchestration from owner goal to feature-branch publication (preview by default).",
+    )
+    orchestrate_parser.add_argument(
+        "--goal",
+        default=None,
+        help="Bounded natural-language owner goal for a new run.",
+    )
+    orchestrate_parser.add_argument(
+        "--resume",
+        dest="resume_run_id",
+        default=None,
+        help="Resume an existing orchestration run by ID.",
+    )
+    orchestrate_parser.add_argument(
+        "--planner",
+        choices=["dry-run", "kimi", "kimi-swarm"],
+        default="dry-run",
+        help="Planner adapter to use for goal-task generation (default: dry-run).",
+    )
+    orchestrate_parser.add_argument(
+        "--worker",
+        choices=["dry-run", "kimi", "kimi-swarm"],
+        default="dry-run",
+        help="Implementation worker adapter to use (default: dry-run).",
+    )
+    orchestrate_parser.add_argument(
+        "--controller",
+        default="manual",
+        help="Controller adapter to use for implementation review (default: manual).",
+    )
+    orchestrate_parser.add_argument(
+        "--repair-attempts",
+        type=int,
+        default=0,
+        help="Maximum autonomous repair attempts during execution (0-2, default: 0).",
+    )
+    orchestrate_parser.add_argument(
+        "--max-rework",
+        type=int,
+        default=0,
+        help="Maximum controller-driven rework cycles after REWORK decision (0-1, default: 0).",
+    )
+    orchestrate_parser.add_argument(
+        "--apply",
+        action="store_true",
+        help="Actually launch planners/workers, write checkpoints, mutate lifecycle, and delegate finalization.",
     )
 
     transition_parser = subparsers.add_parser(
@@ -1786,6 +1881,94 @@ def main(argv: list[str] | None = None) -> int:
         print(format_goal_task_report(result))
         success = result.ok or result.status == GoalTaskGenerationStatus.DRY_RUN
         return 0 if success else 1
+
+    if args.command == "orchestrate":
+        try:
+            git_info = get_git_info(cwd=tasks_dir)
+        except Exception as exc:
+            print(
+                _format_orchestration_result(
+                    OrchestrationResult(
+                        ok=False,
+                        run_id="n/a",
+                        task_id=None,
+                        task_path=None,
+                        phase=OrchestrationPhase.FAILED.value,
+                        status=OrchestrationStatus.FAILED.value,
+                        completed_phases=[],
+                        branch=None,
+                        head=None,
+                        evidence_paths={},
+                        controller_gate=None,
+                        mutations_performed=[],
+                        blocking_reason=f"cannot inspect Git repository: {exc}",
+                        owner_decision_required=False,
+                        next_action="inspect repository and retry",
+                        resume_command="n/a",
+                    )
+                ),
+                file=sys.stderr,
+            )
+            return 1
+
+        if args.goal and args.resume_run_id:
+            print(
+                "FAIL: --goal and --resume are mutually exclusive",
+                file=sys.stderr,
+            )
+            return 1
+        if not args.goal and not args.resume_run_id:
+            print(
+                "FAIL: either --goal or --resume is required",
+                file=sys.stderr,
+            )
+            return 1
+
+        config = OrchestrationConfig(
+            goal=args.goal,
+            resume_run_id=args.resume_run_id,
+            planner=args.planner,
+            worker=args.worker,
+            controller=args.controller,
+            repair_attempts=args.repair_attempts,
+            max_rework=args.max_rework,
+            apply=args.apply,
+        )
+        try:
+            result = run_orchestration(config, repo_root=git_info.repo_root)
+        except OrchestrationError as exc:
+            print(
+                _format_orchestration_result(
+                    OrchestrationResult(
+                        ok=False,
+                        run_id=args.resume_run_id or "n/a",
+                        task_id=None,
+                        task_path=None,
+                        phase=OrchestrationPhase.FAILED.value,
+                        status=OrchestrationStatus.FAILED.value,
+                        completed_phases=[],
+                        branch=git_info.current_branch,
+                        head=git_info.head_sha,
+                        evidence_paths={},
+                        controller_gate=None,
+                        mutations_performed=[],
+                        blocking_reason=str(exc),
+                        owner_decision_required=False,
+                        next_action="inspect error and resume or start a new run",
+                        resume_command=(
+                            f".venv/bin/python -m advancore.agent_runner orchestrate "
+                            f"--resume {args.resume_run_id} --apply"
+                            if args.resume_run_id
+                            else "n/a"
+                        ),
+                    )
+                ),
+                file=sys.stderr,
+            )
+            return 1
+
+        print(_format_orchestration_result(result))
+        return 0 if result.ok else 1
 
     if args.command == "transition":
         try:

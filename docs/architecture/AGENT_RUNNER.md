@@ -1539,3 +1539,73 @@ business data, and unrestricted command output.
 - Preview mode changes no lifecycle state, index, HEAD, or remote state.
 - Apply mode stops at the first failed gate and reports the exact blocking
   condition.
+
+---
+
+## 17. End-to-End Controller Orchestration (TASK-021)
+
+### 17.1 Purpose
+
+TASK-021 adds a thin, provider-neutral coordinator over the existing governed
+stages.  It removes stage-by-stage command and artifact couriering without
+creating a new lifecycle, controller, verification, or publication authority.
+
+```text
+owner goal -> DRAFT generation -> task approval gate -> auto-pipeline/repair
+           -> implementation decision gate -> TASK-020 finalization -> pushed
+```
+
+The implementation lives in `advancore/agent_runner/orchestration.py` and is
+exposed through `python -m advancore.agent_runner orchestrate`.  Preview is the
+default; `--apply` is required for planner/worker launch, checkpoint/task writes,
+lifecycle changes, controller dispatch, or finalization.
+
+### 17.2 State and checkpoints
+
+One run owns one bounded goal and at most one generated task.  Its versioned
+checkpoint is atomically written under ignored `.agent_runner/orchestration/`
+and correlates the task, branch/HEAD, changed paths, review bundle, handoff,
+decision, auto result, finalization result, adapters, and bounded attempt counts.
+
+Resume reloads the checkpoint's provider selections and budgets, then
+revalidates authoritative files and current Git evidence.  A checkpoint alone
+is never authority.  Completed phases are not repeated, conflicting artifacts
+fail closed, and verified publication is terminal and idempotent.
+
+### 17.3 Authority-preserving phase flow
+
+- TASK-019 remains the only DRAFT generator.
+- DRAFT waits for a valid controller/owner `DRAFT -> READY` transition.
+- TASK-017/TASK-018 remain the implementation, verification, and repair path.
+- `READY_FOR_APPROVAL` creates review evidence only.
+- Existing handoff/adapter/transport and decision records remain the controller
+  boundary.
+- Controller REWORK uses the valid sequence
+  `READY/REWORK -> IN_PROGRESS -> REVIEW -> REWORK`, with worker and controller
+  attribution kept distinct and one bounded orchestration rework cycle.
+- Controller APPROVE alone may enter TASK-020 finalization.
+- Success requires TASK-020 `PUSHED` evidence for the same non-`main` branch.
+
+### 17.4 Permanent AdvanCore versus local operator
+
+AdvanCore permanently owns phase sequencing, checkpoint integrity, evidence
+correlation, resume/idempotency, authority validation, bounded retries, and
+fail-closed terminal reporting.
+
+Codex desktop, a human, or another approved local client may launch, monitor,
+and resume the CLI and present exceptions.  Those clients do not replace
+`agent_runner`, do not gain approval authority from operating the process, and
+are not runtime dependencies.  No Codex SDK, ChatGPT/OpenAI API, desktop
+automation, or vendor credential management is embedded in AdvanCore.
+
+### 17.5 Safety guarantees
+
+- Preview launches no model and writes no task, checkpoint, handoff, decision,
+  or publication artifact.
+- Resume uses persisted adapters/budgets rather than silently accepting new CLI
+  defaults.
+- Worker output and passing tests cannot create task or publication authority.
+- Unknown, stale, malformed, duplicate, conflicting, or unsafe evidence fails
+  closed with one exact next action.
+- The coordinator never directly stages, commits, pushes, merges, deploys,
+  force-pushes, manages credentials, or targets `main`.

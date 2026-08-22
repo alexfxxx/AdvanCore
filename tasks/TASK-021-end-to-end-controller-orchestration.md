@@ -1,6 +1,6 @@
 # TASK-021 — End-to-End Controller Orchestration
 
-STATUS: READY
+STATUS: APPROVED
 
 ## Objective
 
@@ -336,16 +336,108 @@ One controller decision remains required before implementation: review this DRAF
 
 ### Implemented
 
+- Added `advancore/agent_runner/orchestration.py` with provider-neutral,
+  versioned phase/status/config/checkpoint/result models and a deterministic
+  owner-goal-to-feature-branch orchestration loop.
+- Added bounded, atomic checkpoint persistence under ignored
+  `.agent_runner/orchestration/`, including branch/HEAD/path correlation,
+  evidence references, selected adapters, repair/rework budgets, consumed
+  decisions, mutation flags, and exact resume commands.
+- Added preview-by-default and explicit-apply behavior. Preview launches no
+  planner/worker and writes no checkpoint, task, handoff, decision, or
+  publication artifact.
+- Added resumable phase delegation over existing goal-task, lifecycle,
+  auto-pipeline, controller handoff/adapter/decision, decision-lifecycle bridge,
+  and finalization APIs without copying their governance logic.
+- Added fail-closed task approval, owner-decision, implementation-decision,
+  stale-evidence, non-repairable, repair-exhausted, rework-exhausted,
+  finalization, and publication outcomes.
+- Added authority-preserving controller rework choreography:
+  `READY/REWORK -> IN_PROGRESS -> REVIEW` under worker authority, followed by
+  recorded controller `REVIEW -> REWORK` through the existing decision bridge.
+- Added one bounded orchestration rework cycle, separate from TASK-018 repair
+  attempts, with consumed-decision tracking to prevent replay.
+- Added the `orchestrate` CLI command, consolidated result formatting, and
+  package exports.
+- Added 29 focused orchestration tests covering preview safety, generation and
+  approval gates, resume/freshness, worker delegation, controller authority,
+  rework, finalization, checkpoint safety, and CLI behavior.
+- Added ADR-021 and architecture documentation distinguishing permanent
+  AdvanCore governance from optional Codex/human/local execution control.
+- During implementation, Kimi-Swarm reached its external usage quota.  The
+  owner explicitly authorized Codex as the temporary TASK-021 implementation
+  worker.  Codex repaired and completed the existing Kimi-authored work but has
+  not acted as controller or approved/published its own implementation.
+
 ### Files changed
+
+1. `advancore/agent_runner/orchestration.py` (new)
+2. `advancore/agent_runner/__init__.py`
+3. `advancore/agent_runner/__main__.py`
+4. `tests/test_orchestration.py` (new)
+5. `docs/architecture/AGENT_RUNNER.md`
+6. `docs/decisions/ADR-021-end-to-end-controller-orchestration.md` (new)
+7. `tasks/TASK-021-end-to-end-controller-orchestration.md`
 
 ### Database changes
 
+None. No schema, model, migration, production database, or business-data
+mutation was made.
+
 ### Tests and results
+
+```bash
+.venv/bin/python -m pytest tests/test_orchestration.py -q
+```
+
+Result: **29 passed**.
+
+```bash
+.venv/bin/python -m pytest tests/ -q
+```
+
+Result: **541 passed in 51.61s**.
+
+Additional verification:
+
+- Python compilation passed for the orchestration module and CLI entry point.
+- `git diff --check` passed.
+- No path outside the exact seven-file TASK-021 implementation scope remains
+  changed.
 
 ### Assumptions
 
+- Existing TASK-009 through TASK-020 public APIs and artifact schemas remain
+  authoritative.
+- Local/manual controller mode is the initial controller pause/resume path;
+  future controller providers must use the existing adapter/transport boundary.
+- Checkpoints are local ignored coordination evidence and never replace GitHub
+  source-of-truth or revalidation of linked artifacts.
+- Local Git and model authentication remain externally configured and are not
+  managed by the orchestrator.
+
 ### Risks / unresolved issues
+
+- The orchestration implementation is substantial and requires independent
+  controller review before publication.
+- Kimi Code usage quota was exhausted during implementation.  This does not
+  affect the provider-neutral runtime design, but Kimi-backed future runs
+  require available Kimi quota or another separately approved worker adapter.
+- No remote controller adapter was added; unattended progress across authority
+  gates still depends on a valid decision arriving through an existing adapter
+  or transport implementation.
 
 ### Decisions required
 
+- Independent controller/owner review must decide APPROVE or REWORK for this
+  implementation.  Codex must not approve its own temporary-worker changes.
+- Merge-to-main, deployment, remote controller integration, and additional
+  worker providers remain separately gated and are not requested here.
+
 ### Recommended next step
+
+- Perform independent controller review against this completion report, the
+  exact seven-file diff, and the passing 541-test evidence.
+- If approved, create a valid controller APPROVE decision and publish only the
+  current `agent-control-foundation` branch through TASK-020 finalization.
+- Do not merge to `main` or deploy as part of TASK-021.

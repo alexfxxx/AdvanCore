@@ -86,6 +86,17 @@ from advancore.agent_runner.goal_task import (
     validate_proposal,
     write_goal_task_artifact,
 )
+from advancore.agent_runner.orchestration import (
+    OrchestrationConfig,
+    OrchestrationError,
+    OrchestrationPhase,
+    OrchestrationResult,
+    OrchestrationStatus,
+    default_orchestration_dir,
+    load_checkpoint,
+    run_orchestration,
+    save_checkpoint,
+)
 from advancore.agent_runner.review_bundle import (
     ControllerAction,
     ReviewBundle,
@@ -172,6 +183,15 @@ __all__ = [
     "FinalizationResult",
     "FinalizationStatus",
     "DriverArtifactView",
+    "OrchestrationConfig",
+    "OrchestrationError",
+    "OrchestrationPhase",
+    "OrchestrationResult",
+    "OrchestrationStatus",
+    "default_orchestration_dir",
+    "load_checkpoint",
+    "run_orchestration",
+    "save_checkpoint",
     "GitInfo",
     "GoalTaskError",
     "GoalTaskGenerationResult",
