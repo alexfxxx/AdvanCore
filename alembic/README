@@ -1,0 +1,3 @@
+AdvanCore single-database Alembic configuration.
+
+See docs/architecture/MIGRATIONS.md for the approved workflow.
