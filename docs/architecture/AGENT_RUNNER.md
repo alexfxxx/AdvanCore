@@ -1197,6 +1197,18 @@ evidence keys) without storing full transcripts or command output.
 - A `DECISION_RECEIVED` response from the driver still requires existing TASK-011/TASK-013/TASK-014/TASK-015 validation/reconciliation before any lifecycle action.
 - The local-filesystem driver performs no network, subprocess, credential, or background-polling operations.
 - `controller-transport driver-send`, `driver-receive`, and `driver-show` are local-only CLI operations that reuse the existing `controller_transport` audit mode.
+- Controller-gated finalization lives in `advancore/agent_runner/finalize.py` and is invoked through the `finalize` CLI subcommand.
+- The finalizer defaults to preview/dry-run; `--apply` is required to mutate lifecycle state, index, HEAD, or remote state.
+- The finalizer requires a separately valid controller `APPROVE` decision and rejects worker-authored, missing, or non-`APPROVE` decisions.
+- Finalization binds task id, task filename, branch, HEAD, review-bundle path, and verified changed-path set to current repository state and fails closed on mismatch.
+- Worker lifecycle transitions orchestrated by the finalizer are limited to `READY → IN_PROGRESS → REVIEW` and are attributed/audited as `worker`.
+- Controller approval `REVIEW → APPROVED` is applied through the existing decision-lifecycle bridge and is attributed/audited as `controller`.
+- The finalizer stages only the explicit verified path set plus the legitimately modified task file; it never uses `git add .`, `-A`, or wildcards.
+- The finalizer creates exactly one local non-merge commit and verifies parent, tree, and contents before push.
+- Push is limited to normal `git push origin <current-branch>` targeting `origin/<same-branch>`; force push, history rewrite, tag creation, ref deletion, and merge commits are impossible.
+- `main` cannot be finalized or pushed through this command.
+- Finalization audit records use modes `finalize` and are written to `.agent_runner/audit/runner.jsonl`; successful attempts also write `.agent_runner/finalize/finalize.jsonl`.
+- Finalization artifacts contain only bounded safe metadata and exclude full task bodies, worker transcripts, credentials, secrets, environment dumps, and customer/business data.
 
 ### ASSUMPTION
 
@@ -1354,3 +1366,176 @@ file.
   task.
 - `main` remains untouched.
 - Unknown, malformed, unsafe, conflicting, or ambiguous states fail closed.
+
+
+---
+
+## 16. Controller-Gated Finalization and Branch Publication (TASK-020)
+
+### 16.1 Purpose
+
+TASK-020 adds a single bounded publication path that consumes a separately valid
+controller `APPROVE` decision for a successfully verified auto-pipeline result,
+applies only the already-authorized lifecycle transitions, stages exactly the
+verified task scope, creates one local commit, and pushes only the current
+non-`main` feature branch.
+
+The finalizer replaces the repetitive manual sequence:
+
+```
+worker lifecycle transitions → controller approval transition → git add exact files
+→ staged verification → commit → clean-tree verification → commit-content verification
+→ push → post-push status
+```
+
+with one governed command while preserving every existing authority boundary.
+
+### 16.2 Governance principle
+
+**Verification is evidence. Controller approval is authority. Finalization
+executes authority; it does not create it.**
+
+The finalizer never:
+
+- infers `APPROVE` from passing tests or `READY_FOR_APPROVAL`;
+- accepts worker/swarm/Kimi approval;
+- skips lifecycle states;
+- stages files outside the verified path set;
+- commits when staged scope differs from verified scope;
+- pushes `main` or any branch other than the current verified feature branch;
+- force-pushes, rewrites history, creates tags, deletes refs, or merges;
+- accesses secrets or credentials beyond already-configured local Git authentication;
+- modifies Git remotes or credential configuration;
+- continues after stale, mismatched, ambiguous, or unauthorized evidence.
+
+### 16.3 Module and entry point
+
+The implementation lives in `advancore/agent_runner/finalize.py` and is invoked
+through the CLI subcommand:
+
+```bash
+python -m advancore.agent_runner finalize TASK-020 --decision <path-or-latest>
+```
+
+Preview/dry-run is the default. Use `--apply` to execute lifecycle transitions,
+staging, commit, and push. An optional `--message` supplies a bounded commit
+message; otherwise the message is derived from the task title.
+
+### 16.4 High-level flow
+
+```
+Valid controller APPROVE decision + linked review bundle
+          │
+          ▼
+┌─────────────────────┐
+│ Identity/freshness  │── task id, filename, branch, HEAD, changed paths
+│      gates          │
+└─────────────────────┘
+          │
+          ▼
+┌─────────────────────┐
+│ Worker transitions  │── READY → IN_PROGRESS → REVIEW (when warranted)
+│  (existing authority) │
+└─────────────────────┘
+          │
+          ▼
+┌─────────────────────┐
+│ Controller approval │── REVIEW → APPROVED via decision-lifecycle bridge
+│  (existing authority) │
+└─────────────────────┘
+          │
+          ▼
+┌─────────────────────┐
+│ Exact-path staging  │── git add <verified paths> only
+│  + staged reverify  │
+└─────────────────────┘
+          │
+          ▼
+┌─────────────────────┐
+│ Bounded commit      │── one non-merge commit, parent/contents verified
+└─────────────────────┘
+          │
+          ▼
+┌─────────────────────┐
+│ Push current branch │── git push origin <current-branch> only
+│  + synchronization  │    to origin/<same-branch>, no force
+└─────────────────────┘
+```
+
+### 16.5 Gate sequence
+
+1. **Repository snapshot.** Capture current branch and HEAD.
+2. **Main rejection.** Finalization is impossible on `main`.
+3. **Decision resolution.** Load the controller decision record (explicit path or
+   latest under `.agent_runner/decisions/`).
+4. **Actor/value validation.** Reject worker-authored, unknown, or non-`APPROVE`
+   decisions.
+5. **Bundle linkage.** Load and validate the linked review bundle's task identity,
+   branch, and HEAD evidence.
+6. **Task identity.** Reconcile decision, bundle, and on-disk task file.
+7. **Freshness.** Current branch and HEAD must match the bundle evidence.
+8. **Clean index.** No staged paths may exist at start.
+9. **Scope match.** Current working-tree changed paths must exactly equal the
+   bundle's verified `changed_paths`.
+10. **Worker lifecycle choreography.** Apply `READY → IN_PROGRESS → REVIEW` only
+    when the task status warrants each transition and only under worker actor
+    authority.
+11. **Controller approval.** Apply `REVIEW → APPROVED` through the existing
+    decision-lifecycle bridge under controller actor authority.
+12. **Post-transition scope check.** Verify the working tree still contains
+    exactly the approved paths (including the legitimately modified task file).
+13. **Exact-path staging.** Run `git add` with the explicit verified path list
+    only; never `git add .`, `-A`, or wildcards.
+14. **Staged reverify.** Confirm staged paths exactly match the approved set.
+15. **Whitespace check.** Run `git diff --cached --check` and fail closed on error.
+16. **Bounded commit message.** Use `agent: <normalized task title>` or an
+    optional controller-supplied message that contains no newlines or carriage
+    returns.
+17. **Commit.** Create exactly one local commit.
+18. **Post-commit verification.** Confirm working tree is clean, commit parent is
+    the expected pre-commit HEAD, commit is not a merge commit, and commit
+    contents exactly match the approved paths.
+19. **Push.** Push only the current verified feature branch to
+    `origin/<same-branch>` using normal fast-forward semantics.
+20. **Post-push verification.** Confirm local HEAD matches `origin/<same-branch>`
+    and the working tree remains clean.
+
+### 16.6 Result statuses
+
+- `READY_TO_FINALIZE` — preview mode validated all gates; apply would proceed.
+- `FINALIZED_LOCAL` — lifecycle, staging, and commit succeeded; push not reached
+  or not required.
+- `PUSHED` — full lifecycle, commit, push, and post-push synchronization
+  succeeded.
+- `BLOCKED` — a safety/authority precondition failed before any mutation.
+- `STALE_EVIDENCE` — identity, branch, HEAD, or changed-path evidence is stale
+  or mismatched.
+- `DECISION_REJECTED` — the controller decision is not `APPROVE`.
+- `PUBLICATION_FAILED` — commit or push verification failed after local mutation.
+
+### 16.7 Audit and artifacts
+
+Every finalization attempt appends:
+
+- a bounded JSON Lines record with `mode: "finalize"` to
+  `.agent_runner/audit/runner.jsonl`, and
+- a dedicated finalization artifact line to
+  `.agent_runner/finalize/finalize.jsonl` on successful completion.
+
+Both records contain only safe metadata: task id/filename, branch, pre/post HEAD,
+decision path, bundle path, staged/changed paths, lifecycle states, commit SHA,
+push command/result, terminal status, and bounded messages. They exclude full task
+bodies, worker transcripts, credentials, environment dumps, secrets, customer
+business data, and unrestricted command output.
+
+### 16.8 Safety guarantees
+
+- `main` is never pushed, committed to, or otherwise mutated.
+- Force push, refspec rewriting, tag creation, delete, and merge commits are
+  impossible through this command.
+- Staging is exact and re-verified; scope mismatch stops before commit.
+- A dirty working tree after commit blocks push.
+- An upstream mismatch (e.g. feature branch tracking `origin/main`) blocks push.
+- Preview mode changes no lifecycle state, index, HEAD, or remote state.
+- Apply mode stops at the first failed gate and reports the exact blocking
+  condition.

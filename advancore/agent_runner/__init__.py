@@ -53,6 +53,14 @@ from advancore.agent_runner.decision_lifecycle_bridge import (
     DecisionLifecycleResult,
     apply_controller_decision,
 )
+from advancore.agent_runner.finalize import (
+    FinalizationError,
+    FinalizationResult,
+    FinalizationStatus,
+    default_finalize_dir,
+    format_finalization_result,
+    run_finalization,
+)
 from advancore.agent_runner.git_info import GitInfo, get_git_info
 from advancore.agent_runner.goal_task import (
     GoalTaskError,
@@ -160,6 +168,9 @@ __all__ = [
     "DecisionLifecycleResult",
     "DecisionValue",
     "DiffCheckResult",
+    "FinalizationError",
+    "FinalizationResult",
+    "FinalizationStatus",
     "DriverArtifactView",
     "GitInfo",
     "GoalTaskError",
@@ -203,6 +214,7 @@ __all__ = [
     "default_auto_dir",
     "default_decisions_dir",
     "default_driver_dirs",
+    "default_finalize_dir",
     "default_handoff_dir",
     "default_review_dir",
     "find_latest_decision",
@@ -211,6 +223,7 @@ __all__ = [
     "format_auto_pipeline_report",
     "format_decision_summary",
     "format_bundle_summary",
+    "format_finalization_result",
     "format_handoff_summary",
     "load_controller_decision",
     "load_controller_handoff",
@@ -219,6 +232,7 @@ __all__ = [
     "parse_task_allowed_scope",
     "reconcile_controller_handoff",
     "run_auto_pipeline",
+    "run_finalization",
     "run_git_diff_check",
     "run_pytest",
     "write_controller_decision",

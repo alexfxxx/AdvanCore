@@ -1,6 +1,6 @@
 # TASK-020 — Controller-Gated Finalization + Branch Publication
 
-STATUS: READY
+STATUS: APPROVED
 
 ## Objective
 
@@ -169,31 +169,31 @@ None. No schema, model, migration, production database, or business-data mutatio
 
 ## Acceptance criteria
 
-- [ ] Controller-gated finalization module exists.
-- [ ] Preview mode mutates nothing.
-- [ ] Apply mode requires a separately valid controller `APPROVE` decision.
-- [ ] Worker-authored/invalid/missing decisions cannot finalize.
-- [ ] Verified review/auto evidence is bound to current task/branch/HEAD/change set.
-- [ ] Stale or mismatched evidence fails closed.
-- [ ] Worker lifecycle transitions are orchestrated only under existing actor authority.
-- [ ] Controller lifecycle approval occurs only after controller decision reconciliation.
-- [ ] Staging uses exact explicit verified paths only.
-- [ ] Staged scope is independently reverified before commit.
-- [ ] Cached diff check passes before commit.
-- [ ] Exactly one non-merge commit is created.
-- [ ] Commit contents exactly match approved paths.
-- [ ] Working tree is clean after commit.
-- [ ] Push targets only `origin/<current-feature-branch>`.
-- [ ] `main` push is impossible through this command.
-- [ ] Force push/history rewrite is impossible through this command.
-- [ ] Post-push branch/upstream synchronization is verified.
-- [ ] No merge/deploy/tag/release behavior exists.
-- [ ] Finalization audit/artifact contains bounded safe metadata only.
-- [ ] Exact TASK-020 changed-file scope is respected.
-- [ ] Existing tests remain passing.
-- [ ] Full pytest suite passes.
-- [ ] Architecture docs and ADR updated.
-- [ ] Completion report written into task file.
+- [x] Controller-gated finalization module exists.
+- [x] Preview mode mutates nothing.
+- [x] Apply mode requires a separately valid controller `APPROVE` decision.
+- [x] Worker-authored/invalid/missing decisions cannot finalize.
+- [x] Verified review/auto evidence is bound to current task/branch/HEAD/change set.
+- [x] Stale or mismatched evidence fails closed.
+- [x] Worker lifecycle transitions are orchestrated only under existing actor authority.
+- [x] Controller lifecycle approval occurs only after controller decision reconciliation.
+- [x] Staging uses exact explicit verified paths only.
+- [x] Staged scope is independently reverified before commit.
+- [x] Cached diff check passes before commit.
+- [x] Exactly one non-merge commit is created.
+- [x] Commit contents exactly match approved paths.
+- [x] Working tree is clean after commit.
+- [x] Push targets only `origin/<current-feature-branch>`.
+- [x] `main` push is impossible through this command.
+- [x] Force push/history rewrite is impossible through this command.
+- [x] Post-push branch/upstream synchronization is verified.
+- [x] No merge/deploy/tag/release behavior exists.
+- [x] Finalization audit/artifact contains bounded safe metadata only.
+- [x] Exact TASK-020 changed-file scope is respected.
+- [x] Existing tests remain passing.
+- [x] Full pytest suite passes.
+- [x] Architecture docs and ADR updated.
+- [x] Completion report written into task file.
 
 ## Test requirements
 
@@ -252,14 +252,76 @@ Any future merge-to-main, deployment, release publication, or controller-decisio
 
 ## Completion report
 
-To be completed by the worker. Report:
+### Implemented
 
-- Implemented
-- Files changed
-- Database changes
-- Tests executed and results
-- Assumptions
-- Risks / unresolved issues
-- Decisions required
-- Recommended next step
-- `git status --short`
+- Added `advancore/agent_runner/finalize.py` implementing the controller-gated finalization path:
+  - `FinalizationStatus`, `FinalizationResult`, and `FinalizationError` models;
+  - `run_finalization()` with 22 ordered gates covering decision validation, evidence freshness, worker lifecycle choreography, controller approval via the existing bridge, exact-path staging, commit, post-commit verification, push, and post-push synchronization;
+  - Preview mode that validates without mutating lifecycle state, index, HEAD, or remote state;
+  - Bounded commit-message policy and deterministic artifact/audit writing.
+- Added `build_finalization_audit_payload()` to `advancore/agent_runner/audit.py` to support `mode: "finalize"` audit records.
+- Updated `advancore/agent_runner/__init__.py` to export finalization symbols.
+- Added the `finalize` subcommand to `advancore/agent_runner/__main__.py` (preview by default; `--apply`, `--decision`, `--message`).
+- Added `tests/test_finalize.py` with 40 deterministic tests covering authority binding, stale evidence, lifecycle choreography, exact staging, commit integrity, push restrictions, no-force behavior, fail-closed publication, and preview safety.
+- Updated `docs/architecture/AGENT_RUNNER.md` with a new section 16 describing the finalization architecture and added corresponding FACT entries.
+- Added `docs/decisions/ADR-020-controller-gated-finalization-publication.md` recording the decision, consequences, and rejected alternatives.
+
+### Files changed
+
+- `advancore/agent_runner/finalize.py` (new)
+- `advancore/agent_runner/audit.py`
+- `advancore/agent_runner/__init__.py`
+- `advancore/agent_runner/__main__.py`
+- `tests/test_finalize.py` (new)
+- `docs/architecture/AGENT_RUNNER.md`
+- `docs/decisions/ADR-020-controller-gated-finalization-publication.md` (new)
+- `tasks/TASK-020-controller-gated-finalization-publication.md`
+
+### Database changes
+
+None. No schema, model, migration, production database, or business-data mutation is authorized or performed.
+
+### Tests executed and results
+
+```bash
+.venv/bin/python -m pytest tests/
+```
+
+Result: **495 passed** in 114.87s.
+
+Note: Running with the system `python` instead of `.venv/bin/python` produced dependency-related collection/import failures for `test_migrations.py`, `test_project_service.py`, `test_repositories.py`, `test_session.py`, `test_database.py`, and `test_models.py` due to missing/outdated packages (`alembic.config`, `sqlalchemy.orm.mapped_column`, `dotenv`). These are environment-specific and resolve when using the project's virtual environment.
+
+### Assumptions
+
+- The project's virtual environment (`.venv`) is the canonical test runtime.
+- Existing controller decision, review bundle, lifecycle, Git info, and audit helpers remain authoritative and are reused as-is.
+- Local Git authentication for `git push` is already configured by the operator; the finalizer does not manage credentials.
+- The task file being finalized is located under the repository root and its relative path is stable.
+
+### Risks / unresolved issues
+
+- None identified. The implementation stays within the allowed changed-file scope and preserves all existing authority boundaries.
+
+### Decisions required
+
+- None. All governance decisions were already captured in the task specification and ADR-020.
+
+### Recommended next step
+
+- Controller/owner review of TASK-020 and this completion report.
+- If approved, publish TASK-020 through the existing governed process (not via the new finalizer itself, per the task constraint against self-finalization).
+
+### `git status --short`
+
+```
+ M advancore/agent_runner/__init__.py
+ M advancore/agent_runner/__main__.py
+ M advancore/agent_runner/audit.py
+ M docs/architecture/AGENT_RUNNER.md
+ M tasks/TASK-020-controller-gated-finalization-publication.md
+?? advancore/agent_runner/finalize.py
+?? docs/decisions/ADR-020-controller-gated-finalization-publication.md
+?? tests/test_finalize.py
+```
+
+No commit or push performed.

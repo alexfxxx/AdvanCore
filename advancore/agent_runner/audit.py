@@ -256,6 +256,53 @@ def build_controller_transport_audit_payload(
     }
 
 
+def build_finalization_audit_payload(
+    *,
+    timestamp: datetime | None = None,
+    task_id: str | None,
+    task_filename: str | None,
+    status: str | None,
+    branch: str | None,
+    pre_head: str | None,
+    post_head: str | None,
+    commit_sha: str | None = None,
+    decision_path: str | None = None,
+    bundle_path: str | None = None,
+    staged_paths: list[str] | None = None,
+    changed_paths: list[str] | None = None,
+    lifecycle_states: list[str] | None = None,
+    push_command: list[str] | None = None,
+    push_result: dict[str, Any] | None = None,
+    messages: list[str] | None = None,
+) -> dict[str, Any]:
+    """Return a safe metadata payload for a controller-gated finalization attempt.
+
+    The payload intentionally excludes credentials, environment dumps, full task
+    bodies, worker transcripts, source contents, customer data, and arbitrary
+    command output. It records only the bounded evidence needed to audit the
+    finalization gate, lifecycle choreography, commit, and push outcome.
+    """
+    return {
+        "timestamp": (timestamp or datetime.now(timezone.utc)).isoformat(),
+        "task_id": task_id,
+        "task_filename": task_filename,
+        "mode": "finalize",
+        "status": status,
+        "branch": branch,
+        "pre_head": pre_head,
+        "post_head": post_head,
+        "commit_sha": commit_sha,
+        "decision_path": decision_path,
+        "bundle_path": bundle_path,
+        "staged_paths": staged_paths or [],
+        "changed_paths": changed_paths or [],
+        "lifecycle_states": lifecycle_states or [],
+        "push_command": push_command,
+        "push_result": push_result,
+        "messages": messages or [],
+    }
+
+
 def build_handoff_audit_payload(
     *,
     timestamp: datetime | None = None,

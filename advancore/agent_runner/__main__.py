@@ -90,6 +90,12 @@ from advancore.agent_runner.decision_lifecycle_bridge import (
     DecisionLifecycleResult,
     apply_controller_decision,
 )
+from advancore.agent_runner.finalize import (
+    FinalizationResult,
+    FinalizationStatus,
+    format_finalization_result,
+    run_finalization,
+)
 from advancore.agent_runner.git_info import GitInfo, get_git_info
 from advancore.agent_runner.lifecycle import (
     ActorRole,
@@ -314,6 +320,10 @@ def _format_decision_record_result(
         lines.append(f"  error: {audit_write_error}")
     lines.append("=" * 64)
     return "\n".join(lines)
+
+
+def _format_finalize_result(result: FinalizationResult) -> str:
+    return format_finalization_result(result)
 
 
 def _format_bridge_result(result: DecisionLifecycleResult) -> str:
@@ -662,6 +672,27 @@ def main(argv: list[str] | None = None) -> int:
         type=int,
         default=0,
         help="Maximum autonomous repair attempts (0-2, default: 0).",
+    )
+
+    finalize_parser = subparsers.add_parser(
+        "finalize",
+        help="Controller-gated finalization: stage, commit, and push the current feature branch (dry-run by default).",
+    )
+    finalize_parser.add_argument("task_id", help="Task identifier, e.g. TASK-020")
+    finalize_parser.add_argument(
+        "--decision",
+        default="latest",
+        help='Path to a controller decision record, or "latest" (default: latest).',
+    )
+    finalize_parser.add_argument(
+        "--message",
+        default=None,
+        help="Optional bounded commit message (default: task-derived 'agent: <title>').",
+    )
+    finalize_parser.add_argument(
+        "--apply",
+        action="store_true",
+        help="Actually apply lifecycle transitions, stage, commit, and push (default is preview only).",
     )
 
     goal_task_parser = subparsers.add_parser(
@@ -1798,6 +1829,27 @@ def main(argv: list[str] | None = None) -> int:
         )
         print(format_auto_pipeline_report(result))
         return 0 if result.status == AutoPipelineStatus.READY_FOR_APPROVAL else 1
+
+    if args.command == "finalize":
+        try:
+            git_info = get_git_info(cwd=tasks_dir)
+        except Exception as exc:
+            print(
+                f"FAIL: cannot inspect Git repository: {exc}", file=sys.stderr
+            )
+            return 1
+
+        decision_target = args.decision if args.decision != "latest" else None
+        result = run_finalization(
+            repo_root=git_info.repo_root,
+            tasks_dir=tasks_dir,
+            task_id=args.task_id,
+            decision_path=decision_target,
+            commit_message=args.message,
+            apply=args.apply,
+        )
+        print(_format_finalize_result(result))
+        return 0 if result.ok else 1
 
     worker = KimiWorkerAdapter() if args.worker == "kimi" else DryRunWorkerAdapter()
 
