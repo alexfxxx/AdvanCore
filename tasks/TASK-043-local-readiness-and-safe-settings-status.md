@@ -1,6 +1,6 @@
 # TASK-043 — Local readiness and safe Settings status
 
-STATUS: READY
+STATUS: APPROVED
 
 ## Objective
 
@@ -83,16 +83,47 @@ None. The environment example mirrors the already committed local Docker Compose
 
 ### Implemented
 
+- Added a non-sensitive readiness service with explicit configured and available states and fail-closed probe handling.
+- Replaced the Settings placeholder with application identity, database readiness, and safe local setup guidance.
+- Added a local-development-only environment example matching the existing Docker Compose database.
+- Added an ordered README quick start from virtual environment creation through app launch and shutdown.
+- Added focused service/page tests and an in-process Streamlit Settings smoke check.
+
 ### Files changed
+
+- `tasks/TASK-043-local-readiness-and-safe-settings-status.md`
+- `.env.example`
+- `README.md`
+- `advancore/pages/settings.py`
+- `advancore/services/readiness_service.py`
+- `tests/test_readiness_service.py`
+- `tests/test_settings_page.py`
 
 ### Database changes
 
+None. Settings uses the existing read-only connection probe only.
+
 ### Tests executed and results
+
+- Focused readiness and Settings tests: 8 passed.
+- Full project suite: 755 passed.
+- Python compile/import and `git diff --check`: passed.
+- Streamlit AppTest Settings route with isolated SQLite: zero exceptions, errors, or warnings; configured-and-available state rendered.
 
 ### Assumptions
 
+- The checked-in Docker Compose credentials are local-development defaults only; `.env.example` mirrors them for a copyable local startup path.
+- A boolean connection probe is sufficient for local setup guidance and is not represented as production health monitoring.
+
 ### Risks / unresolved issues
+
+- The quick start still requires Python, Docker, and Docker Compose to be installed locally.
+- Production secret management, hosting, monitoring, backup, and access control remain intentionally unresolved.
 
 ### Decisions required
 
+None for this bounded local-readiness task.
+
 ### Recommended next step
+
+Publish the verified local feature-branch commits when GitHub access is available, then perform a short owner acceptance run against the local PostgreSQL environment.

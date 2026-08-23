@@ -38,6 +38,42 @@ Future modules may include:
 - Docker local environment
 - GitHub version control and approved knowledge source
 
+## Local quick start
+
+These steps use the repository's existing local-development configuration. Do
+not reuse the example database password in production.
+
+1. Create and activate a Python virtual environment, then install dependencies:
+
+   ```bash
+   python3 -m venv .venv
+   . .venv/bin/activate
+   pip install -r requirements.txt
+   ```
+
+2. Copy the local environment example and start PostgreSQL:
+
+   ```bash
+   cp .env.example .env
+   docker compose up -d postgres
+   ```
+
+3. Apply the existing database migrations:
+
+   ```bash
+   .venv/bin/alembic upgrade head
+   ```
+
+4. Start AdvanCore:
+
+   ```bash
+   .venv/bin/streamlit run app.py
+   ```
+
+Open the local address printed by Streamlit. The Settings page shows whether
+the database is configured and reachable without displaying its connection
+details. When finished, stop the local database with `docker compose down`.
+
 ## Development Principles
 
 1. Build the platform before adding complex modules.
