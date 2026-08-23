@@ -51,6 +51,20 @@ reports a wrong phase, non-DRAFT task, stale branch/HEAD, non-current bundle,
 mismatched or consumed handoff, conflicting/ambiguous decision, or resume
 configuration override. A missing action never defaults to approval.
 
+An owner decision tied to a review bundle is single-use orchestration evidence.
+If its resolved path appears in the run checkpoint's consumed-decision list,
+stop: do not create replacement evidence for that same bundle. A completed
+`PUBLISHED` checkpoint may be resumed without an owner action for inspection;
+that resume is idempotent and must not invoke finalization again.
+
+## Acceptance evidence
+
+`tests/test_owner_action_orchestration_e2e.py` runs the operational sequence in
+a temporary repository. Goal-task generation, worker verification, Git facts,
+and the final `PUSHED` result are controlled local fakes; lifecycle, decision,
+handoff, checkpoint, resume, and orchestration report behavior use production
+code. No live provider, network, GitHub, credentials, or publication is used.
+
 ## Authority split
 
 The owner makes the decision. Codex desktop or another approved client may only

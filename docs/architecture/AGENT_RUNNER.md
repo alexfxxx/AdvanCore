@@ -150,6 +150,15 @@ records it. Missing, inferred, stale, phase-mismatched, conflicting,
 duplicate-ambiguous, or consumed actions fail closed. Resume-time provider,
 budget, and timeout overrides cannot be combined with owner action intake.
 
+TASK-026 acceptance follows one checkpointed run through both owner gates and
+the existing TASK-020 finalizer. Deterministic temporary-repository tests prove
+that task, run, review bundle, handoff, branch, and HEAD remain correlated;
+previews write nothing; stale, phase-mismatched, conflicting, worker-authored,
+consumed, and override evidence fails closed; and a terminal resume cannot
+repeat finalization. Publication is represented only by a controlled local
+`PUSHED` fake, so the suite has no provider, network, GitHub, credential, or
+production-publication dependency.
+
 ### Bounded worker lifetime and recovery (TASK-024)
 
 Kimi, Kimi-Swarm, and Codex execute through one code-owned process runner. The
@@ -943,6 +952,11 @@ auditable and easy to test.
   transport success as approval and never mutates lifecycle/Git/database state),
   and delegation of decision reconciliation to existing TASK-015/TASK-013 helpers.
 - CLI tests patch `get_git_info` directly and verify exit codes.
+- TASK-026 owner-action acceptance tests exercise the production resume,
+  lifecycle, decision, handoff, checkpoint, report, and finalization-delegation
+  path across both approval gates with controlled local fakes. They also prove
+  preview non-mutation, exact evidence correlation, fail-closed replay/override
+  guards, worker authority separation, and terminal idempotency.
 
 ---
 

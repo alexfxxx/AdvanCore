@@ -1,6 +1,6 @@
 # TASK-026 — Owner-Action Orchestration Acceptance
 
-STATUS: READY
+STATUS: APPROVED
 
 ## Objective
 
@@ -90,16 +90,51 @@ not convert blanket authorization into an inferred evidence-specific approval.
 
 ### Implemented
 
+- Added deterministic same-run acceptance coverage across both explicit owner
+  gates and controlled TASK-020 finalization delegation.
+- Added fail-closed coverage for stale HEAD, wrong phase, conflicting and
+  worker-authored evidence, consumed evidence, and resume overrides.
+- Repaired consumed-decision replay so matching consumed bundle evidence stops
+  before a replacement decision can be written.
+- Documented the acceptance boundary, operator behavior, and architecture
+  decision.
+
 ### Files changed
+
+- `advancore/agent_runner/orchestration.py`
+- `tests/test_owner_action_orchestration_e2e.py`
+- `docs/architecture/AGENT_RUNNER.md`
+- `docs/runbooks/OWNER_DECISION_RESUME.md`
+- `docs/decisions/ADR-026-owner-action-orchestration-acceptance.md`
+- `tasks/TASK-026-owner-action-orchestration-acceptance.md`
 
 ### Database changes
 
+- None.
+
 ### Tests and results
+
+- `.venv/bin/python -m pytest tests/test_owner_action_orchestration_e2e.py -v`
+  — 5 passed.
+- `.venv/bin/python -m pytest tests/ -v` — 595 passed.
+- `git diff --check` — passed.
 
 ### Assumptions
 
+- A controlled fake `PUSHED` result is the authorized terminal boundary for
+  acceptance; no real publication is permitted.
+
 ### Risks / unresolved issues
+
+- None identified within TASK-026 scope. Live publication remains deliberately
+  untested and out of scope.
 
 ### Decisions required
 
+- Independent review and approval remain required; this worker did not approve
+  or finalize the task.
+
 ### Recommended next step
+
+- Review the acceptance evidence and verification results, then make the
+  independent task decision.

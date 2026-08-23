@@ -705,17 +705,16 @@ def _matching_owner_decisions(
     repo_root: Path,
     checkpoint: OrchestrationCheckpoint,
     expected: ControllerDecision,
-) -> tuple[list[Path], list[Path]]:
-    """Return exact and conflicting unconsumed owner decisions for this bundle."""
+) -> tuple[list[Path], list[Path], list[Path]]:
+    """Return exact, conflicting, and consumed owner decisions for this bundle."""
     exact: list[Path] = []
     conflicts: list[Path] = []
+    consumed_matches: list[Path] = []
     decisions_dir = default_decisions_dir(repo_root)
     if not decisions_dir.exists():
-        return exact, conflicts
+        return exact, conflicts, consumed_matches
     consumed = set(checkpoint.consumed_decision_paths)
     for path in decisions_dir.glob("*.json"):
-        if str(path.resolve()) in consumed:
-            continue
         try:
             candidate = load_controller_decision(path)
         except Exception:
@@ -730,6 +729,9 @@ def _matching_owner_decisions(
             expected_bundle = repo_root / expected_bundle
         if candidate_bundle.resolve() != expected_bundle.resolve():
             continue
+        if str(path.resolve()) in consumed:
+            consumed_matches.append(path)
+            continue
         same = (
             candidate.actor_role == expected.actor_role
             and candidate.decision == expected.decision
@@ -739,7 +741,7 @@ def _matching_owner_decisions(
             and candidate.bundle_post_head == expected.bundle_post_head
         )
         (exact if same else conflicts).append(path)
-    return exact, conflicts
+    return exact, conflicts, consumed_matches
 
 
 def _prepare_owner_handoff(
@@ -890,7 +892,13 @@ def _intake_owner_action(
         task_filename=bundle.task_filename,
         repo_root=repo_root,
     )
-    exact, conflicts = _matching_owner_decisions(repo_root, checkpoint, decision)
+    exact, conflicts, consumed_matches = _matching_owner_decisions(
+        repo_root, checkpoint, decision
+    )
+    if consumed_matches:
+        raise OrchestrationError(
+            "Owner decision evidence for this bundle was already consumed"
+        )
     if conflicts:
         raise OrchestrationError("Conflicting owner decision already exists for this bundle")
     if len(exact) > 1:
