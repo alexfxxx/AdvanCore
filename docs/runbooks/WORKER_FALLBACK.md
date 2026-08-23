@@ -40,6 +40,26 @@ Stop and investigate; do not retry by manually chaining another worker when:
 - the configured fallback fails;
 - worker policy is invalid or ambiguous; or
 - subsequent verification, scope, artifact, or governance gates fail.
+- the worker times out or is cancelled. These are terminal, non-availability
+  conditions and never qualify for fallback or autonomous repair.
+
+## Timeout and cancellation recovery
+
+The default worker timeout is 1,800 seconds. A reviewed invocation may set a
+canonical integer from 1 through 7,200 seconds with `--worker-timeout`; zero,
+negative, signed, decimal, padded, malformed, and excessive values are rejected.
+For example:
+
+```bash
+.venv/bin/python -m advancore.agent_runner auto TASK-024 \
+  --worker codex --worker-timeout 1800
+```
+
+After timeout or operator cancellation, confirm the report's terminal reason
+and Git-state evidence. If any branch, HEAD, index, worktree, or remote mutation
+is reported—or evidence is ambiguous—stop for controller review. If state is
+unchanged, the only governed instruction is: `Explicitly resume or start a
+separately reviewed worker invocation.` There is no silent retry.
 
 ## Review evidence
 

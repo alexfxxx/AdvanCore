@@ -90,11 +90,13 @@ from advancore.agent_runner.review_bundle import (
 )
 from advancore.agent_runner.task import Task, TaskError, find_task
 from advancore.agent_runner.worker import (
+    DEFAULT_WORKER_TIMEOUT_SECONDS,
     DryRunWorkerAdapter,
     KimiSwarmWorkerAdapter,
     KimiWorkerAdapter,
     WorkerAdapter,
     build_worker_adapter,
+    validate_worker_timeout,
     validate_worker_policy,
 )
 
@@ -171,6 +173,7 @@ class OrchestrationConfig:
     repair_attempts: int = 0
     max_rework: int = 0
     apply: bool = False
+    worker_timeout_seconds: int = DEFAULT_WORKER_TIMEOUT_SECONDS
 
     def __post_init__(self):
         """Clamp budgets to approved bounds."""
@@ -185,6 +188,7 @@ class OrchestrationConfig:
             object.__setattr__(self, "max_rework", MAX_REWORK_CYCLES)
         try:
             validate_worker_policy(self.worker, self.fallback_worker)
+            validate_worker_timeout(self.worker_timeout_seconds)
         except Exception as exc:
             raise OrchestrationError(str(exc)) from exc
 
@@ -204,6 +208,7 @@ class OrchestrationCheckpoint:
     max_rework: int
     apply: bool
     phase: str
+    worker_timeout_seconds: int = DEFAULT_WORKER_TIMEOUT_SECONDS
     fallback_worker: str | None = None
     completed_phases: list[str] = field(default_factory=list)
     status: str = OrchestrationStatus.AWAITING_TASK_APPROVAL.value
@@ -222,6 +227,8 @@ class OrchestrationCheckpoint:
     decision: str | None = None
     auto_artifact_path: str | None = None
     auto_status: str | None = None
+    worker_terminal_reason: str | None = None
+    worker_recovery_action: str | None = None
     finalization_artifact_path: str | None = None
     commit_sha: str | None = None
     push_verified: bool = False
@@ -447,6 +454,7 @@ def _new_checkpoint(config: OrchestrationConfig, repo_root: Path) -> Orchestrati
         repair_attempts=config.repair_attempts,
         max_rework=config.max_rework,
         apply=config.apply,
+        worker_timeout_seconds=config.worker_timeout_seconds,
         phase=OrchestrationPhase.GOAL_VALIDATION.value,
         completed_phases=[],
         status=OrchestrationStatus.AWAITING_TASK_APPROVAL.value,
@@ -830,9 +838,15 @@ def _phase_task_execution(
         )
 
     allowed_scope = parse_task_allowed_scope(task.path) or []
-    worker = _build_worker(config.worker, allowed_scope=allowed_scope)
+    worker = build_worker_adapter(
+        config.worker, allowed_scope=allowed_scope,
+        timeout_seconds=config.worker_timeout_seconds,
+    )
     fallback_worker = (
-        _build_worker(config.fallback_worker, allowed_scope=allowed_scope)
+        build_worker_adapter(
+            config.fallback_worker, allowed_scope=allowed_scope,
+            timeout_seconds=config.worker_timeout_seconds,
+        )
         if config.fallback_worker else None
     )
 
@@ -844,6 +858,7 @@ def _phase_task_execution(
             messages=[
                 f"Preview: would run auto-pipeline for {task.task_id} with worker {config.worker}",
                 f"Preview: repair-attempts={config.repair_attempts}, max-rework={config.max_rework}",
+                f"Preview: worker-timeout={config.worker_timeout_seconds} seconds",
             ],
         )
 
@@ -869,6 +884,8 @@ def _phase_task_execution(
         str(auto_result.auto_artifact_path) if auto_result.auto_artifact_path else None
     )
     checkpoint.auto_status = auto_result.status.value
+    checkpoint.worker_terminal_reason = auto_result.terminal_reason
+    checkpoint.worker_recovery_action = auto_result.recovery_action
     checkpoint.review_bundle_path = (
         str(auto_result.review_bundle_path) if auto_result.review_bundle_path else None
     )
@@ -1207,6 +1224,8 @@ def _phase_awaiting_implementation_decision(
         checkpoint.rework_cycles_used += 1
         # Clear execution evidence so the next loop re-runs the pipeline.
         checkpoint.auto_status = None
+        checkpoint.worker_terminal_reason = None
+        checkpoint.worker_recovery_action = None
         checkpoint.auto_artifact_path = None
         checkpoint.review_bundle_path = None
         checkpoint.handoff_path = None
@@ -1365,6 +1384,7 @@ def run_orchestration(
             controller=checkpoint.controller,
             repair_attempts=checkpoint.repair_attempts,
             max_rework=checkpoint.max_rework,
+            worker_timeout_seconds=checkpoint.worker_timeout_seconds,
             apply=config.apply,
         )
 

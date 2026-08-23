@@ -155,6 +155,8 @@ from advancore.agent_runner.task import (
 from advancore.agent_runner.validation import ValidationResult, validate
 from advancore.agent_runner.worker import (
     APPROVED_WORKER_NAMES,
+    DEFAULT_WORKER_TIMEOUT_SECONDS,
+    MAX_WORKER_TIMEOUT_SECONDS,
     CodexWorkerAdapter,
     DryRunWorkerAdapter,
     KimiSwarmWorkerAdapter,
@@ -165,6 +167,9 @@ from advancore.agent_runner.worker import (
     build_worker_adapter,
     build_kimi_swarm_instruction,
     build_worker_instruction,
+    parse_worker_timeout,
+    run_bounded_worker_process,
+    validate_worker_timeout,
     validate_worker_policy,
 )
 
@@ -173,6 +178,8 @@ __all__ = [
     "AutoPipelineResult",
     "AutoPipelineStatus",
     "APPROVED_WORKER_NAMES",
+    "DEFAULT_WORKER_TIMEOUT_SECONDS",
+    "MAX_WORKER_TIMEOUT_SECONDS",
     "CodexWorkerAdapter",
     "ControllerAction",
     "ControllerDecision",
@@ -286,6 +293,8 @@ __all__ = [
     "WorkerError",
     "WorkerResult",
     "build_worker_instruction",
+    "parse_worker_timeout",
+    "run_bounded_worker_process",
     "discover_tasks",
     "execute",
     "find_task",
@@ -296,6 +305,7 @@ __all__ = [
     "transition_task",
     "validate",
     "validate_worker_policy",
+    "validate_worker_timeout",
     "DryRunWorkerAdapter",
     "KimiWorkerAdapter",
 ]

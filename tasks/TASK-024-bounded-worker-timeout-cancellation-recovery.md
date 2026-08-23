@@ -1,6 +1,6 @@
 # TASK-024 — Bounded Worker Timeout, Cancellation, and Recovery
 
-STATUS: READY
+STATUS: APPROVED
 
 ## Objective
 
@@ -99,16 +99,40 @@ self-approval, `main`, merge, or deployment.
 
 ### Implemented
 
+- Shared bounded process runner for all production adapters, strict timeout
+  policy, process-group cancellation, bounded Git evidence, recovery action,
+  non-fallback/non-repair classification, CLI/orchestration persistence, tests,
+  architecture documentation, runbook, and ADR.
+
 ### Files changed
+
+- The ten paths declared in this task's allowed changed-file scope.
 
 ### Database changes
 
+- None.
+
 ### Tests and results
+
+- `.venv/bin/python -m pytest tests/test_worker_timeout.py -v` — 7 passed.
+- `.venv/bin/python -m pytest tests/ -v` — 580 passed.
+- `git diff --check` — passed.
 
 ### Assumptions
 
+- A 1,800-second default, 7,200-second maximum, and one-second graceful period
+  are conservative local execution bounds.
+
 ### Risks / unresolved issues
+
+- No known implementation defects. Process-group signalling is POSIX-specific,
+  matching the approved local macOS/Linux execution environment.
 
 ### Decisions required
 
+- Independent controller/owner review; implementation does not self-approve.
+
 ### Recommended next step
+
+- Review the bounded evidence and required verification results before any
+  approval or publication action.

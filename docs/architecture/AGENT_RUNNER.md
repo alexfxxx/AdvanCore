@@ -119,6 +119,23 @@ resetting, merging, or broadening scope.
 
 ## 4. Safety model
 
+### Bounded worker lifetime and recovery (TASK-024)
+
+Kimi, Kimi-Swarm, and Codex execute through one code-owned process runner. The
+runner uses a 1,800-second default, accepts only canonical positive integer
+overrides, and rejects values above 7,200 seconds. Each worker starts in a new
+local session. Timeout or keyboard cancellation terminates its whole process
+group, waits one bounded graceful second, and then forces termination if needed.
+
+Timeout/cancellation results contain no prompt, stdout, stderr, environment, or
+credential material. They record only the terminal reason, timeout policy,
+bounded post-termination Git evidence, and—when branch, HEAD, index, worktree,
+and remotes are independently unchanged—this exact action:
+`Explicitly resume or start a separately reviewed worker invocation.` Mutation
+or ambiguous evidence stops for controller review. Neither outcome triggers
+fallback, repair, retry, publication, or lifecycle authority. Orchestration
+checkpoints retain the original timeout so resume cannot silently replace it.
+
 ### Mandatory principles
 
 1. **Dry-run first.** The default `plan` command does not launch a worker or

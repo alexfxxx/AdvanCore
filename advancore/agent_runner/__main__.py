@@ -112,6 +112,7 @@ from advancore.agent_runner.review_bundle import (
 from advancore.agent_runner.runner import RunnerResult, RunnerStatus, execute, plan
 from advancore.agent_runner.worker import (
     APPROVED_WORKER_NAMES,
+    DEFAULT_WORKER_TIMEOUT_SECONDS,
     DryRunWorkerAdapter,
     KimiSwarmWorkerAdapter,
     KimiWorkerAdapter,
@@ -119,6 +120,7 @@ from advancore.agent_runner.worker import (
     WorkerError,
     build_worker_adapter,
     validate_worker_policy,
+    parse_worker_timeout,
 )
 from advancore.agent_runner.auto_pipeline import (
     AutoPipelineStatus,
@@ -683,6 +685,12 @@ def _resolve_transport_request_target(
 
 
 def main(argv: list[str] | None = None) -> int:
+    def worker_timeout_arg(value: str) -> int:
+        try:
+            return parse_worker_timeout(value)
+        except WorkerError as exc:
+            raise argparse.ArgumentTypeError(str(exc)) from exc
+
     parser = argparse.ArgumentParser(
         prog="python -m advancore.agent_runner",
         description="AdvanCore local agent runner (dry-run by default).",
@@ -697,6 +705,11 @@ def main(argv: list[str] | None = None) -> int:
         "--execute",
         action="store_true",
         help="Actually launch the worker instead of just planning.",
+    )
+    plan_parser.add_argument(
+        "--worker-timeout", type=worker_timeout_arg,
+        default=DEFAULT_WORKER_TIMEOUT_SECONDS,
+        help=f"Worker timeout in seconds (default: {DEFAULT_WORKER_TIMEOUT_SECONDS}).",
     )
     plan_parser.add_argument(
         "--worker",
@@ -727,6 +740,11 @@ def main(argv: list[str] | None = None) -> int:
         type=int,
         default=0,
         help="Maximum autonomous repair attempts (0-2, default: 0).",
+    )
+    auto_parser.add_argument(
+        "--worker-timeout", type=worker_timeout_arg,
+        default=DEFAULT_WORKER_TIMEOUT_SECONDS,
+        help=f"Worker timeout in seconds (default: {DEFAULT_WORKER_TIMEOUT_SECONDS}).",
     )
 
     finalize_parser = subparsers.add_parser(
@@ -820,6 +838,11 @@ def main(argv: list[str] | None = None) -> int:
         type=int,
         default=0,
         help="Maximum controller-driven rework cycles after REWORK decision (0-1, default: 0).",
+    )
+    orchestrate_parser.add_argument(
+        "--worker-timeout", type=worker_timeout_arg,
+        default=DEFAULT_WORKER_TIMEOUT_SECONDS,
+        help=f"Worker timeout in seconds (default: {DEFAULT_WORKER_TIMEOUT_SECONDS}).",
     )
     orchestrate_parser.add_argument(
         "--apply",
@@ -1881,9 +1904,9 @@ def main(argv: list[str] | None = None) -> int:
             return 1
 
         if args.planner == "kimi":
-            planner: WorkerAdapter = KimiWorkerAdapter()
+            planner: WorkerAdapter = KimiWorkerAdapter(implementation_worker=False)
         elif args.planner == "kimi-swarm":
-            planner = KimiSwarmWorkerAdapter()
+            planner = KimiSwarmWorkerAdapter(implementation_worker=False)
         else:
             planner = DryRunWorkerAdapter()
 
@@ -1949,6 +1972,7 @@ def main(argv: list[str] | None = None) -> int:
             controller=args.controller,
             repair_attempts=args.repair_attempts,
             max_rework=args.max_rework,
+            worker_timeout_seconds=args.worker_timeout,
             apply=args.apply,
         )
         try:
@@ -2016,9 +2040,13 @@ def main(argv: list[str] | None = None) -> int:
 
         try:
             validate_worker_policy(args.worker, args.fallback_worker)
-            worker = build_worker_adapter(args.worker)
+            worker = build_worker_adapter(
+                args.worker, timeout_seconds=args.worker_timeout
+            )
             fallback_worker = (
-                build_worker_adapter(args.fallback_worker)
+                build_worker_adapter(
+                    args.fallback_worker, timeout_seconds=args.worker_timeout
+                )
                 if args.fallback_worker else None
             )
         except WorkerError as exc:
@@ -2056,7 +2084,10 @@ def main(argv: list[str] | None = None) -> int:
         print(_format_finalize_result(result))
         return 0 if result.ok else 1
 
-    worker = KimiWorkerAdapter() if args.worker == "kimi" else DryRunWorkerAdapter()
+    worker = (
+        KimiWorkerAdapter(timeout_seconds=args.worker_timeout)
+        if args.worker == "kimi" else DryRunWorkerAdapter()
+    )
 
     if args.execute:
         result = execute(tasks_dir, args.task_id, worker=worker)

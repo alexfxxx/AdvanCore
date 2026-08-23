@@ -193,6 +193,9 @@ class AutoPipelineResult:
     fallback_worker: str | None = None
     terminal_worker: str | None = None
     fallback_attempt: FallbackAttempt | None = None
+    worker_timeout_seconds: int | None = None
+    terminal_reason: str | None = None
+    recovery_action: str | None = None
 
     def __bool__(self) -> bool:
         return self.status == AutoPipelineStatus.READY_FOR_APPROVAL
@@ -609,6 +612,12 @@ def build_auto_artifact_payload(result: AutoPipelineResult) -> dict[str, Any]:
             if result.fallback_attempt else None
         ),
         "worker_success": result.worker_result.success if result.worker_result else None,
+        "worker_timeout_seconds": result.worker_timeout_seconds,
+        "terminal_reason": result.terminal_reason,
+        "recovery_action": result.recovery_action,
+        "terminal_repository_state": (
+            result.worker_result.repository_state if result.worker_result else None
+        ),
         "review_bundle_path": str(result.review_bundle_path)
         if result.review_bundle_path
         else None,
@@ -704,6 +713,10 @@ def format_auto_pipeline_report(result: AutoPipelineResult) -> str:
     if result.worker_result is not None:
         lines.append(f"Worker success:    {result.worker_result.success}")
         lines.append(f"Worker message:    {result.worker_result.message}")
+        lines.append(f"Terminal reason:   {result.terminal_reason or 'completed'}")
+        lines.append(f"Worker timeout:    {result.worker_timeout_seconds or 'n/a'} seconds")
+        if result.recovery_action:
+            lines.append(f"Recovery action:   {result.recovery_action}")
     else:
         lines.append("Worker success:    n/a")
 
@@ -1232,6 +1245,7 @@ def run_auto_pipeline(
         fallback_worker is not None
         and runner_result.worker_result is not None
         and not runner_result.worker_result.success
+        and runner_result.worker_result.terminal_reason not in {"timeout", "cancelled"}
     ):
         failure = classify_provider_failure(runner_result.worker_result)
         after_remotes = _remote_fingerprint(repo_root)
@@ -1279,9 +1293,32 @@ def run_auto_pipeline(
         fallback_worker=fallback_worker.name if fallback_worker else None,
         terminal_worker=runner_result.worker_type,
         fallback_attempt=fallback_attempt,
+        worker_timeout_seconds=(
+            runner_result.worker_result.timeout_seconds
+            if runner_result.worker_result else None
+        ),
+        terminal_reason=(
+            runner_result.worker_result.terminal_reason
+            if runner_result.worker_result else None
+        ),
+        recovery_action=(
+            runner_result.worker_result.recovery_action
+            if runner_result.worker_result else None
+        ),
     )
     if fallback_attempt:
         result.messages.extend(fallback_attempt.messages)
+
+    if (
+        runner_result.worker_result is not None
+        and runner_result.worker_result.terminal_reason in {"timeout", "cancelled"}
+    ):
+        result.status = AutoPipelineStatus.WORKER_FAILED
+        result.messages.append(
+            "Worker timeout/cancellation is terminal: fallback and automatic repair are blocked."
+        )
+        _write_auto_artifact(result)
+        return result
 
     if runner_result.status == RunnerStatus.FAILED:
         result.status = AutoPipelineStatus.VALIDATION_FAILED

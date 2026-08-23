@@ -3,7 +3,11 @@
 from __future__ import annotations
 
 import shutil
+import os
+import re
+import signal
 import subprocess
+import time
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from pathlib import Path
@@ -24,6 +28,156 @@ class WorkerResult:
     stderr: str | None = None
     returncode: int | None = None
     message: str = ""
+    terminal_reason: str = "completed"
+    timeout_seconds: int | None = None
+    recovery_action: str | None = None
+    repository_state: dict[str, object] | None = None
+
+
+DEFAULT_WORKER_TIMEOUT_SECONDS = 30 * 60
+MAX_WORKER_TIMEOUT_SECONDS = 2 * 60 * 60
+WORKER_TERMINATION_GRACE_SECONDS = 1
+WORKER_RECOVERY_ACTION = (
+    "Explicitly resume or start a separately reviewed worker invocation."
+)
+
+
+def validate_worker_timeout(value: int) -> int:
+    """Return a safe timeout or reject non-integral/out-of-policy values."""
+    if isinstance(value, bool) or not isinstance(value, int):
+        raise WorkerError("worker timeout must be an unambiguous integer number of seconds")
+    if value <= 0 or value > MAX_WORKER_TIMEOUT_SECONDS:
+        raise WorkerError(
+            f"worker timeout must be between 1 and {MAX_WORKER_TIMEOUT_SECONDS} seconds"
+        )
+    return value
+
+
+def parse_worker_timeout(value: str) -> int:
+    """Argparse-compatible strict timeout parser."""
+    if not re.fullmatch(r"[1-9][0-9]*", value):
+        raise WorkerError("worker timeout must be a canonical positive integer")
+    return validate_worker_timeout(int(value))
+
+
+def _git_evidence(repo_root: Path) -> dict[str, object]:
+    """Independently capture bounded branch, HEAD, index, worktree, and remotes."""
+    commands = {
+        "branch": ["git", "branch", "--show-current"],
+        "head": ["git", "rev-parse", "HEAD"],
+        "index": ["git", "diff", "--cached", "--name-only"],
+        "worktree": ["git", "status", "--porcelain=v1"],
+        "remotes": ["git", "remote", "-v"],
+    }
+    evidence: dict[str, object] = {}
+    ambiguous = False
+    for name, command in commands.items():
+        try:
+            result = subprocess.run(
+                command, cwd=repo_root, capture_output=True, text=True,
+                check=False, timeout=10,
+            )
+            if result.returncode != 0:
+                ambiguous = True
+                evidence[name] = None
+            else:
+                evidence[name] = sorted(result.stdout.splitlines()) if name in {
+                    "index", "worktree", "remotes"
+                } else result.stdout.strip()
+        except Exception:
+            ambiguous = True
+            evidence[name] = None
+    evidence["ambiguous"] = ambiguous
+    return evidence
+
+
+def _process_group_exists(process_group_id: int) -> bool:
+    try:
+        os.killpg(process_group_id, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    return True
+
+
+def _terminate_process_group(process: subprocess.Popen[str]) -> None:
+    """Terminate the complete worker group within a bounded grace period."""
+    group_id = process.pid
+    try:
+        os.killpg(group_id, signal.SIGTERM)
+    except ProcessLookupError:
+        return
+    deadline = time.monotonic() + WORKER_TERMINATION_GRACE_SECONDS
+    while time.monotonic() < deadline and _process_group_exists(group_id):
+        time.sleep(0.02)
+    if _process_group_exists(group_id):
+        try:
+            os.killpg(group_id, signal.SIGKILL)
+        except (ProcessLookupError, PermissionError):
+            pass
+    try:
+        process.wait(timeout=WORKER_TERMINATION_GRACE_SECONDS)
+    except (subprocess.TimeoutExpired, ProcessLookupError):
+        pass
+
+
+def run_bounded_worker_process(
+    command: list[str], working_dir: Path, timeout_seconds: int
+) -> WorkerResult:
+    """Run one local worker in an isolated session with governed termination."""
+    timeout_seconds = validate_worker_timeout(timeout_seconds)
+    repo_root = working_dir.resolve(strict=True)
+    before = _git_evidence(repo_root)
+    try:
+        process = subprocess.Popen(
+            command, cwd=repo_root, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+            text=True, start_new_session=True,
+        )
+    except Exception as exc:
+        return WorkerResult(
+            success=False, command=command,
+            message=f"Worker launch failed: {type(exc).__name__}",
+            terminal_reason="launch_failed", timeout_seconds=timeout_seconds,
+        )
+    terminal_reason: str | None = None
+    try:
+        stdout, stderr = process.communicate(timeout=timeout_seconds)
+    except subprocess.TimeoutExpired:
+        terminal_reason = "timeout"
+        _terminate_process_group(process)
+    except KeyboardInterrupt:
+        terminal_reason = "cancelled"
+        _terminate_process_group(process)
+
+    if terminal_reason is not None:
+        after = _git_evidence(repo_root)
+        unchanged = not before.get("ambiguous") and not after.get("ambiguous") and before == after
+        state = {
+            "unchanged": unchanged,
+            "ambiguous": bool(before.get("ambiguous") or after.get("ambiguous")),
+            "branch": after.get("branch"),
+            "head": after.get("head"),
+            "index_changed": before.get("index") != after.get("index"),
+            "worktree_changed": before.get("worktree") != after.get("worktree"),
+            "remotes_changed": before.get("remotes") != after.get("remotes"),
+        }
+        message = f"Worker {terminal_reason}; repository state " + (
+            "unchanged" if unchanged else "mutated or ambiguous; controller review required"
+        )
+        return WorkerResult(
+            success=False, command=command, returncode=process.poll(), message=message,
+            terminal_reason=terminal_reason, timeout_seconds=timeout_seconds,
+            recovery_action=WORKER_RECOVERY_ACTION if unchanged else None,
+            repository_state=state,
+        )
+
+    return WorkerResult(
+        success=process.returncode == 0, command=command, stdout=stdout, stderr=stderr,
+        returncode=process.returncode, timeout_seconds=timeout_seconds,
+        message="Worker finished successfully" if process.returncode == 0
+        else "Worker finished with non-zero exit code",
+    )
 
 
 APPROVED_WORKER_NAMES: tuple[str, ...] = (
@@ -100,10 +254,14 @@ class KimiWorkerAdapter(WorkerAdapter):
     DEFAULT_EXECUTABLE: ClassVar[str] = "kimi"
 
     def __init__(
-        self, executable: str | None = None, allowed_scope: list[str] | None = None
+        self, executable: str | None = None, allowed_scope: list[str] | None = None,
+        timeout_seconds: int = DEFAULT_WORKER_TIMEOUT_SECONDS,
+        implementation_worker: bool = True,
     ):
         self.executable = executable or self.DEFAULT_EXECUTABLE
         self.allowed_scope = allowed_scope or []
+        self.timeout_seconds = validate_worker_timeout(timeout_seconds)
+        self.implementation_worker = implementation_worker
 
     @property
     def name(self) -> str:
@@ -122,32 +280,16 @@ class KimiWorkerAdapter(WorkerAdapter):
         command = self.build_command(
             _governed_instruction(instruction, self.allowed_scope), working_dir
         )
-        try:
-            result = subprocess.run(
-                command,
-                cwd=working_dir,
-                capture_output=True,
-                text=True,
-                check=False,
-            )
-        except Exception as exc:  # pragma: no cover - defensive
-            return WorkerResult(
-                success=False,
-                command=command,
-                message=f"Worker launch failed: {exc}",
-            )
-
+        if self.implementation_worker:
+            return run_bounded_worker_process(command, working_dir, self.timeout_seconds)
+        result = subprocess.run(
+            command, cwd=working_dir, capture_output=True, text=True, check=False
+        )
         return WorkerResult(
-            success=result.returncode == 0,
-            command=command,
-            stdout=result.stdout,
-            stderr=result.stderr,
-            returncode=result.returncode,
-            message=(
-                "Worker finished successfully"
-                if result.returncode == 0
-                else "Worker finished with non-zero exit code"
-            ),
+            success=result.returncode == 0, command=command, stdout=result.stdout,
+            stderr=result.stderr, returncode=result.returncode,
+            message="Worker finished successfully" if result.returncode == 0
+            else "Worker finished with non-zero exit code",
         )
 
 
@@ -208,9 +350,13 @@ class KimiSwarmWorkerAdapter(WorkerAdapter):
         self,
         executable: str | None = None,
         allowed_scope: list[str] | None = None,
+        timeout_seconds: int = DEFAULT_WORKER_TIMEOUT_SECONDS,
+        implementation_worker: bool = True,
     ):
         self.executable = executable or self.DEFAULT_EXECUTABLE
         self.allowed_scope = allowed_scope or []
+        self.timeout_seconds = validate_worker_timeout(timeout_seconds)
+        self.implementation_worker = implementation_worker
 
     @property
     def name(self) -> str:
@@ -237,32 +383,16 @@ class KimiSwarmWorkerAdapter(WorkerAdapter):
         command = self.build_command(
             _governed_instruction(instruction, self.allowed_scope), working_dir
         )
-        try:
-            result = subprocess.run(
-                command,
-                cwd=working_dir,
-                capture_output=True,
-                text=True,
-                check=False,
-            )
-        except Exception as exc:  # pragma: no cover - defensive
-            return WorkerResult(
-                success=False,
-                command=command,
-                message=f"Worker launch failed: {exc}",
-            )
-
+        if self.implementation_worker:
+            return run_bounded_worker_process(command, working_dir, self.timeout_seconds)
+        result = subprocess.run(
+            command, cwd=working_dir, capture_output=True, text=True, check=False
+        )
         return WorkerResult(
-            success=result.returncode == 0,
-            command=command,
-            stdout=result.stdout,
-            stderr=result.stderr,
-            returncode=result.returncode,
-            message=(
-                "Swarm worker finished successfully"
-                if result.returncode == 0
-                else "Swarm worker finished with non-zero exit code"
-            ),
+            success=result.returncode == 0, command=command, stdout=result.stdout,
+            stderr=result.stderr, returncode=result.returncode,
+            message="Worker finished successfully" if result.returncode == 0
+            else "Worker finished with non-zero exit code",
         )
 
 
@@ -296,9 +426,11 @@ class CodexWorkerAdapter(WorkerAdapter):
 
     DEFAULT_EXECUTABLE: ClassVar[str] = "codex"
 
-    def __init__(self, allowed_scope: list[str] | None = None):
+    def __init__(self, allowed_scope: list[str] | None = None,
+                 timeout_seconds: int = DEFAULT_WORKER_TIMEOUT_SECONDS):
         self.executable = self.DEFAULT_EXECUTABLE
         self.allowed_scope = allowed_scope or []
+        self.timeout_seconds = validate_worker_timeout(timeout_seconds)
 
     @property
     def name(self) -> str:
@@ -328,30 +460,12 @@ class CodexWorkerAdapter(WorkerAdapter):
         bounded_instruction = _governed_instruction(instruction, self.allowed_scope)
         try:
             command = self.build_command(bounded_instruction, working_dir)
-            result = subprocess.run(
-                command,
-                cwd=working_dir.resolve(strict=True),
-                capture_output=True,
-                text=True,
-                check=False,
-            )
+            return run_bounded_worker_process(command, working_dir, self.timeout_seconds)
         except Exception as exc:  # pragma: no cover - defensive
             return WorkerResult(
                 success=False,
                 message=f"Worker launch failed: {type(exc).__name__}",
             )
-        return WorkerResult(
-            success=result.returncode == 0,
-            command=command,
-            stdout=result.stdout,
-            stderr=result.stderr,
-            returncode=result.returncode,
-            message=(
-                "Worker finished successfully"
-                if result.returncode == 0
-                else "Worker finished with non-zero exit code"
-            ),
-        )
 
 
 def validate_worker_policy(primary: str, fallback: str | None = None) -> None:
@@ -371,15 +485,16 @@ def validate_worker_policy(primary: str, fallback: str | None = None) -> None:
 
 
 def build_worker_adapter(
-    name: str, allowed_scope: list[str] | None = None
+    name: str, allowed_scope: list[str] | None = None,
+    timeout_seconds: int = DEFAULT_WORKER_TIMEOUT_SECONDS,
 ) -> WorkerAdapter:
     """Build one fixed, registered adapter; never accept executable or argv input."""
     validate_worker_policy(name)
     scope = allowed_scope or []
     if name == "kimi":
-        return KimiWorkerAdapter(allowed_scope=scope)
+        return KimiWorkerAdapter(allowed_scope=scope, timeout_seconds=timeout_seconds)
     if name == "kimi-swarm":
-        return KimiSwarmWorkerAdapter(allowed_scope=scope)
+        return KimiSwarmWorkerAdapter(allowed_scope=scope, timeout_seconds=timeout_seconds)
     if name == "codex":
-        return CodexWorkerAdapter(allowed_scope=scope)
+        return CodexWorkerAdapter(allowed_scope=scope, timeout_seconds=timeout_seconds)
     return DryRunWorkerAdapter()
