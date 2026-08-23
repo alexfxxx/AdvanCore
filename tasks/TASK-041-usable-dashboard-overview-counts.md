@@ -1,6 +1,6 @@
 # TASK-041 — Usable dashboard overview counts
 
-STATUS: READY
+STATUS: APPROVED
 
 ## Objective
 
@@ -90,16 +90,46 @@ None.
 
 ### Implemented
 
+- Added immutable DashboardSummary counts and an injected read-only DashboardService.
+- Replaced the connection-only page with project and knowledge overview metrics plus concise navigation guidance.
+- Counted unknown statuses separately and added generic no-leak failure handling with no misleading metrics.
+- Added focused service/page coverage and README documentation.
+
 ### Files changed
+
+- `tasks/TASK-041-usable-dashboard-overview-counts.md`
+- `advancore/pages/dashboard.py`
+- `advancore/services/dashboard_service.py`
+- `tests/test_dashboard_service.py`
+- `tests/test_dashboard_page.py`
+- `README.md`
 
 ### Database changes
 
+None. Existing repository rows are read only.
+
 ### Tests executed and results
+
+- Focused Dashboard suite: 6 passed.
+- Full repository suite: 740 passed.
+- Python compile/import and `git diff --check` passed.
+- In-process Streamlit Dashboard smoke check passed with zero exceptions, seven metrics, and no UI errors.
+- Empty-index, exact-scope, and new-file checks passed.
 
 ### Assumptions
 
+- Existing exact status strings remain authoritative for these descriptive counts.
+- Loading complete repository lists is acceptable for this bounded v0.1 overview; optimization is deferred.
+
 ### Risks / unresolved issues
+
+- Business KPIs, trends, charts, targets, caching, permissions, and row details remain intentionally deferred.
+- Publication and deployment remain separately gated.
 
 ### Decisions required
 
+None.
+
 ### Recommended next step
+
+Perform independent controller review, then preserve and publish the stacked feature branch only if the exact diff and evidence pass.

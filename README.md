@@ -69,6 +69,13 @@ characters. Restoration, deletion, permissions, lifecycle history, search,
 filtering, pagination, bulk actions, and project analytics are intentionally
 deferred.
 
+## Dashboard
+
+The landing Dashboard provides a read-only overview of total, active,
+archived, and other-status projects plus total, draft, and other-status
+knowledge items. Business KPIs, trends, targets, charts, and row-level details
+remain intentionally deferred.
+
 ## Knowledge Hub
 
 The Knowledge Hub supports the first bounded draft workflow:
