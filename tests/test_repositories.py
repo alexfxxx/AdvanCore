@@ -1,10 +1,16 @@
 """Tests for the repository layer using an isolated SQLite database."""
 
+from datetime import datetime, timedelta
+
 import pytest
 from sqlalchemy import create_engine
 
-from advancore.models import Base, KnowledgeItem, Project
-from advancore.repositories import KnowledgeItemRepository, ProjectRepository
+from advancore.models import ActivityLog, Base, KnowledgeItem, Project
+from advancore.repositories import (
+    ActivityLogRepository,
+    KnowledgeItemRepository,
+    ProjectRepository,
+)
 from advancore.services.database import create_session_factory, session_scope
 
 
@@ -148,3 +154,23 @@ class TestKnowledgeItemRepository:
             a_items = item_repo.list_by_project(project_a_id)
             assert len(a_items) == 1
             assert a_items[0].title == "A1"
+
+
+class TestActivityLogRepository:
+    def test_get_and_list_newest_first(self, sqlite_session_factory):
+        older_time = datetime(2026, 8, 22, 9, 0)
+        newer_time = older_time + timedelta(hours=1)
+
+        with session_scope(sqlite_session_factory) as session:
+            older = ActivityLog(action="older", created_at=older_time)
+            newer = ActivityLog(action="newer", created_at=newer_time)
+            session.add_all([older, newer])
+            session.flush()
+            older_id = older.id
+            newer_id = newer.id
+
+        with session_scope(sqlite_session_factory) as session:
+            repo = ActivityLogRepository(session)
+            assert repo.get_by_id(older_id).action == "older"
+            assert repo.get_by_id(999_999) is None
+            assert [record.id for record in repo.list()] == [newer_id, older_id]

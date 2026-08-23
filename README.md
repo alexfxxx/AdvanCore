@@ -87,6 +87,13 @@ The Knowledge Hub supports the first bounded draft workflow:
 Editing, deletion, review/approval, search, project linking, source metadata,
 attachments, AI features, and permissions are intentionally deferred.
 
+## Activity Log
+
+The Activity Log page provides a newest-first, read-only list and detail view
+for existing activity records. Event generation, audit policy, retention,
+search, export, actors, permissions, and record mutation are intentionally
+deferred.
+
 ## Running tests
 
 The project uses `pytest`. Run the test suite from the repository root with:
