@@ -11,6 +11,7 @@ import json
 import os
 import shutil
 import subprocess
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from unittest.mock import patch
 
@@ -28,6 +29,7 @@ from advancore.agent_runner import (
 from advancore.agent_runner.__main__ import main
 from advancore.agent_runner.auto_pipeline import DiffCheckResult, PytestResult
 from advancore.agent_runner.git_info import GitInfo
+from advancore.services.worker_usage_service import WorkerUsageService
 
 
 RAW_PRIMARY = "PRIMARY_RAW_TRANSCRIPT credential=primary-secret"
@@ -120,6 +122,10 @@ def _run_pipeline(
     fallback_mode: str = "success",
 ):
     repo, tasks, fake_bin = _repo(tmp_path)
+    now = datetime.now(timezone.utc)
+    WorkerUsageService(repo).record_snapshot(
+        "kimi", 1, now, now + timedelta(days=4), "owner-verified"
+    )
     log = _install_workers(fake_bin)
     monkeypatch.setenv("PATH", str(fake_bin))
     monkeypatch.setenv("WORKER_LOG", str(log))

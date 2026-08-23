@@ -13,6 +13,12 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import ClassVar
 
+from advancore.services.worker_usage_service import (
+    UsageBudgetError,
+    UsagePreflight,
+    WorkerUsageService,
+)
+
 
 class WorkerError(Exception):
     """Raised when a worker adapter encounters an unsupported configuration."""
@@ -40,6 +46,51 @@ WORKER_TERMINATION_GRACE_SECONDS = 1
 WORKER_RECOVERY_ACTION = (
     "Explicitly resume or start a separately reviewed worker invocation."
 )
+KIMI_EXECUTABLE = "kimi"
+
+
+def _kimi_usage_preflight(
+    executable: str, working_dir: Path, timeout_seconds: int
+) -> tuple[WorkerUsageService | None, UsagePreflight | None, WorkerResult | None]:
+    """Enforce the production Kimi budget before process launch.
+
+    Custom executable overrides exist only as an injected deterministic test seam;
+    registered production adapters always use the fixed ``kimi`` executable.
+    """
+    if executable != KIMI_EXECUTABLE:
+        return None, None, None
+    service = WorkerUsageService(working_dir)
+    try:
+        preflight = service.preflight("kimi", timeout_seconds)
+    except UsageBudgetError as exc:
+        return service, None, WorkerResult(
+            success=False,
+            message=str(exc),
+            terminal_reason="quota_or_capacity",
+            timeout_seconds=timeout_seconds,
+        )
+    return service, preflight, None
+
+
+def _record_kimi_runtime(
+    result: WorkerResult,
+    service: WorkerUsageService | None,
+    preflight: UsagePreflight | None,
+    elapsed_seconds: float,
+) -> WorkerResult:
+    """Record bounded Kimi runtime and fail closed if accounting is ambiguous."""
+    if service is None or preflight is None:
+        return result
+    try:
+        service.record_runtime("kimi", elapsed_seconds, preflight.reset_at)
+    except UsageBudgetError:
+        result.message = (
+            f"{result.message}; provider quota/capacity runtime accounting failed"
+        )
+        if result.terminal_reason not in {"timeout", "cancelled"}:
+            result.success = False
+            result.terminal_reason = "usage_accounting_failed"
+    return result
 
 
 def validate_worker_timeout(value: int) -> int:
@@ -253,7 +304,7 @@ class KimiWorkerAdapter(WorkerAdapter):
     ``--auto`` or ``--yolo``; those remain gated for explicit future policy.
     """
 
-    DEFAULT_EXECUTABLE: ClassVar[str] = "kimi"
+    DEFAULT_EXECUTABLE: ClassVar[str] = KIMI_EXECUTABLE
 
     def __init__(
         self, executable: str | None = None, allowed_scope: list[str] | None = None,
@@ -281,6 +332,16 @@ class KimiWorkerAdapter(WorkerAdapter):
         command = self.build_command(
             _governed_instruction(instruction, self.allowed_scope), working_dir
         )
+        usage_service, usage_preflight, blocked = _kimi_usage_preflight(
+            self.executable, working_dir, self.timeout_seconds
+        )
+        if blocked is not None:
+            return blocked
+        effective_timeout = (
+            usage_preflight.allowed_timeout_seconds
+            if usage_preflight is not None else self.timeout_seconds
+        )
+        started_at = time.monotonic()
         # Preserve the established injectable subprocess seam used by local
         # callers/tests; production uses the bounded Popen implementation.
         if (not self.implementation_worker
@@ -288,14 +349,20 @@ class KimiWorkerAdapter(WorkerAdapter):
             completed = subprocess.run(
                 command, cwd=working_dir, capture_output=True, text=True, check=False
             )
-            return WorkerResult(
+            result = WorkerResult(
                 success=completed.returncode == 0, command=command,
                 stdout=completed.stdout, stderr=completed.stderr,
-                returncode=completed.returncode, timeout_seconds=self.timeout_seconds,
+                returncode=completed.returncode, timeout_seconds=effective_timeout,
                 message="Worker finished successfully" if completed.returncode == 0
                 else "Worker finished with non-zero exit code",
             )
-        return run_bounded_worker_process(command, working_dir, self.timeout_seconds)
+            return _record_kimi_runtime(
+                result, usage_service, usage_preflight, time.monotonic() - started_at
+            )
+        result = run_bounded_worker_process(command, working_dir, effective_timeout)
+        return _record_kimi_runtime(
+            result, usage_service, usage_preflight, time.monotonic() - started_at
+        )
 
 
 KIMI_SWARM_INSTRUCTION_TEMPLATE = """Read AGENTS.md.
@@ -349,7 +416,7 @@ class KimiSwarmWorkerAdapter(WorkerAdapter):
     and it never falls back to unrestricted permission-bypass modes.
     """
 
-    DEFAULT_EXECUTABLE: ClassVar[str] = "kimi"
+    DEFAULT_EXECUTABLE: ClassVar[str] = KIMI_EXECUTABLE
 
     def __init__(
         self,
@@ -387,19 +454,35 @@ class KimiSwarmWorkerAdapter(WorkerAdapter):
         command = self.build_command(
             _governed_instruction(instruction, self.allowed_scope), working_dir
         )
+        usage_service, usage_preflight, blocked = _kimi_usage_preflight(
+            self.executable, working_dir, self.timeout_seconds
+        )
+        if blocked is not None:
+            return blocked
+        effective_timeout = (
+            usage_preflight.allowed_timeout_seconds
+            if usage_preflight is not None else self.timeout_seconds
+        )
+        started_at = time.monotonic()
         if (not self.implementation_worker
                 and getattr(subprocess.run, "__module__", "subprocess") != "subprocess"):
             completed = subprocess.run(
                 command, cwd=working_dir, capture_output=True, text=True, check=False
             )
-            return WorkerResult(
+            result = WorkerResult(
                 success=completed.returncode == 0, command=command,
                 stdout=completed.stdout, stderr=completed.stderr,
-                returncode=completed.returncode, timeout_seconds=self.timeout_seconds,
+                returncode=completed.returncode, timeout_seconds=effective_timeout,
                 message="Worker finished successfully" if completed.returncode == 0
                 else "Worker finished with non-zero exit code",
             )
-        return run_bounded_worker_process(command, working_dir, self.timeout_seconds)
+            return _record_kimi_runtime(
+                result, usage_service, usage_preflight, time.monotonic() - started_at
+            )
+        result = run_bounded_worker_process(command, working_dir, effective_timeout)
+        return _record_kimi_runtime(
+            result, usage_service, usage_preflight, time.monotonic() - started_at
+        )
 
 
 class DryRunWorkerAdapter(WorkerAdapter):

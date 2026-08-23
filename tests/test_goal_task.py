@@ -10,6 +10,7 @@ from __future__ import annotations
 import json
 import subprocess
 from dataclasses import dataclass
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
@@ -41,6 +42,7 @@ from advancore.agent_runner.goal_task import (
 from advancore.agent_runner.task import parse_task
 from advancore.agent_runner.validation import validate as validate_task_for_execution
 from advancore.agent_runner.worker import WorkerAdapter, WorkerResult
+from advancore.services.worker_usage_service import WorkerUsageService
 
 
 # ---------------------------------------------------------------------------
@@ -879,6 +881,10 @@ class TestCLI:
     def test_cli_execute_writes_draft(self, tmp_path: Path, monkeypatch):
         repo_root, tasks_dir = self._setup_repo(tmp_path)
         monkeypatch.chdir(repo_root)
+        now = datetime.now(timezone.utc)
+        WorkerUsageService(repo_root).record_snapshot(
+            "kimi", 1, now, now + timedelta(days=4), "owner-verified"
+        )
         output = _wrap_in_markers(_valid_proposal_dict())
         monkeypatch.setattr(
             "advancore.agent_runner.__main__.get_git_info",

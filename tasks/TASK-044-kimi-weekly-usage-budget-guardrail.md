@@ -48,6 +48,8 @@ The owner wants AdvanCore development automation to preserve provider capacity f
 - `tests/test_worker_usage_service.py`
 - `tests/test_worker_usage_guardrail.py`
 - `tests/test_dashboard_page.py`
+- `tests/test_goal_task.py`
+- `tests/test_worker_fallback_integration.py`
 - `docs/runbooks/WORKER_USAGE_BUDGET.md`
 
 ## Database impact
@@ -99,11 +101,27 @@ None. On 23 August 2026 the owner explicitly selected a 20% Kimi weekly allowanc
 
 ### Implemented
 
-Pending implementation.
+- Added a strict provider-neutral usage snapshot and runtime ledger under the existing Git-ignored `.agent_runner/usage/` boundary.
+- Enforced the owner-selected 20% Kimi weekly percentage cap, 3,600-second weekly local runtime cap, and 15-minute reading freshness requirement.
+- Added fail-closed Kimi/Kimi-Swarm preflight before process launch, remaining-runtime timeout clamping, and actual elapsed runtime accounting.
+- Preserved the existing provider-failure classification and repository-integrity gates for explicitly configured approved fallback.
+- Added a read-only Dashboard budget section showing Kimi reported usage, policy cap, local runtime, freshness/reset, and allowed/paused/unavailable state.
+- Added a bounded local command to record/show a fresh provider reading without credentials or provider scraping.
+- Added an operating runbook separating permanent AdvanCore policy from local authenticated reading refresh by Codex desktop or another approved controller.
+- Recorded the current local 44% Kimi reading as PAUSED; the artifact remains ignored and is not part of Git history.
 
 ### Files changed
 
-Pending implementation.
+- `tasks/TASK-044-kimi-weekly-usage-budget-guardrail.md`
+- `advancore/services/worker_usage_service.py`
+- `advancore/agent_runner/worker.py`
+- `advancore/pages/dashboard.py`
+- `tests/test_worker_usage_service.py`
+- `tests/test_worker_usage_guardrail.py`
+- `tests/test_dashboard_page.py`
+- `tests/test_goal_task.py`
+- `tests/test_worker_fallback_integration.py`
+- `docs/runbooks/WORKER_USAGE_BUDGET.md`
 
 ### Database changes
 
@@ -111,20 +129,27 @@ None.
 
 ### Tests and results
 
-Pending implementation.
+- Focused usage, worker, Dashboard, planner, fallback and timeout verification: passed.
+- Full project suite with the documented local PostgreSQL configuration: 770 passed.
+- Python compile/import and `git diff --check`: passed.
+- Streamlit Dashboard AppTest smoke: zero exceptions; rendered Kimi weekly usage 44%, policy limit 20%, and paused state.
+- Exact scope, unstaged/staged/new-file and ignored-artifact checks: passed; `.agent_runner/usage/` remains ignored.
 
 ### Assumptions
 
 - "One hour per week" means cumulative local Kimi/Kimi-Swarm process runtime during the same provider week represented by the current usage snapshot.
+- The refreshed Kimi countdown places the current weekly reset at approximately 28 August 2026 02:39 UTC; a fresh post-reset reading is still required before Kimi can resume.
 
 ### Risks / unresolved issues
 
 - Kimi currently has no confirmed stable machine-readable quota API, so an approved local controller must refresh the bounded usage snapshot from an authenticated reading.
+- The runtime budget counts local process wall time rather than vendor tokens; the provider percentage remains the primary allowance evidence.
+- Local controller-owned evidence is protected by validation and Git isolation, not by a separate operating-system identity; future multi-user deployment requires an authenticated service boundary.
 
 ### Decisions required
 
-None for this bounded task.
+None for implementation. Independent controller review is still required before publication approval.
 
 ### Recommended next step
 
-Implement the approved guardrail, verify it, then publish the feature branch for independent review.
+Commit and publish the verified TASK-044 feature branch for independent controller review; keep Kimi paused until a fresh post-reset reading is recorded.
