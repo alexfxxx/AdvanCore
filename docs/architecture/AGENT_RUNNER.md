@@ -636,6 +636,29 @@ Future workers can be added by implementing `WorkerAdapter`.
 
 ---
 
+### Governed proposal-planner fallback (TASK-028)
+
+Goal-task planning uses the fixed code-owned registry `dry-run`, `kimi`,
+`kimi-swarm`, and `codex`. Codex planning is a local, ephemeral, read-only
+single-prompt invocation with interactive approval denied. Kimi proposal calls
+use the same timeout and process-group cleanup boundary as implementation
+workers, but receive only the proposal instruction and no implementation or
+task-file authority.
+
+Fallback is disabled by default. An operator may configure one explicit hop,
+for example `--planner kimi-swarm --fallback-planner codex`. The hop is allowed
+only for deterministic executable, quota/capacity, or authentication
+availability failures after an independent comparison proves branch, HEAD,
+index/worktree, and remotes unchanged. Timeout, cancellation, malformed output,
+validation failure, ambiguous failure, or repository mutation stops. The
+runner, never a planner, validates the proposal and constructs `STATUS: DRAFT`.
+
+Goal-task artifacts and orchestration checkpoints retain the primary,
+configured fallback, terminal planner, timeout, failure classification,
+integrity result, and bounded recovery evidence. They exclude prompts,
+transcripts, credentials, and arbitrary command output. Resume uses the
+checkpointed planner policy and rejects explicit conflicting overrides.
+
 ## 6. Canonical worker instruction
 
 For task `tasks/TASK-005-local-agent-runner-foundation.md` the runner generates:

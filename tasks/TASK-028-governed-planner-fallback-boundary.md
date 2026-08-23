@@ -1,6 +1,6 @@
 # TASK-028 — Governed Planner Fallback Boundary
 
-STATUS: READY
+STATUS: APPROVED
 
 ## Objective
 
@@ -103,16 +103,55 @@ not spend approval, implementation, or publication authority.
 
 ### Implemented
 
+- Added a fixed proposal-planner registry with dry-run, Kimi, Kimi-Swarm, and
+  read-only Codex adapters.
+- Routed executable planners through bounded execution and added one-hop,
+  explicit availability fallback guarded by independent Git integrity checks.
+- Persisted bounded planner policy, terminal selection, classification,
+  integrity, timeout, and recovery evidence in artifacts/checkpoints.
+- Added CLI policy/timeout options and checkpoint-bound resume enforcement.
+- Added focused tests and architecture/decision documentation.
+
 ### Files changed
+
+- `advancore/agent_runner/worker.py`
+- `advancore/agent_runner/goal_task.py`
+- `advancore/agent_runner/orchestration.py`
+- `advancore/agent_runner/__main__.py`
+- `advancore/agent_runner/__init__.py`
+- `tests/test_planner_fallback.py`
+- `docs/architecture/AGENT_RUNNER.md`
+- `docs/decisions/ADR-028-governed-planner-fallback-boundary.md`
+- `tasks/TASK-028-governed-planner-fallback-boundary.md`
 
 ### Database changes
 
+None.
+
 ### Tests and results
+
+- `.venv/bin/python -m pytest tests/test_planner_fallback.py -v` — 12 passed.
+- `.venv/bin/python -m pytest tests/ -q` — 613 passed.
+- `git diff --check` — passed.
 
 ### Assumptions
 
+- FACT: planner fallback is proposal-only and does not convey implementation,
+  lifecycle, publication, or task-file authority.
+- ASSUMPTION: the existing strict worker-timeout bounds are also appropriate
+  for planner timeout input, with a shorter code-owned planner default.
+
 ### Risks / unresolved issues
+
+- Local provider CLI versions may change their accepted fixed arguments; such a
+  change must fail closed and be reviewed before the registry is updated.
 
 ### Decisions required
 
+None for implementation. Owner/reviewer approval remains required; this worker
+did not change task lifecycle status or self-approve.
+
 ### Recommended next step
+
+Review the diff and verification evidence, then make the explicit lifecycle
+decision. Do not commit until approved.

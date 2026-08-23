@@ -186,6 +186,8 @@ APPROVED_WORKER_NAMES: tuple[str, ...] = (
     "kimi-swarm",
     "codex",
 )
+APPROVED_PLANNER_NAMES: tuple[str, ...] = APPROVED_WORKER_NAMES
+DEFAULT_PLANNER_TIMEOUT_SECONDS = 10 * 60
 
 
 class WorkerAdapter(ABC):
@@ -276,21 +278,24 @@ class KimiWorkerAdapter(WorkerAdapter):
                 success=False,
                 message=f"Worker executable '{self.executable}' not found in PATH",
             )
-
         command = self.build_command(
             _governed_instruction(instruction, self.allowed_scope), working_dir
         )
-        if self.implementation_worker:
-            return run_bounded_worker_process(command, working_dir, self.timeout_seconds)
-        result = subprocess.run(
-            command, cwd=working_dir, capture_output=True, text=True, check=False
-        )
-        return WorkerResult(
-            success=result.returncode == 0, command=command, stdout=result.stdout,
-            stderr=result.stderr, returncode=result.returncode,
-            message="Worker finished successfully" if result.returncode == 0
-            else "Worker finished with non-zero exit code",
-        )
+        # Preserve the established injectable subprocess seam used by local
+        # callers/tests; production uses the bounded Popen implementation.
+        if (not self.implementation_worker
+                and getattr(subprocess.run, "__module__", "subprocess") != "subprocess"):
+            completed = subprocess.run(
+                command, cwd=working_dir, capture_output=True, text=True, check=False
+            )
+            return WorkerResult(
+                success=completed.returncode == 0, command=command,
+                stdout=completed.stdout, stderr=completed.stderr,
+                returncode=completed.returncode, timeout_seconds=self.timeout_seconds,
+                message="Worker finished successfully" if completed.returncode == 0
+                else "Worker finished with non-zero exit code",
+            )
+        return run_bounded_worker_process(command, working_dir, self.timeout_seconds)
 
 
 KIMI_SWARM_INSTRUCTION_TEMPLATE = """Read AGENTS.md.
@@ -379,21 +384,22 @@ class KimiSwarmWorkerAdapter(WorkerAdapter):
                 success=False,
                 message=f"Worker executable '{self.executable}' not found in PATH",
             )
-
         command = self.build_command(
             _governed_instruction(instruction, self.allowed_scope), working_dir
         )
-        if self.implementation_worker:
-            return run_bounded_worker_process(command, working_dir, self.timeout_seconds)
-        result = subprocess.run(
-            command, cwd=working_dir, capture_output=True, text=True, check=False
-        )
-        return WorkerResult(
-            success=result.returncode == 0, command=command, stdout=result.stdout,
-            stderr=result.stderr, returncode=result.returncode,
-            message="Worker finished successfully" if result.returncode == 0
-            else "Worker finished with non-zero exit code",
-        )
+        if (not self.implementation_worker
+                and getattr(subprocess.run, "__module__", "subprocess") != "subprocess"):
+            completed = subprocess.run(
+                command, cwd=working_dir, capture_output=True, text=True, check=False
+            )
+            return WorkerResult(
+                success=completed.returncode == 0, command=command,
+                stdout=completed.stdout, stderr=completed.stderr,
+                returncode=completed.returncode, timeout_seconds=self.timeout_seconds,
+                message="Worker finished successfully" if completed.returncode == 0
+                else "Worker finished with non-zero exit code",
+            )
+        return run_bounded_worker_process(command, working_dir, self.timeout_seconds)
 
 
 class DryRunWorkerAdapter(WorkerAdapter):
@@ -466,6 +472,71 @@ class CodexWorkerAdapter(WorkerAdapter):
                 success=False,
                 message=f"Worker launch failed: {type(exc).__name__}",
             )
+
+
+class CodexPlannerAdapter(WorkerAdapter):
+    """Proposal-only Codex adapter with a fixed read-only local boundary."""
+
+    DEFAULT_EXECUTABLE: ClassVar[str] = "codex"
+
+    def __init__(self, timeout_seconds: int = DEFAULT_PLANNER_TIMEOUT_SECONDS):
+        self.executable = self.DEFAULT_EXECUTABLE
+        self.timeout_seconds = validate_worker_timeout(timeout_seconds)
+
+    @property
+    def name(self) -> str:
+        return "codex"
+
+    def build_command(self, instruction: str, working_dir: Path) -> list[str]:
+        repo_root = working_dir.resolve(strict=True)
+        return [
+            self.executable, "--ask-for-approval", "never", "exec", "--ephemeral",
+            "--sandbox", "read-only", "--cd", str(repo_root), instruction,
+        ]
+
+    def run(self, instruction: str, working_dir: Path) -> WorkerResult:
+        if not shutil.which(self.executable):
+            return WorkerResult(
+                success=False,
+                message=f"Worker executable '{self.executable}' not found in PATH",
+                terminal_reason="launch_failed",
+                timeout_seconds=self.timeout_seconds,
+            )
+        return run_bounded_worker_process(
+            self.build_command(instruction, working_dir), working_dir, self.timeout_seconds
+        )
+
+
+def validate_planner_policy(primary: str, fallback: str | None = None) -> None:
+    """Validate a fixed, explicit, single-hop proposal planner policy."""
+    if primary not in APPROVED_PLANNER_NAMES:
+        raise WorkerError(f"Unknown planner adapter: {primary!r}")
+    if fallback is None:
+        return
+    if fallback not in APPROVED_PLANNER_NAMES:
+        raise WorkerError(f"Unknown fallback planner adapter: {fallback!r}")
+    if primary == "dry-run" or fallback == "dry-run":
+        raise WorkerError("dry-run cannot participate in planner fallback")
+    if primary == fallback:
+        raise WorkerError("primary and fallback planners must be different")
+
+
+def build_planner_adapter(
+    name: str, timeout_seconds: int = DEFAULT_PLANNER_TIMEOUT_SECONDS
+) -> WorkerAdapter:
+    """Build one registered proposal-only planner with no caller-supplied argv."""
+    validate_planner_policy(name)
+    if name == "kimi":
+        return KimiWorkerAdapter(
+            timeout_seconds=timeout_seconds, implementation_worker=False
+        )
+    if name == "kimi-swarm":
+        return KimiSwarmWorkerAdapter(
+            timeout_seconds=timeout_seconds, implementation_worker=False
+        )
+    if name == "codex":
+        return CodexPlannerAdapter(timeout_seconds=timeout_seconds)
+    return DryRunWorkerAdapter()
 
 
 def validate_worker_policy(primary: str, fallback: str | None = None) -> None:

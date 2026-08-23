@@ -26,7 +26,12 @@ from pathlib import Path
 from typing import Any
 
 from advancore.agent_runner.git_info import GitInfo, get_git_info
-from advancore.agent_runner.worker import WorkerAdapter, WorkerResult
+from advancore.agent_runner.worker import (
+    APPROVED_PLANNER_NAMES,
+    APPROVED_WORKER_NAMES,
+    WorkerAdapter,
+    WorkerResult,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -141,6 +146,14 @@ class GoalTaskGenerationResult:
     goal_accepted: bool = False
     planner_type: str | None = None
     planner_success: bool | None = None
+    primary_planner: str | None = None
+    fallback_planner: str | None = None
+    terminal_planner: str | None = None
+    planner_timeout_seconds: int | None = None
+    failure_classification: str | None = None
+    integrity_ok: bool | None = None
+    fallback_used: bool = False
+    recovery_evidence: list[str] = field(default_factory=list)
     proposal_valid: bool = False
     task_id: str | None = None
     task_path: Path | None = None
@@ -273,7 +286,8 @@ Required JSON fields:
   (list of strings).  Use ["None"] if there are none.
 
 Optional JSON field:
-- "recommended_worker": "kimi" or "kimi-swarm" (string)
+- "recommended_worker": one registered non-dry-run implementation worker:
+  {", ".join(name for name in APPROVED_WORKER_NAMES if name != "dry-run")} (string)
 
 Do NOT include any of the following fields:
 - task_id, status, lifecycle, branch, commit, push, merge, deploy, approved.
@@ -609,9 +623,13 @@ def validate_proposal(data: dict[str, Any]) -> GoalTaskProposal:
         recommended_worker = _validate_string(
             data["recommended_worker"], "recommended_worker", MAX_TITLE_LENGTH
         )
-        if recommended_worker not in {"kimi", "kimi-swarm"}:
+        allowed_recommended_workers = {
+            name for name in APPROVED_WORKER_NAMES if name != "dry-run"
+        }
+        if recommended_worker not in allowed_recommended_workers:
             raise ProposalError(
-                f"recommended_worker must be 'kimi' or 'kimi-swarm', got {recommended_worker!r}"
+                "recommended_worker must be a registered non-dry-run worker, "
+                f"got {recommended_worker!r}"
             )
 
     return GoalTaskProposal(
@@ -822,7 +840,7 @@ def build_goal_task_artifact_payload(
     dumps, credentials, and the full owner goal text.  It records only enough
     metadata to audit the attempt.
     """
-    return {
+    payload = {
         "timestamp": datetime.now(timezone.utc).isoformat(),
         "goal_hash": _hash_goal(goal.normalized),
         "goal_summary": _short_summary(goal.normalized),
@@ -852,6 +870,18 @@ def build_goal_task_artifact_payload(
         "next_action": result.next_action,
         "messages": list(result.messages or []),
     }
+    if result.primary_planner in APPROVED_PLANNER_NAMES:
+        payload.update({
+            "primary_planner": result.primary_planner,
+            "fallback_planner": result.fallback_planner,
+            "terminal_planner": result.terminal_planner,
+            "planner_timeout_seconds": result.planner_timeout_seconds,
+            "failure_classification": result.failure_classification,
+            "integrity_ok": result.integrity_ok,
+            "fallback_used": result.fallback_used,
+            "recovery_evidence": list(result.recovery_evidence),
+        })
+    return payload
 
 
 class GoalTaskArtifactWriteError(Exception):
@@ -902,6 +932,8 @@ def format_goal_task_report(result: GoalTaskGenerationResult) -> str:
 
     lines.append(f"Goal accepted:     {'yes' if result.goal_accepted else 'no'}")
     lines.append(f"Planner type:      {result.planner_type or 'n/a'}")
+    lines.append(f"Fallback planner:  {result.fallback_planner or 'none'}")
+    lines.append(f"Terminal planner:  {result.terminal_planner or 'n/a'}")
     lines.append(
         f"Planner success:   {result.planner_success if result.planner_success is not None else 'n/a'}"
     )
@@ -960,6 +992,8 @@ def _create_result(
     goal: OwnerGoal | None = None,
     planner_type: str | None = None,
     planner_success: bool | None = None,
+    fallback_planner: str | None = None,
+    planner_timeout_seconds: int | None = None,
     proposal_valid: bool = False,
     task_id: str | None = None,
     task_path: Path | None = None,
@@ -976,6 +1010,10 @@ def _create_result(
         goal_accepted=goal.accepted if goal else False,
         planner_type=planner_type,
         planner_success=planner_success,
+        primary_planner=planner_type,
+        fallback_planner=fallback_planner,
+        terminal_planner=planner_type,
+        planner_timeout_seconds=planner_timeout_seconds,
         proposal_valid=proposal_valid,
         task_id=task_id,
         task_path=task_path,
@@ -1020,6 +1058,33 @@ def _launch_planner(
     return planner.run(instruction, repo_root)
 
 
+def _classify_planner_failure(result: WorkerResult) -> str:
+    """Classify only deterministic local provider availability failures."""
+    if result.terminal_reason in {"timeout", "cancelled"}:
+        return result.terminal_reason.upper()
+    evidence = " ".join(
+        value for value in (result.message, result.stdout, result.stderr) if value
+    ).lower()[:4000]
+    if "not found in path" in evidence or "no such file or directory" in evidence:
+        return "EXECUTABLE_UNAVAILABLE"
+    if any(token in evidence for token in (
+        "quota", "rate limit", "rate-limit", "capacity", "overloaded",
+        "resource exhausted", "too many requests",
+    )):
+        return "QUOTA_OR_CAPACITY"
+    if any(token in evidence for token in (
+        "authentication unavailable", "not authenticated", "authentication required",
+        "unauthorized", "invalid api key", "login required",
+    )):
+        return "AUTHENTICATION_UNAVAILABLE"
+    return "UNKNOWN"
+
+
+_FALLBACK_ELIGIBLE = {
+    "EXECUTABLE_UNAVAILABLE", "QUOTA_OR_CAPACITY", "AUTHENTICATION_UNAVAILABLE"
+}
+
+
 def generate_goal_task(
     repo_root: Path,
     tasks_dir: Path,
@@ -1027,6 +1092,7 @@ def generate_goal_task(
     planner: WorkerAdapter,
     *,
     execute: bool = False,
+    fallback_planner: WorkerAdapter | None = None,
 ) -> GoalTaskGenerationResult:
     """Convert *goal* into a deterministic ``STATUS: DRAFT`` task file.
 
@@ -1048,7 +1114,7 @@ def generate_goal_task(
         result = _create_result(
             GoalTaskGenerationStatus.VALIDATION_FAILED,
             goal=owner_goal,
-            planner_type=planner.name,
+            planner_type=planner.name, fallback_planner=fallback_planner.name if fallback_planner else None,
             messages=owner_goal.messages
             + ["Goal rejected; no task file created."],
         )
@@ -1126,6 +1192,8 @@ def generate_goal_task(
         GoalTaskGenerationStatus.PLANNER_FAILED,
         goal=owner_goal,
         planner_type=planner.name,
+        fallback_planner=fallback_planner.name if fallback_planner else None,
+        planner_timeout_seconds=getattr(planner, "timeout_seconds", None),
         task_id=next_task_id,
         pre_snapshot=pre_snapshot,
         messages=owner_goal.messages
@@ -1138,10 +1206,64 @@ def generate_goal_task(
         f"Planner finished: success={planner_result.success}; {planner_result.message}"
     )
 
-    if not planner_result.success:
-        result.messages.append("FAIL: planner did not return successfully")
+    try:
+        post_snapshot = capture_repository_snapshot(repo_root)
+    except Exception as exc:
+        result.failure_classification = "INTEGRITY_AMBIGUOUS"
+        result.messages.append(f"FAIL: could not capture post-planner repository snapshot: {exc}")
         _maybe_write_artifact(result, owner_goal, repo_root)
         return result
+    result.post_snapshot = post_snapshot
+    mutation_messages = detect_repository_mutation(pre_snapshot, post_snapshot)
+    result.integrity_ok = not mutation_messages
+    result.recovery_evidence = [
+        f"branch_unchanged={pre_snapshot.git_info.current_branch == post_snapshot.git_info.current_branch}",
+        f"head_unchanged={pre_snapshot.git_info.head_sha == post_snapshot.git_info.head_sha}",
+        f"index_worktree_clean={post_snapshot.git_info.is_clean}",
+        f"remotes_unchanged={pre_snapshot.remote_urls == post_snapshot.remote_urls}",
+    ]
+    if mutation_messages:
+        result.status = GoalTaskGenerationStatus.MUTATION_DETECTED
+        result.failure_classification = "REPOSITORY_MUTATION"
+        result.messages.extend(mutation_messages)
+        result.messages.append("FAIL: planner mutated the repository; fallback and task write prohibited")
+        _maybe_write_artifact(result, owner_goal, repo_root)
+        return result
+
+    if not planner_result.success:
+        result.failure_classification = _classify_planner_failure(planner_result)
+        if fallback_planner is None or result.failure_classification not in _FALLBACK_ELIGIBLE:
+            result.messages.append("FAIL: planner failure is not eligible for fallback")
+            _maybe_write_artifact(result, owner_goal, repo_root)
+            return result
+        result.fallback_used = True
+        result.terminal_planner = fallback_planner.name
+        result.planner_timeout_seconds = getattr(fallback_planner, "timeout_seconds", None)
+        result.messages.append(
+            f"Fallback authorized once: {planner.name} -> {fallback_planner.name}"
+        )
+        planner_result = _launch_planner(repo_root, owner_goal, fallback_planner)
+        result.planner_success = planner_result.success
+        try:
+            fallback_post = capture_repository_snapshot(repo_root)
+        except Exception as exc:
+            result.integrity_ok = False
+            result.messages.append(f"FAIL: fallback integrity capture failed: {exc}")
+            _maybe_write_artifact(result, owner_goal, repo_root)
+            return result
+        result.post_snapshot = fallback_post
+        fallback_mutations = detect_repository_mutation(pre_snapshot, fallback_post)
+        result.integrity_ok = not fallback_mutations
+        if fallback_mutations:
+            result.status = GoalTaskGenerationStatus.MUTATION_DETECTED
+            result.messages.extend(fallback_mutations)
+            _maybe_write_artifact(result, owner_goal, repo_root)
+            return result
+        if not planner_result.success:
+            result.failure_classification = _classify_planner_failure(planner_result)
+            result.messages.append("FAIL: fallback planner failed; no further hop permitted")
+            _maybe_write_artifact(result, owner_goal, repo_root)
+            return result
 
     # Parse and validate the proposal.
     raw_output = ""
@@ -1158,27 +1280,6 @@ def generate_goal_task(
     except ProposalError as exc:
         result.status = GoalTaskGenerationStatus.PROPOSAL_REJECTED
         result.messages.append(f"FAIL: proposal rejected: {exc}")
-        _maybe_write_artifact(result, owner_goal, repo_root)
-        return result
-
-    # Capture post-planner repository snapshot and verify integrity.
-    try:
-        post_snapshot = capture_repository_snapshot(repo_root)
-    except Exception as exc:
-        result.messages.append(
-            f"FAIL: could not capture post-planner repository snapshot: {exc}"
-        )
-        _maybe_write_artifact(result, owner_goal, repo_root)
-        return result
-
-    result.post_snapshot = post_snapshot
-    mutation_messages = detect_repository_mutation(pre_snapshot, post_snapshot)
-    if mutation_messages:
-        result.status = GoalTaskGenerationStatus.MUTATION_DETECTED
-        result.messages.extend(mutation_messages)
-        result.messages.append(
-            "FAIL: planner mutated the repository; no task file may be written"
-        )
         _maybe_write_artifact(result, owner_goal, repo_root)
         return result
 

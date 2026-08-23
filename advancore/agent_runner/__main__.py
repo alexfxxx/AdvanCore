@@ -111,7 +111,9 @@ from advancore.agent_runner.review_bundle import (
 )
 from advancore.agent_runner.runner import RunnerResult, RunnerStatus, execute, plan
 from advancore.agent_runner.worker import (
+    APPROVED_PLANNER_NAMES,
     APPROVED_WORKER_NAMES,
+    DEFAULT_PLANNER_TIMEOUT_SECONDS,
     DEFAULT_WORKER_TIMEOUT_SECONDS,
     DryRunWorkerAdapter,
     KimiSwarmWorkerAdapter,
@@ -119,7 +121,9 @@ from advancore.agent_runner.worker import (
     WorkerAdapter,
     WorkerError,
     build_worker_adapter,
+    build_planner_adapter,
     validate_worker_policy,
+    validate_planner_policy,
     parse_worker_timeout,
 )
 from advancore.agent_runner.auto_pipeline import (
@@ -789,9 +793,18 @@ def main(argv: list[str] | None = None) -> int:
     )
     goal_task_parser.add_argument(
         "--planner",
-        choices=["dry-run", "kimi", "kimi-swarm"],
+        choices=APPROVED_PLANNER_NAMES,
         default="dry-run",
         help="Planner adapter to use (default: dry-run).",
+    )
+    goal_task_parser.add_argument(
+        "--fallback-planner", choices=APPROVED_PLANNER_NAMES, default=None,
+        help="Optional explicit one-hop availability fallback planner.",
+    )
+    goal_task_parser.add_argument(
+        "--planner-timeout", type=worker_timeout_arg,
+        default=DEFAULT_PLANNER_TIMEOUT_SECONDS,
+        help=f"Planner timeout in seconds (default: {DEFAULT_PLANNER_TIMEOUT_SECONDS}).",
     )
     goal_task_parser.add_argument(
         "--execute",
@@ -827,9 +840,18 @@ def main(argv: list[str] | None = None) -> int:
     )
     orchestrate_parser.add_argument(
         "--planner",
-        choices=["dry-run", "kimi", "kimi-swarm"],
+        choices=APPROVED_PLANNER_NAMES,
         default="dry-run",
         help="Planner adapter to use for goal-task generation (default: dry-run).",
+    )
+    orchestrate_parser.add_argument(
+        "--fallback-planner", choices=APPROVED_PLANNER_NAMES, default=None,
+        help="Optional explicit one-hop availability fallback planner.",
+    )
+    orchestrate_parser.add_argument(
+        "--planner-timeout", type=worker_timeout_arg,
+        default=DEFAULT_PLANNER_TIMEOUT_SECONDS,
+        help=f"Planner timeout in seconds (default: {DEFAULT_PLANNER_TIMEOUT_SECONDS}).",
     )
     orchestrate_parser.add_argument(
         "--worker",
@@ -1957,12 +1979,16 @@ def main(argv: list[str] | None = None) -> int:
             print(format_goal_task_report(result), file=sys.stderr)
             return 1
 
-        if args.planner == "kimi":
-            planner: WorkerAdapter = KimiWorkerAdapter(implementation_worker=False)
-        elif args.planner == "kimi-swarm":
-            planner = KimiSwarmWorkerAdapter(implementation_worker=False)
-        else:
-            planner = DryRunWorkerAdapter()
+        try:
+            validate_planner_policy(args.planner, args.fallback_planner)
+            planner = build_planner_adapter(args.planner, args.planner_timeout)
+            fallback_planner = (
+                build_planner_adapter(args.fallback_planner, args.planner_timeout)
+                if args.fallback_planner else None
+            )
+        except WorkerError as exc:
+            print(f"FAIL: {exc}", file=sys.stderr)
+            return 1
 
         result = generate_goal_task(
             repo_root=git_info.repo_root,
@@ -1970,6 +1996,7 @@ def main(argv: list[str] | None = None) -> int:
             goal=args.goal,
             planner=planner,
             execute=args.execute,
+            fallback_planner=fallback_planner,
         )
         print(format_goal_task_report(result))
         success = result.ok or result.status == GoalTaskGenerationStatus.DRY_RUN
@@ -2020,6 +2047,8 @@ def main(argv: list[str] | None = None) -> int:
         raw_argv = list(argv) if argv is not None else sys.argv[1:]
         override_flags = {
             "--planner",
+            "--fallback-planner",
+            "--planner-timeout",
             "--worker",
             "--fallback-worker",
             "--controller",
@@ -2037,6 +2066,8 @@ def main(argv: list[str] | None = None) -> int:
                 goal=args.goal,
                 resume_run_id=args.resume_run_id,
                 planner=args.planner,
+                fallback_planner=args.fallback_planner,
+                planner_timeout_seconds=args.planner_timeout,
                 worker=args.worker,
                 fallback_worker=args.fallback_worker,
                 controller=args.controller,

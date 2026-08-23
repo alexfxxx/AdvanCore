@@ -93,14 +93,14 @@ from advancore.agent_runner.review_bundle import (
 )
 from advancore.agent_runner.task import Task, TaskError, find_task
 from advancore.agent_runner.worker import (
+    DEFAULT_PLANNER_TIMEOUT_SECONDS,
     DEFAULT_WORKER_TIMEOUT_SECONDS,
-    DryRunWorkerAdapter,
-    KimiSwarmWorkerAdapter,
-    KimiWorkerAdapter,
     WorkerAdapter,
+    build_planner_adapter,
     build_worker_adapter,
     validate_worker_timeout,
     validate_worker_policy,
+    validate_planner_policy,
 )
 
 
@@ -181,6 +181,8 @@ class OrchestrationConfig:
     goal: str | None = None
     resume_run_id: str | None = None
     planner: str = "dry-run"
+    fallback_planner: str | None = None
+    planner_timeout_seconds: int = DEFAULT_PLANNER_TIMEOUT_SECONDS
     worker: str = "dry-run"
     fallback_worker: str | None = None
     controller: str = "manual"
@@ -204,6 +206,8 @@ class OrchestrationConfig:
         elif self.max_rework > MAX_REWORK_CYCLES:
             object.__setattr__(self, "max_rework", MAX_REWORK_CYCLES)
         try:
+            validate_planner_policy(self.planner, self.fallback_planner)
+            validate_worker_timeout(self.planner_timeout_seconds)
             validate_worker_policy(self.worker, self.fallback_worker)
             validate_worker_timeout(self.worker_timeout_seconds)
         except Exception as exc:
@@ -253,6 +257,8 @@ class OrchestrationCheckpoint:
     max_rework: int
     apply: bool
     phase: str
+    fallback_planner: str | None = None
+    planner_timeout_seconds: int = DEFAULT_PLANNER_TIMEOUT_SECONDS
     worker_timeout_seconds: int = DEFAULT_WORKER_TIMEOUT_SECONDS
     fallback_worker: str | None = None
     completed_phases: list[str] = field(default_factory=list)
@@ -273,6 +279,10 @@ class OrchestrationCheckpoint:
     auto_artifact_path: str | None = None
     auto_status: str | None = None
     worker_terminal_reason: str | None = None
+    terminal_planner: str | None = None
+    planner_failure_classification: str | None = None
+    planner_integrity_ok: bool | None = None
+    planner_recovery_evidence: list[str] = field(default_factory=list)
     worker_recovery_action: str | None = None
     finalization_artifact_path: str | None = None
     commit_sha: str | None = None
@@ -359,11 +369,7 @@ def _repo_fingerprint(repo_root: Path) -> dict[str, Any]:
 
 def _build_planner(name: str) -> WorkerAdapter:
     """Return a planner worker adapter by name."""
-    if name == "kimi":
-        return KimiWorkerAdapter()
-    if name == "kimi-swarm":
-        return KimiSwarmWorkerAdapter()
-    return DryRunWorkerAdapter()
+    return build_planner_adapter(name)
 
 
 def _build_worker(name: str, allowed_scope: list[str] | None = None) -> WorkerAdapter:
@@ -499,6 +505,8 @@ def _new_checkpoint(config: OrchestrationConfig, repo_root: Path) -> Orchestrati
         goal_hash=_hash_goal(goal),
         goal_summary=_short_summary(goal),
         planner=config.planner,
+        fallback_planner=config.fallback_planner,
+        planner_timeout_seconds=config.planner_timeout_seconds,
         worker=config.worker,
         fallback_worker=config.fallback_worker,
         controller=config.controller,
@@ -1018,13 +1026,18 @@ def _phase_task_draft_generation(
         return None
 
     goal = config.goal or ""
-    planner = _build_planner(config.planner)
+    planner = build_planner_adapter(config.planner, config.planner_timeout_seconds)
+    fallback_planner = (
+        build_planner_adapter(config.fallback_planner, config.planner_timeout_seconds)
+        if config.fallback_planner else None
+    )
     gen_result = generate_goal_task(
         repo_root=repo_root,
         tasks_dir=tasks_dir,
         goal=goal,
         planner=planner,
         execute=config.apply,
+        fallback_planner=fallback_planner,
     )
 
     checkpoint.goal_task_artifact_path = (
@@ -1034,6 +1047,10 @@ def _phase_task_draft_generation(
     checkpoint.task_path = str(gen_result.task_path) if gen_result.task_path else None
     checkpoint.task_written = gen_result.task_written
     checkpoint.owner_decision_count = gen_result.owner_decision_count
+    checkpoint.terminal_planner = gen_result.terminal_planner
+    checkpoint.planner_failure_classification = gen_result.failure_classification
+    checkpoint.planner_integrity_ok = gen_result.integrity_ok
+    checkpoint.planner_recovery_evidence = list(gen_result.recovery_evidence)
 
     if not config.apply:
         # Preview stops here without writing a checkpoint.
@@ -1733,6 +1750,8 @@ def run_orchestration(
         # planner, worker, controller, repair, or rework behavior mid-run.
         override_attributes = {
             "--planner": "planner",
+            "--fallback-planner": "fallback_planner",
+            "--planner-timeout": "planner_timeout_seconds",
             "--worker": "worker",
             "--fallback-worker": "fallback_worker",
             "--controller": "controller",
@@ -1746,10 +1765,17 @@ def run_orchestration(
             if getattr(config, override_attributes[flag])
             != getattr(checkpoint, override_attributes[flag])
         )
+        if conflicting_overrides:
+            raise OrchestrationError(
+                "Resume overrides cannot be mixed with checkpointed planner/worker policy: "
+                + ", ".join(conflicting_overrides)
+            )
         config = OrchestrationConfig(
             goal=None,
             resume_run_id=config.resume_run_id,
             planner=checkpoint.planner,
+            fallback_planner=checkpoint.fallback_planner,
+            planner_timeout_seconds=checkpoint.planner_timeout_seconds,
             worker=checkpoint.worker,
             fallback_worker=checkpoint.fallback_worker,
             controller=checkpoint.controller,
