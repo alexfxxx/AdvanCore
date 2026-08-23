@@ -53,7 +53,8 @@ def test_available_kimi_run_uses_remaining_timeout_and_records_runtime(tmp_path)
     service = _record(tmp_path)
     reset_at = service.get_summary().reset_at
     assert reset_at is not None
-    service.record_runtime("kimi", 3500, reset_at)
+    reservation = service.preflight("kimi", 3500)
+    service.record_runtime("kimi", 3500, reservation)
     adapter = KimiWorkerAdapter(timeout_seconds=600)
     expected = WorkerResult(True, message="ok")
     with patch("advancore.agent_runner.worker.shutil.which", return_value="/usr/bin/kimi"), patch(

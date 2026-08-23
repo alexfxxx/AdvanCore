@@ -1,30 +1,35 @@
-"""Local, provider-neutral worker usage evidence and policy checks.
+"""Controller-owned worker usage evidence and fail-closed policy checks.
 
 Provider quota readings are written by an approved local controller/operator.
-AdvanCore validates and enforces the bounded evidence; it does not scrape vendor
-accounts, store credentials, or infer provider balances from model transcripts.
+Authoritative evidence lives outside the implementation worker's repository
+workspace. AdvanCore validates and enforces the bounded evidence; it does not
+scrape vendor accounts, store credentials, or infer balances from transcripts.
 """
 
 from __future__ import annotations
 
 import argparse
+import fcntl
+import hashlib
 import json
 import math
 import os
 import tempfile
+import uuid
 from dataclasses import asdict, dataclass
 from datetime import datetime, timedelta, timezone
 from enum import Enum
 from pathlib import Path
-from typing import Any
+from typing import Any, TextIO
 
 
-USAGE_SCHEMA_VERSION = 1
+USAGE_SCHEMA_VERSION = 2
 SUPPORTED_PROVIDERS = ("kimi",)
 APPROVED_USAGE_SOURCES = ("kimi-cli", "kimi-web", "owner-verified")
 KIMI_WEEKLY_PERCENT_LIMIT = 20.0
 KIMI_WEEKLY_RUNTIME_LIMIT_SECONDS = 60 * 60
 USAGE_SNAPSHOT_MAX_AGE_SECONDS = 15 * 60
+MIN_NEW_PERIOD_RESET_ADVANCE = timedelta(days=1)
 MAX_EVIDENCE_BYTES = 16 * 1024
 
 
@@ -42,6 +47,7 @@ class UsageState(str, Enum):
 class UsageSnapshot:
     schema_version: int
     provider: str
+    period_id: str
     weekly_used_percent: float
     checked_at: datetime
     reset_at: datetime
@@ -52,6 +58,7 @@ class UsageSnapshot:
 class RuntimeLedger:
     schema_version: int
     provider: str
+    period_id: str
     reset_at: datetime
     runtime_seconds: int
 
@@ -77,9 +84,18 @@ class UsageSummary:
 @dataclass(frozen=True)
 class UsagePreflight:
     provider: str
+    period_id: str
     allowed_timeout_seconds: int
+    reserved_seconds: int
     reset_at: datetime
     summary: UsageSummary
+
+
+@dataclass
+class _ActiveReservation:
+    preflight: UsagePreflight
+    lock_handle: TextIO
+    evidence_fingerprint: str
 
 
 def _utc_now() -> datetime:
@@ -119,6 +135,18 @@ def _strict_int(value: Any, field: str, minimum: int, maximum: int) -> int:
     return value
 
 
+def _validate_period_id(value: Any) -> str:
+    if not isinstance(value, str):
+        raise UsageBudgetError("usage evidence period is invalid")
+    try:
+        parsed = uuid.UUID(value)
+    except (ValueError, AttributeError) as exc:
+        raise UsageBudgetError("usage evidence period is invalid") from exc
+    if str(parsed) != value:
+        raise UsageBudgetError("usage evidence period is invalid")
+    return value
+
+
 def _validate_provider(provider: str) -> str:
     if provider not in SUPPORTED_PROVIDERS:
         raise UsageBudgetError("unsupported provider")
@@ -140,7 +168,7 @@ def _read_json(path: Path) -> dict[str, Any]:
 
 
 def _atomic_write_json(path: Path, payload: dict[str, Any]) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
+    path.parent.mkdir(parents=True, mode=0o700, exist_ok=True)
     handle = None
     temporary_name = None
     try:
@@ -148,12 +176,14 @@ def _atomic_write_json(path: Path, payload: dict[str, Any]) -> None:
             mode="w", encoding="utf-8", dir=path.parent, prefix=".usage-", delete=False
         )
         temporary_name = handle.name
+        os.chmod(temporary_name, 0o600)
         json.dump(payload, handle, sort_keys=True, separators=(",", ":"))
         handle.write("\n")
         handle.flush()
         os.fsync(handle.fileno())
         handle.close()
         os.replace(temporary_name, path)
+        os.chmod(path, 0o600)
     except OSError as exc:
         if handle is not None and not handle.closed:
             handle.close()
@@ -165,13 +195,32 @@ def _atomic_write_json(path: Path, payload: dict[str, Any]) -> None:
         raise UsageBudgetError("cannot write usage evidence") from exc
 
 
-class WorkerUsageService:
-    """Read, write and enforce bounded local worker usage evidence."""
+def _is_within(path: Path, parent: Path) -> bool:
+    return path == parent or parent in path.parents
 
-    def __init__(self, repo_root: Path, now_provider=_utc_now):
+
+def _default_usage_dir(repo_root: Path) -> Path:
+    """Return a deterministic controller state directory outside *repo_root*."""
+    identity = hashlib.sha256(str(repo_root).encode("utf-8")).hexdigest()[:20]
+    return repo_root.parent / ".advancore-controller" / identity / "usage"
+
+
+class WorkerUsageService:
+    """Read, write and enforce controller-owned worker usage evidence."""
+
+    def __init__(
+        self,
+        repo_root: Path,
+        now_provider=_utc_now,
+        usage_dir: Path | None = None,
+    ):
         self.repo_root = repo_root.resolve()
-        self.usage_dir = self.repo_root / ".agent_runner" / "usage"
+        proposed = usage_dir or _default_usage_dir(self.repo_root)
+        self.usage_dir = proposed.resolve()
+        if _is_within(self.usage_dir, self.repo_root):
+            raise UsageBudgetError("usage evidence must be outside the worker workspace")
         self._now_provider = now_provider
+        self._active_reservation: _ActiveReservation | None = None
 
     def snapshot_path(self, provider: str) -> Path:
         return self.usage_dir / f"{_validate_provider(provider)}-reported.json"
@@ -179,13 +228,59 @@ class WorkerUsageService:
     def runtime_path(self, provider: str) -> Path:
         return self.usage_dir / f"{_validate_provider(provider)}-runtime.json"
 
+    def quarantine_path(self, provider: str) -> Path:
+        return self.usage_dir / f"{_validate_provider(provider)}-quarantine.json"
+
+    def lock_path(self, provider: str) -> Path:
+        return self.usage_dir / f"{_validate_provider(provider)}.lock"
+
+    def _ensure_usage_dir(self) -> None:
+        try:
+            self.usage_dir.mkdir(parents=True, mode=0o700, exist_ok=True)
+            if self.usage_dir.is_symlink() or not self.usage_dir.is_dir():
+                raise UsageBudgetError("usage evidence location is invalid")
+            os.chmod(self.usage_dir, 0o700)
+        except OSError as exc:
+            raise UsageBudgetError("usage evidence location is unavailable") from exc
+
+    def _acquire_lock(self, provider: str) -> TextIO:
+        self._ensure_usage_dir()
+        path = self.lock_path(provider)
+        flags = os.O_CREAT | os.O_RDWR
+        if hasattr(os, "O_CLOEXEC"):
+            flags |= os.O_CLOEXEC
+        if hasattr(os, "O_NOFOLLOW"):
+            flags |= os.O_NOFOLLOW
+        handle: TextIO | None = None
+        try:
+            descriptor = os.open(path, flags, 0o600)
+            handle = os.fdopen(descriptor, "a+", encoding="utf-8")
+            fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+            os.chmod(path, 0o600)
+            return handle
+        except BlockingIOError as exc:
+            if handle is not None:
+                handle.close()
+            raise UsageBudgetError("usage accounting is busy") from exc
+        except OSError as exc:
+            if handle is not None:
+                handle.close()
+            raise UsageBudgetError("usage accounting lock is unavailable") from exc
+
+    @staticmethod
+    def _release_lock(handle: TextIO) -> None:
+        try:
+            fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+        finally:
+            handle.close()
+
     def _load_snapshot(
         self, provider: str, now: datetime, *, require_fresh: bool = True
     ) -> UsageSnapshot:
         provider = _validate_provider(provider)
         payload = _read_json(self.snapshot_path(provider))
         expected = {
-            "schema_version", "provider", "weekly_used_percent",
+            "schema_version", "provider", "period_id", "weekly_used_percent",
             "checked_at", "reset_at", "source",
         }
         if set(payload) != expected:
@@ -212,6 +307,7 @@ class WorkerUsageService:
         return UsageSnapshot(
             schema_version=USAGE_SCHEMA_VERSION,
             provider=provider,
+            period_id=_validate_period_id(payload["period_id"]),
             weekly_used_percent=_strict_number(
                 payload["weekly_used_percent"], "weekly_used_percent", 0, 100
             ),
@@ -220,50 +316,80 @@ class WorkerUsageService:
             source=source,
         )
 
-    def _load_runtime(self, provider: str, reset_at: datetime) -> RuntimeLedger:
+    def _load_runtime(self, provider: str, period_id: str) -> RuntimeLedger:
         provider = _validate_provider(provider)
         payload = _read_json(self.runtime_path(provider))
-        expected = {"schema_version", "provider", "reset_at", "runtime_seconds"}
+        expected = {
+            "schema_version", "provider", "period_id", "reset_at", "runtime_seconds"
+        }
         if set(payload) != expected:
             raise UsageBudgetError("runtime evidence is invalid")
         if payload["schema_version"] != USAGE_SCHEMA_VERSION:
             raise UsageBudgetError("runtime evidence schema is unsupported")
         if payload["provider"] != provider:
             raise UsageBudgetError("runtime evidence provider mismatch")
-        ledger_reset = _timestamp(payload["reset_at"], "reset_at")
-        if ledger_reset != reset_at:
+        ledger_period = _validate_period_id(payload["period_id"])
+        if ledger_period != period_id:
             raise UsageBudgetError("runtime evidence period mismatch")
         return RuntimeLedger(
             schema_version=USAGE_SCHEMA_VERSION,
             provider=provider,
-            reset_at=ledger_reset,
+            period_id=ledger_period,
+            reset_at=_timestamp(payload["reset_at"], "reset_at"),
             runtime_seconds=_strict_int(
-                payload["runtime_seconds"],
-                "runtime_seconds",
-                0,
-                8 * 24 * 60 * 60,
+                payload["runtime_seconds"], "runtime_seconds", 0, 8 * 24 * 60 * 60
             ),
         )
 
-    def get_summary(self, provider: str = "kimi") -> UsageSummary:
-        provider = _validate_provider(provider)
-        now = self._now_provider().astimezone(timezone.utc)
-        try:
-            snapshot = self._load_snapshot(provider, now, require_fresh=False)
-            ledger = self._load_runtime(provider, snapshot.reset_at)
-        except UsageBudgetError as exc:
-            return UsageSummary(
-                provider=provider,
-                state=UsageState.UNAVAILABLE,
-                weekly_used_percent=None,
-                weekly_percent_limit=KIMI_WEEKLY_PERCENT_LIMIT,
-                runtime_seconds=None,
-                runtime_limit_seconds=KIMI_WEEKLY_RUNTIME_LIMIT_SECONDS,
-                checked_at=None,
-                reset_at=None,
-                source=None,
-                message=str(exc),
-            )
+    def _write_runtime(
+        self, provider: str, period_id: str, reset_at: datetime, runtime_seconds: int
+    ) -> None:
+        _atomic_write_json(
+            self.runtime_path(provider),
+            {
+                "schema_version": USAGE_SCHEMA_VERSION,
+                "provider": provider,
+                "period_id": period_id,
+                "reset_at": _canonical_timestamp(reset_at),
+                "runtime_seconds": runtime_seconds,
+            },
+        )
+
+    def _write_quarantine(self, provider: str, now: datetime) -> None:
+        _atomic_write_json(
+            self.quarantine_path(provider),
+            {
+                "schema_version": USAGE_SCHEMA_VERSION,
+                "provider": provider,
+                "detected_at": _canonical_timestamp(now),
+                "reason": "usage accounting integrity failure",
+            },
+        )
+
+    def _evidence_fingerprint(self, provider: str) -> str:
+        digest = hashlib.sha256()
+        for path in (self.snapshot_path(provider), self.runtime_path(provider)):
+            if path.is_symlink() or not path.is_file():
+                raise UsageBudgetError("usage evidence is unavailable")
+            try:
+                content = path.read_bytes()
+            except OSError as exc:
+                raise UsageBudgetError("usage evidence is invalid") from exc
+            if len(content) > MAX_EVIDENCE_BYTES:
+                raise UsageBudgetError("usage evidence is invalid")
+            digest.update(path.name.encode("utf-8"))
+            digest.update(b"\0")
+            digest.update(content)
+        return digest.hexdigest()
+
+    def _summary_unlocked(self, provider: str, now: datetime) -> UsageSummary:
+        quarantine = self.quarantine_path(provider)
+        if quarantine.exists() or quarantine.is_symlink():
+            raise UsageBudgetError("usage evidence is quarantined")
+        snapshot = self._load_snapshot(provider, now, require_fresh=False)
+        ledger = self._load_runtime(provider, snapshot.period_id)
+        if ledger.reset_at != snapshot.reset_at:
+            raise UsageBudgetError("runtime evidence reset mismatch")
         unavailable_reasons = []
         if now - snapshot.checked_at > timedelta(
             seconds=USAGE_SNAPSHOT_MAX_AGE_SECONDS
@@ -300,27 +426,90 @@ class WorkerUsageService:
             ),
         )
 
+    def get_summary(self, provider: str = "kimi") -> UsageSummary:
+        provider = _validate_provider(provider)
+        now = self._now_provider().astimezone(timezone.utc)
+        handle = None
+        try:
+            handle = self._acquire_lock(provider)
+            return self._summary_unlocked(provider, now)
+        except UsageBudgetError as exc:
+            return UsageSummary(
+                provider=provider,
+                state=UsageState.UNAVAILABLE,
+                weekly_used_percent=None,
+                weekly_percent_limit=KIMI_WEEKLY_PERCENT_LIMIT,
+                runtime_seconds=None,
+                runtime_limit_seconds=KIMI_WEEKLY_RUNTIME_LIMIT_SECONDS,
+                checked_at=None,
+                reset_at=None,
+                source=None,
+                message=str(exc),
+            )
+        finally:
+            if handle is not None:
+                self._release_lock(handle)
+
     def preflight(self, provider: str, requested_timeout_seconds: int) -> UsagePreflight:
+        provider = _validate_provider(provider)
+        if self._active_reservation is not None:
+            raise UsageBudgetError("usage accounting reservation is already active")
         if isinstance(requested_timeout_seconds, bool) or not isinstance(
             requested_timeout_seconds, int
         ) or requested_timeout_seconds <= 0:
             raise UsageBudgetError("provider quota/capacity check has invalid timeout")
-        summary = self.get_summary(provider)
-        if not summary.allowed:
-            raise UsageBudgetError(
-                f"provider quota/capacity paused: {summary.message}"
+        handle = self._acquire_lock(provider)
+        try:
+            now = self._now_provider().astimezone(timezone.utc)
+            try:
+                summary = self._summary_unlocked(provider, now)
+            except UsageBudgetError as exc:
+                raise UsageBudgetError(
+                    f"provider quota/capacity paused: {exc}"
+                ) from exc
+            if not summary.allowed:
+                raise UsageBudgetError(
+                    f"provider quota/capacity paused: {summary.message}"
+                )
+            snapshot = self._load_snapshot(provider, now)
+            ledger = self._load_runtime(provider, snapshot.period_id)
+            remaining = summary.runtime_limit_seconds - ledger.runtime_seconds
+            if remaining <= 0:
+                raise UsageBudgetError(
+                    "provider quota/capacity paused: weekly runtime limit reached"
+                )
+            reserved = min(requested_timeout_seconds, remaining)
+            self._write_runtime(
+                provider,
+                snapshot.period_id,
+                snapshot.reset_at,
+                ledger.runtime_seconds + reserved,
             )
-        assert summary.runtime_seconds is not None
-        assert summary.reset_at is not None
-        remaining = summary.runtime_limit_seconds - summary.runtime_seconds
-        if remaining <= 0:
-            raise UsageBudgetError("provider quota/capacity paused: weekly runtime limit reached")
-        return UsagePreflight(
-            provider=provider,
-            allowed_timeout_seconds=min(requested_timeout_seconds, remaining),
-            reset_at=summary.reset_at,
-            summary=summary,
-        )
+            preflight = UsagePreflight(
+                provider=provider,
+                period_id=snapshot.period_id,
+                allowed_timeout_seconds=reserved,
+                reserved_seconds=reserved,
+                reset_at=snapshot.reset_at,
+                summary=summary,
+            )
+            self._active_reservation = _ActiveReservation(
+                preflight=preflight,
+                lock_handle=handle,
+                evidence_fingerprint=self._evidence_fingerprint(provider),
+            )
+            return preflight
+        except Exception:
+            self._release_lock(handle)
+            raise
+
+    def abandon_reservation(self, preflight: UsagePreflight) -> None:
+        """Release the lock while retaining the full fail-closed reservation."""
+        active = self._active_reservation
+        if active is None or active.preflight != preflight:
+            raise UsageBudgetError("runtime accounting reservation mismatch")
+        self._active_reservation = None
+        self._release_lock(active.lock_handle)
 
     def record_snapshot(
         self,
@@ -336,18 +525,7 @@ class WorkerUsageService:
             raise UsageBudgetError("usage evidence source is invalid")
         if checked_at.tzinfo is None or reset_at.tzinfo is None:
             raise UsageBudgetError("usage evidence timestamps must include a timezone")
-        snapshot_payload = {
-            "schema_version": USAGE_SCHEMA_VERSION,
-            "provider": provider,
-            "weekly_used_percent": _strict_number(
-                weekly_used_percent, "weekly_used_percent", 0, 100
-            ),
-            "checked_at": _canonical_timestamp(checked_at),
-            "reset_at": _canonical_timestamp(reset_at),
-            "source": source,
-        }
-        # Validate the proposed evidence through the same strict reader by checking
-        # its timestamps before any write occurs.
+        used = _strict_number(weekly_used_percent, "weekly_used_percent", 0, 100)
         checked = checked_at.astimezone(timezone.utc)
         reset = reset_at.astimezone(timezone.utc)
         if checked > now + timedelta(seconds=30):
@@ -357,66 +535,104 @@ class WorkerUsageService:
         if reset <= now or reset <= checked or reset - checked > timedelta(days=8):
             raise UsageBudgetError("usage reset window is invalid")
 
-        runtime_seconds = 0
-        runtime_path = self.runtime_path(provider)
-        if runtime_path.exists():
-            current_payload = _read_json(runtime_path)
-            expected_runtime_fields = {
-                "schema_version", "provider", "reset_at", "runtime_seconds"
-            }
-            if set(current_payload) != expected_runtime_fields:
-                raise UsageBudgetError("runtime evidence is invalid")
-            if current_payload["schema_version"] != USAGE_SCHEMA_VERSION:
-                raise UsageBudgetError("runtime evidence schema is unsupported")
-            if current_payload["provider"] != provider:
-                raise UsageBudgetError("runtime evidence provider mismatch")
-            if _timestamp(current_payload.get("reset_at"), "reset_at") == reset:
-                runtime_seconds = _strict_int(
-                    current_payload.get("runtime_seconds"),
-                    "runtime_seconds",
-                    0,
-                    8 * 24 * 60 * 60,
+        handle = self._acquire_lock(provider)
+        try:
+            snapshot_path = self.snapshot_path(provider)
+            runtime_path = self.runtime_path(provider)
+            if snapshot_path.exists() != runtime_path.exists():
+                raise UsageBudgetError("usage evidence is incomplete")
+            if snapshot_path.exists():
+                current = self._load_snapshot(provider, now, require_fresh=False)
+                ledger = self._load_runtime(provider, current.period_id)
+                if ledger.reset_at != current.reset_at:
+                    raise UsageBudgetError("runtime evidence reset mismatch")
+                is_new_period = (
+                    checked >= current.reset_at
+                    and reset >= current.reset_at + MIN_NEW_PERIOD_RESET_ADVANCE
                 )
-        runtime_payload = {
-            "schema_version": USAGE_SCHEMA_VERSION,
-            "provider": provider,
-            "reset_at": _canonical_timestamp(reset),
-            "runtime_seconds": runtime_seconds,
-        }
-        _atomic_write_json(runtime_path, runtime_payload)
-        _atomic_write_json(self.snapshot_path(provider), snapshot_payload)
-        return self._load_snapshot(provider, now)
+                if not is_new_period and used < current.weekly_used_percent:
+                    raise UsageBudgetError(
+                        "weekly usage cannot decrease within the active provider period"
+                    )
+                period_id = str(uuid.uuid4()) if is_new_period else current.period_id
+                runtime_seconds = 0 if is_new_period else ledger.runtime_seconds
+            else:
+                period_id = str(uuid.uuid4())
+                runtime_seconds = 0
+
+            snapshot_payload = {
+                "schema_version": USAGE_SCHEMA_VERSION,
+                "provider": provider,
+                "period_id": period_id,
+                "weekly_used_percent": used,
+                "checked_at": _canonical_timestamp(checked),
+                "reset_at": _canonical_timestamp(reset),
+                "source": source,
+            }
+            self._write_runtime(provider, period_id, reset, runtime_seconds)
+            _atomic_write_json(snapshot_path, snapshot_payload)
+            loaded = self._load_snapshot(provider, now)
+            self._load_runtime(provider, loaded.period_id)
+            quarantine = self.quarantine_path(provider)
+            if quarantine.exists():
+                if quarantine.is_symlink():
+                    raise UsageBudgetError("usage quarantine is invalid")
+                quarantine.unlink()
+            return loaded
+        finally:
+            self._release_lock(handle)
 
     def record_runtime(
-        self, provider: str, elapsed_seconds: float, expected_reset_at: datetime
+        self, provider: str, elapsed_seconds: float, preflight: UsagePreflight
     ) -> RuntimeLedger:
         provider = _validate_provider(provider)
-        if isinstance(elapsed_seconds, bool) or not isinstance(elapsed_seconds, (int, float)):
-            raise UsageBudgetError("runtime accounting is invalid")
-        if not math.isfinite(float(elapsed_seconds)) or elapsed_seconds < 0:
-            raise UsageBudgetError("runtime accounting is invalid")
-        if expected_reset_at.tzinfo is None:
-            raise UsageBudgetError("runtime accounting period is invalid")
+        active = self._active_reservation
+        if active is None or active.preflight != preflight or preflight.provider != provider:
+            raise UsageBudgetError("runtime accounting reservation mismatch")
         now = self._now_provider().astimezone(timezone.utc)
-        snapshot = self._load_snapshot(provider, now)
-        expected_reset = expected_reset_at.astimezone(timezone.utc)
-        if snapshot.reset_at != expected_reset:
-            raise UsageBudgetError("runtime accounting period changed")
-        ledger = self._load_runtime(provider, snapshot.reset_at)
-        updated = ledger.runtime_seconds + max(1, math.ceil(elapsed_seconds))
-        payload = {
-            "schema_version": USAGE_SCHEMA_VERSION,
-            "provider": provider,
-            "reset_at": _canonical_timestamp(snapshot.reset_at),
-            "runtime_seconds": updated,
-        }
-        _atomic_write_json(self.runtime_path(provider), payload)
-        return RuntimeLedger(
-            schema_version=USAGE_SCHEMA_VERSION,
-            provider=provider,
-            reset_at=snapshot.reset_at,
-            runtime_seconds=updated,
-        )
+        try:
+            if isinstance(elapsed_seconds, bool) or not isinstance(
+                elapsed_seconds, (int, float)
+            ):
+                raise UsageBudgetError("runtime accounting is invalid")
+            if not math.isfinite(float(elapsed_seconds)) or elapsed_seconds < 0:
+                raise UsageBudgetError("runtime accounting is invalid")
+            if self._evidence_fingerprint(provider) != active.evidence_fingerprint:
+                raise UsageBudgetError("usage evidence changed during worker execution")
+            # Freshness is a launch gate. A correctly reserved long run may
+            # legitimately outlive the 15-minute snapshot freshness window.
+            snapshot = self._load_snapshot(provider, now, require_fresh=False)
+            if snapshot.period_id != preflight.period_id:
+                raise UsageBudgetError("runtime accounting period changed")
+            ledger = self._load_runtime(provider, snapshot.period_id)
+            if ledger.reset_at != snapshot.reset_at:
+                raise UsageBudgetError("runtime evidence reset mismatch")
+            expected_reserved_total = (
+                preflight.summary.runtime_seconds + preflight.reserved_seconds
+                if preflight.summary.runtime_seconds is not None else None
+            )
+            if ledger.runtime_seconds != expected_reserved_total:
+                raise UsageBudgetError("runtime accounting reservation changed")
+            charged = min(
+                preflight.reserved_seconds, max(1, math.ceil(elapsed_seconds))
+            )
+            updated = ledger.runtime_seconds - preflight.reserved_seconds + charged
+            self._write_runtime(
+                provider, snapshot.period_id, snapshot.reset_at, updated
+            )
+            return RuntimeLedger(
+                schema_version=USAGE_SCHEMA_VERSION,
+                provider=provider,
+                period_id=snapshot.period_id,
+                reset_at=snapshot.reset_at,
+                runtime_seconds=updated,
+            )
+        except UsageBudgetError:
+            self._write_quarantine(provider, now)
+            raise
+        finally:
+            self._active_reservation = None
+            self._release_lock(active.lock_handle)
 
 
 def _summary_payload(summary: UsageSummary) -> dict[str, Any]:

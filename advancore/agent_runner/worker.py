@@ -82,7 +82,7 @@ def _record_kimi_runtime(
     if service is None or preflight is None:
         return result
     try:
-        service.record_runtime("kimi", elapsed_seconds, preflight.reset_at)
+        service.record_runtime("kimi", elapsed_seconds, preflight)
     except UsageBudgetError:
         result.message = (
             f"{result.message}; provider quota/capacity runtime accounting failed"
