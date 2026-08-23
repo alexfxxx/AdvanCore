@@ -1,6 +1,6 @@
 # TASK-025 — Explicit Owner Decision Intake and One-Command Resume
 
-STATUS: READY
+STATUS: APPROVED
 
 ## Objective
 
@@ -116,16 +116,56 @@ does not pre-approve TASK-025 implementation or authorize inferred decisions.
 
 ### Implemented
 
+- Added fixed, resume-only owner actions for task approval/blocking and
+  implementation approval/rework/blocking.
+- Added fail-closed phase, task/bundle/handoff, branch/HEAD, note, duplicate,
+  conflict, and resume-override validation.
+- Added write-free preview and explicit apply paths that reuse lifecycle,
+  controller-decision, handoff reconciliation, and orchestration APIs.
+- Added bounded owner-action evidence to checkpoints and consolidated reports.
+- Added focused tests, architecture documentation, operator runbook, and ADR.
+
 ### Files changed
+
+- `advancore/agent_runner/orchestration.py`
+- `advancore/agent_runner/__main__.py`
+- `advancore/agent_runner/__init__.py`
+- `tests/test_owner_decision_intake.py`
+- `docs/architecture/AGENT_RUNNER.md`
+- `docs/runbooks/OWNER_DECISION_RESUME.md`
+- `docs/decisions/ADR-025-explicit-owner-decision-intake-resume.md`
+- `tasks/TASK-025-explicit-owner-decision-intake-resume.md`
 
 ### Database changes
 
+- None.
+
 ### Tests and results
+
+- `.venv/bin/python -m pytest tests/test_owner_decision_intake.py -v` — 10 passed.
+- `.venv/bin/python -m pytest tests/ -v` — 590 passed.
+- `git diff --check` — passed.
 
 ### Assumptions
 
+- The optional owner note is bounded to one line and 400 characters, stricter
+  than the existing generic controller-decision field bound.
+- An approved local client supplies the fixed enum only after the owner has
+  explicitly made the decision; AdvanCore does not parse natural language.
+
 ### Risks / unresolved issues
+
+- Authentication, identity federation, and remote decision intake remain out
+  of scope; the command relies on the approved local operating boundary.
+- Final owner/controller review is still required before any commit or status
+  transition of this task.
 
 ### Decisions required
 
+- Owner/controller review of the TASK-025 implementation and evidence.
+- No DRAFT-to-READY or implementation approval decision was made by the worker.
+
 ### Recommended next step
+
+- Review the eight scoped file changes and verification evidence, then record
+  the owner/controller decision through the existing governed process.

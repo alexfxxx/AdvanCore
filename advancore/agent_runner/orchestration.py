@@ -46,10 +46,13 @@ from advancore.agent_runner.controller_adapter import (
     dispatch_controller_adapter,
 )
 from advancore.agent_runner.controller_decision import (
+    ControllerDecision,
     DecisionValue,
+    build_controller_decision,
     default_decisions_dir,
     find_latest_decision,
     load_controller_decision,
+    write_controller_decision,
 )
 from advancore.agent_runner.controller_handoff import (
     ControllerHandoff,
@@ -112,6 +115,7 @@ CHECKPOINT_FILENAME = "{run_id}.json"
 MAX_GOAL_LENGTH = 2000
 MAX_REPAIR_ATTEMPTS = 2
 MAX_REWORK_CYCLES = 1
+MAX_OWNER_NOTE_LENGTH = 400
 
 
 # ---------------------------------------------------------------------------
@@ -160,6 +164,16 @@ class OrchestrationStatus(str, Enum):
     FAILED = "FAILED"
 
 
+class OwnerAction(str, Enum):
+    """Explicit, phase-bound actions that only an owner may submit."""
+
+    APPROVE_TASK = "APPROVE_TASK"
+    BLOCK_TASK = "BLOCK_TASK"
+    APPROVE_IMPLEMENTATION = "APPROVE_IMPLEMENTATION"
+    REWORK_IMPLEMENTATION = "REWORK_IMPLEMENTATION"
+    BLOCK_IMPLEMENTATION = "BLOCK_IMPLEMENTATION"
+
+
 @dataclass
 class OrchestrationConfig:
     """Bounded configuration for one orchestration run."""
@@ -174,6 +188,9 @@ class OrchestrationConfig:
     max_rework: int = 0
     apply: bool = False
     worker_timeout_seconds: int = DEFAULT_WORKER_TIMEOUT_SECONDS
+    owner_action: OwnerAction | str | None = None
+    owner_note: str | None = None
+    resume_overrides: tuple[str, ...] = ()
 
     def __post_init__(self):
         """Clamp budgets to approved bounds."""
@@ -191,6 +208,34 @@ class OrchestrationConfig:
             validate_worker_timeout(self.worker_timeout_seconds)
         except Exception as exc:
             raise OrchestrationError(str(exc)) from exc
+
+        if self.owner_action is not None:
+            try:
+                action = (
+                    self.owner_action
+                    if isinstance(self.owner_action, OwnerAction)
+                    else OwnerAction(str(self.owner_action).upper())
+                )
+            except ValueError as exc:
+                raise OrchestrationError(
+                    f"Unknown owner action: {self.owner_action!r}; allowed values are "
+                    + ", ".join(item.value for item in OwnerAction)
+                ) from exc
+            object.__setattr__(self, "owner_action", action)
+            if not self.resume_run_id:
+                raise OrchestrationError("Owner action requires --resume <run-id>")
+
+        if self.owner_note is not None:
+            note = self.owner_note.strip()
+            if not self.owner_action:
+                raise OrchestrationError("Owner note requires --owner-action")
+            if "\n" in note or "\r" in note:
+                raise OrchestrationError("Owner note must be a single line")
+            if len(note) > MAX_OWNER_NOTE_LENGTH:
+                raise OrchestrationError(
+                    f"Owner note exceeds {MAX_OWNER_NOTE_LENGTH} characters"
+                )
+            object.__setattr__(self, "owner_note", note or None)
 
 
 @dataclass
@@ -237,6 +282,11 @@ class OrchestrationCheckpoint:
     consumed_decision_paths: list[str] = field(default_factory=list)
     mutations: list[str] = field(default_factory=list)
     messages: list[str] = field(default_factory=list)
+    owner_action: str | None = None
+    owner_action_actor: str | None = None
+    owner_action_evidence_path: str | None = None
+    owner_action_state: str | None = None
+    owner_action_next_action: str | None = None
     created_at: str = field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
     updated_at: str = field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
 
@@ -262,6 +312,7 @@ class OrchestrationResult:
     next_action: str
     resume_command: str
     messages: list[str] = field(default_factory=list)
+    owner_action_evidence: dict[str, str | None] = field(default_factory=dict)
 
 
 # ---------------------------------------------------------------------------
@@ -512,6 +563,13 @@ def _build_result(
         next_action=next_action,
         resume_command=_resume_command(checkpoint.run_id),
         messages=messages or list(checkpoint.messages),
+        owner_action_evidence={
+            "action": checkpoint.owner_action,
+            "actor": checkpoint.owner_action_actor,
+            "evidence_path": checkpoint.owner_action_evidence_path,
+            "state": checkpoint.owner_action_state,
+            "next_action": checkpoint.owner_action_next_action,
+        },
     )
 
 
@@ -607,6 +665,296 @@ def _update_fingerprint(checkpoint: OrchestrationCheckpoint, repo_root: Path) ->
     checkpoint.branch = fp["branch"]
     checkpoint.expected_head = fp["head"]
     checkpoint.path_fingerprint = fp["changed_paths"]
+
+
+# ---------------------------------------------------------------------------
+# Explicit owner-action intake
+# ---------------------------------------------------------------------------
+
+
+_TASK_OWNER_ACTIONS = {OwnerAction.APPROVE_TASK, OwnerAction.BLOCK_TASK}
+_IMPLEMENTATION_OWNER_ACTIONS = {
+    OwnerAction.APPROVE_IMPLEMENTATION,
+    OwnerAction.REWORK_IMPLEMENTATION,
+    OwnerAction.BLOCK_IMPLEMENTATION,
+}
+_IMPLEMENTATION_DECISIONS = {
+    OwnerAction.APPROVE_IMPLEMENTATION: DecisionValue.APPROVE,
+    OwnerAction.REWORK_IMPLEMENTATION: DecisionValue.REWORK,
+    OwnerAction.BLOCK_IMPLEMENTATION: DecisionValue.BLOCKED,
+}
+
+
+def _record_owner_action_evidence(
+    checkpoint: OrchestrationCheckpoint,
+    *,
+    action: OwnerAction,
+    evidence_path: Path,
+    state: str,
+    next_action: str,
+) -> None:
+    """Store only bounded authority metadata, never conversation content."""
+    checkpoint.owner_action = action.value
+    checkpoint.owner_action_actor = ActorRole.OWNER.value
+    checkpoint.owner_action_evidence_path = str(evidence_path)
+    checkpoint.owner_action_state = state
+    checkpoint.owner_action_next_action = next_action
+
+
+def _matching_owner_decisions(
+    repo_root: Path,
+    checkpoint: OrchestrationCheckpoint,
+    expected: ControllerDecision,
+) -> tuple[list[Path], list[Path]]:
+    """Return exact and conflicting unconsumed owner decisions for this bundle."""
+    exact: list[Path] = []
+    conflicts: list[Path] = []
+    decisions_dir = default_decisions_dir(repo_root)
+    if not decisions_dir.exists():
+        return exact, conflicts
+    consumed = set(checkpoint.consumed_decision_paths)
+    for path in decisions_dir.glob("*.json"):
+        if str(path.resolve()) in consumed:
+            continue
+        try:
+            candidate = load_controller_decision(path)
+        except Exception:
+            continue
+        if candidate.task_id != expected.task_id:
+            continue
+        candidate_bundle = Path(candidate.bundle_path)
+        expected_bundle = Path(expected.bundle_path)
+        if not candidate_bundle.is_absolute():
+            candidate_bundle = repo_root / candidate_bundle
+        if not expected_bundle.is_absolute():
+            expected_bundle = repo_root / expected_bundle
+        if candidate_bundle.resolve() != expected_bundle.resolve():
+            continue
+        same = (
+            candidate.actor_role == expected.actor_role
+            and candidate.decision == expected.decision
+            and candidate.note == expected.note
+            and candidate.bundle_branch == expected.bundle_branch
+            and candidate.bundle_pre_head == expected.bundle_pre_head
+            and candidate.bundle_post_head == expected.bundle_post_head
+        )
+        (exact if same else conflicts).append(path)
+    return exact, conflicts
+
+
+def _prepare_owner_handoff(
+    checkpoint: OrchestrationCheckpoint,
+    repo_root: Path,
+) -> tuple[Path, ReviewBundle, ControllerHandoff, bool]:
+    """Validate current bundle/handoff evidence and return it without writing."""
+    if not checkpoint.task_id or not checkpoint.review_bundle_path:
+        raise OrchestrationError("Checkpoint lacks task/review-bundle linkage")
+    bundle_path = Path(checkpoint.review_bundle_path)
+    if not bundle_path.is_absolute():
+        bundle_path = repo_root / bundle_path
+    bundle = load_review_bundle(bundle_path)
+    if bundle.task_id != checkpoint.task_id:
+        raise OrchestrationError("Checkpoint task does not match review bundle")
+    latest = _find_latest_bundle_for_task(repo_root, checkpoint.task_id)
+    if latest is None or latest.resolve() != bundle_path.resolve():
+        raise OrchestrationError("Checkpoint review bundle is not the current bundle")
+
+    git_info = get_git_info(cwd=repo_root)
+    intended = build_controller_handoff(
+        bundle_path, bundle, git_info=git_info, repo_root=repo_root
+    )
+    if not checkpoint.handoff_path:
+        return bundle_path, bundle, intended, False
+
+    handoff_path = Path(checkpoint.handoff_path)
+    if not handoff_path.is_absolute():
+        handoff_path = repo_root / handoff_path
+    handoff = load_controller_handoff(handoff_path)
+    if handoff.state not in {
+        HandoffState.WAITING_DECISION.value,
+        HandoffState.DECISION_RECEIVED.value,
+    }:
+        raise OrchestrationError(
+            f"Owner action handoff is already consumed or blocked: {handoff.state}"
+        )
+    if (
+        handoff.task_id != intended.task_id
+        or Path(handoff.bundle_path).name != Path(intended.bundle_path).name
+        or handoff.bundle_branch != intended.bundle_branch
+        or handoff.bundle_pre_head != intended.bundle_pre_head
+        or handoff.bundle_post_head != intended.bundle_post_head
+    ):
+        raise OrchestrationError("Checkpoint handoff does not match current review evidence")
+    return bundle_path, bundle, handoff, True
+
+
+def _intake_owner_action(
+    config: OrchestrationConfig,
+    checkpoint: OrchestrationCheckpoint,
+    repo_root: Path,
+    tasks_dir: Path,
+) -> OrchestrationResult | None:
+    """Preview or record one explicit owner action at its exact gate."""
+    action = config.owner_action
+    if action is None:
+        return None
+    if not isinstance(action, OwnerAction):  # normalized by config
+        raise OrchestrationError("Invalid owner action")
+    if config.resume_overrides:
+        raise OrchestrationError(
+            "Owner action cannot be mixed with adapter/budget/timeout changes: "
+            + ", ".join(config.resume_overrides)
+        )
+
+    expected_phase = (
+        OrchestrationPhase.AWAITING_TASK_APPROVAL
+        if action in _TASK_OWNER_ACTIONS
+        else OrchestrationPhase.AWAITING_IMPLEMENTATION_DECISION
+    )
+    if checkpoint.phase != expected_phase.value:
+        raise OrchestrationError(
+            f"Owner action {action.value} is not valid at phase {checkpoint.phase}; "
+            f"expected {expected_phase.value}"
+        )
+    _check_branch_head(checkpoint, repo_root)
+
+    if action in _TASK_OWNER_ACTIONS:
+        if not checkpoint.task_id or not checkpoint.task_path:
+            raise OrchestrationError("Checkpoint lacks DRAFT task linkage")
+        task = find_task(tasks_dir, checkpoint.task_id)
+        if task.path.resolve() != Path(checkpoint.task_path).resolve():
+            raise OrchestrationError("Checkpoint task path does not match task lookup")
+        if task.status.upper() != TaskStatus.DRAFT.value:
+            raise OrchestrationError(
+                f"Owner task action requires DRAFT; found {task.status!r}"
+            )
+        target = (
+            TaskStatus.READY
+            if action == OwnerAction.APPROVE_TASK
+            else TaskStatus.BLOCKED
+        )
+        lifecycle = transition_task(
+            tasks_dir,
+            checkpoint.task_id,
+            target,
+            ActorRole.OWNER,
+            apply=config.apply,
+            git_info=get_git_info(cwd=repo_root) if config.apply else None,
+        )
+        if not lifecycle.ok or (config.apply and not lifecycle.applied):
+            raise OrchestrationError(
+                "Owner task action failed lifecycle validation: "
+                + "; ".join(lifecycle.messages)
+            )
+        state = "applied" if config.apply else "preview"
+        next_action = (
+            "Continue the existing orchestration resume state machine."
+            if action == OwnerAction.APPROVE_TASK
+            else "Task is blocked; owner/controller review is required."
+        )
+        _record_owner_action_evidence(
+            checkpoint,
+            action=action,
+            evidence_path=task.path,
+            state=state,
+            next_action=next_action,
+        )
+        if not config.apply:
+            return _build_result(
+                checkpoint,
+                ok=True,
+                status=OrchestrationStatus.AWAITING_TASK_APPROVAL,
+                next_action="Re-run this exact command with --apply to record the owner action and continue.",
+                messages=[
+                    f"Preview: owner {action.value} is valid for DRAFT task {task.task_id}.",
+                    f"Preview: existing lifecycle API would request DRAFT -> {target.value}.",
+                    "Preview: no lifecycle, audit, checkpoint, Git, or publication state was written.",
+                ],
+            )
+        checkpoint.mutations.append(
+            f"owner action: {action.value} via lifecycle API"
+        )
+        save_checkpoint(checkpoint, repo_root)
+        return None
+
+    bundle_path, bundle, handoff, handoff_exists = _prepare_owner_handoff(
+        checkpoint, repo_root
+    )
+    decision = build_controller_decision(
+        bundle_path=bundle_path,
+        bundle=bundle,
+        decision=_IMPLEMENTATION_DECISIONS[action],
+        actor_role=ActorRole.OWNER,
+        note=config.owner_note,
+        task_id=checkpoint.task_id,
+        task_filename=bundle.task_filename,
+        repo_root=repo_root,
+    )
+    exact, conflicts = _matching_owner_decisions(repo_root, checkpoint, decision)
+    if conflicts:
+        raise OrchestrationError("Conflicting owner decision already exists for this bundle")
+    if len(exact) > 1:
+        raise OrchestrationError("Duplicate-ambiguous owner decisions exist for this bundle")
+
+    evidence_path = exact[0] if exact else default_decisions_dir(repo_root) / "(new owner decision)"
+    _record_owner_action_evidence(
+        checkpoint,
+        action=action,
+        evidence_path=evidence_path,
+        state="preview" if not config.apply else "applied",
+        next_action="Continue the existing decision reconciliation and resume state machine.",
+    )
+    if not config.apply:
+        return _build_result(
+            checkpoint,
+            ok=True,
+            status=OrchestrationStatus.AWAITING_IMPLEMENTATION_DECISION,
+            next_action="Re-run this exact command with --apply to record the owner action and continue.",
+            messages=[
+                f"Preview: owner {action.value} maps to ControllerDecision {_IMPLEMENTATION_DECISIONS[action].value}.",
+                f"Preview: exact task/bundle/branch/HEAD evidence validated at {bundle_path}.",
+                "Preview: existing handoff write/reconciliation and decision write APIs would be used.",
+                "Preview: no decision, handoff, audit, checkpoint, Git, or publication state was written.",
+            ],
+        )
+
+    if not handoff_exists:
+        handoff_path = write_controller_handoff(handoff, default_handoff_dir(repo_root))
+        checkpoint.handoff_path = str(handoff_path)
+        checkpoint.handoff_request_id = handoff.request_id
+    else:
+        handoff_path = Path(checkpoint.handoff_path or "")
+        if not handoff_path.is_absolute():
+            handoff_path = repo_root / handoff_path
+    decision_path = exact[0] if exact else write_controller_decision(
+        decision, default_decisions_dir(repo_root)
+    )
+    if handoff.state == HandoffState.WAITING_DECISION.value:
+        reconciliation = reconcile_controller_handoff(
+            request_path=handoff_path,
+            decision_path=decision_path,
+            repo_root=repo_root,
+            git_info=get_git_info(cwd=repo_root),
+        )
+        if not reconciliation.ok:
+            raise OrchestrationError(
+                "Owner decision reconciliation failed: "
+                + "; ".join(reconciliation.messages)
+            )
+    elif not exact or handoff.decision_path is None:
+        raise OrchestrationError("Consumed handoff lacks one exactly matching owner decision")
+    checkpoint.decision_path = str(decision_path)
+    checkpoint.decision = decision.decision
+    _record_owner_action_evidence(
+        checkpoint,
+        action=action,
+        evidence_path=decision_path,
+        state="applied",
+        next_action="Continue the existing decision reconciliation and resume state machine.",
+    )
+    checkpoint.mutations.append(f"owner action: {action.value} decision recorded")
+    save_checkpoint(checkpoint, repo_root)
+    return None
 
 
 # ---------------------------------------------------------------------------
@@ -1375,6 +1723,21 @@ def run_orchestration(
         # Resume uses the provider selections and bounded budgets recorded by
         # the authoritative checkpoint.  CLI defaults must not silently change
         # planner, worker, controller, repair, or rework behavior mid-run.
+        override_attributes = {
+            "--planner": "planner",
+            "--worker": "worker",
+            "--fallback-worker": "fallback_worker",
+            "--controller": "controller",
+            "--repair-attempts": "repair_attempts",
+            "--max-rework": "max_rework",
+            "--worker-timeout": "worker_timeout_seconds",
+        }
+        conflicting_overrides = tuple(
+            flag
+            for flag in config.resume_overrides
+            if getattr(config, override_attributes[flag])
+            != getattr(checkpoint, override_attributes[flag])
+        )
         config = OrchestrationConfig(
             goal=None,
             resume_run_id=config.resume_run_id,
@@ -1386,7 +1749,16 @@ def run_orchestration(
             max_rework=checkpoint.max_rework,
             worker_timeout_seconds=checkpoint.worker_timeout_seconds,
             apply=config.apply,
+            owner_action=config.owner_action,
+            owner_note=config.owner_note,
+            resume_overrides=conflicting_overrides,
         )
+
+    owner_action_result = _intake_owner_action(
+        config, checkpoint, repo_root, tasks_dir
+    )
+    if owner_action_result is not None:
+        return owner_action_result
 
     # New runs in preview mode do not persist a checkpoint.
     if not config.resume_run_id and not config.apply:

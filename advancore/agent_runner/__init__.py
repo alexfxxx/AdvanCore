@@ -87,6 +87,7 @@ from advancore.agent_runner.goal_task import (
     write_goal_task_artifact,
 )
 from advancore.agent_runner.orchestration import (
+    OwnerAction,
     OrchestrationCheckpoint,
     OrchestrationConfig,
     OrchestrationError,
@@ -208,6 +209,7 @@ __all__ = [
     "OrchestrationPhase",
     "OrchestrationResult",
     "OrchestrationStatus",
+    "OwnerAction",
     "default_orchestration_dir",
     "load_checkpoint",
     "run_orchestration",

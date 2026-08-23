@@ -119,6 +119,37 @@ resetting, merging, or broadening scope.
 
 ## 4. Safety model
 
+### Explicit owner decision intake and resume (TASK-025)
+
+`orchestrate --resume <run-id> --owner-action <ACTION>` accepts one fixed,
+code-owned owner action at an existing approval gate. It does not parse natural
+language or allow planners, workers, controller adapters, or transport drivers
+to assert owner authority. AdvanCore validates the checkpointed phase, task or
+review-bundle linkage, handoff evidence, branch, HEAD, and resume configuration
+before it calls an existing governance API.
+
+Task actions are valid only at `AWAITING_TASK_APPROVAL`. `APPROVE_TASK` and
+`BLOCK_TASK` call the existing owner lifecycle transition from the checkpointed
+`DRAFT` task to `READY` or `BLOCKED`; status text is never edited directly.
+Implementation actions are valid only at `AWAITING_IMPLEMENTATION_DECISION`.
+They map to the existing `ControllerDecision` values, use actor `owner`, bind to
+the current checkpointed bundle and handoff evidence, and then use the existing
+handoff reconciliation and orchestration state machine.
+
+Preview is the default and performs no writes. `--apply` durably records the
+action and continues the same invocation. Checkpoints and consolidated results
+retain only bounded evidence: action, actor, evidence path, preview/applied
+state, and one next action. Optional notes are stripped, limited to one line and
+400 characters, and stored only in implementation decision records. No
+conversation transcript is accepted or persisted.
+
+The authority boundary is explicit: Codex desktop or another approved local
+client may invoke the CLI only after the owner actually supplies the decision.
+The client relays that explicit choice; permanent AdvanCore code validates and
+records it. Missing, inferred, stale, phase-mismatched, conflicting,
+duplicate-ambiguous, or consumed actions fail closed. Resume-time provider,
+budget, and timeout overrides cannot be combined with owner action intake.
+
 ### Bounded worker lifetime and recovery (TASK-024)
 
 Kimi, Kimi-Swarm, and Codex execute through one code-owned process runner. The

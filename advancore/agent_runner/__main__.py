@@ -134,6 +134,7 @@ from advancore.agent_runner.goal_task import (
     format_goal_task_report,
 )
 from advancore.agent_runner.orchestration import (
+    OwnerAction,
     OrchestrationConfig,
     OrchestrationError,
     OrchestrationPhase,
@@ -361,6 +362,10 @@ def _format_orchestration_result(result: OrchestrationResult) -> str:
     lines.append(f"Controller gate:   {result.controller_gate or 'n/a'}")
     lines.append(f"Mutations:         {', '.join(result.mutations_performed) or 'none'}")
     lines.append(f"Owner decision:    {'required' if result.owner_decision_required else 'no'}")
+    if any(result.owner_action_evidence.values()):
+        lines.append("Owner action evidence:")
+        for key, value in result.owner_action_evidence.items():
+            lines.append(f"  {key}: {value or 'n/a'}")
     if result.blocking_reason:
         lines.append(f"Blocking reason:   {result.blocking_reason}")
     lines.append("-" * 72)
@@ -803,6 +808,17 @@ def main(argv: list[str] | None = None) -> int:
         dest="resume_run_id",
         default=None,
         help="Resume an existing orchestration run by ID.",
+    )
+    orchestrate_parser.add_argument(
+        "--owner-action",
+        choices=[action.value for action in OwnerAction],
+        default=None,
+        help="Explicit phase-bound owner action (valid only with --resume; preview by default).",
+    )
+    orchestrate_parser.add_argument(
+        "--owner-note",
+        default=None,
+        help="Optional single-line owner note (maximum 400 characters).",
     )
     orchestrate_parser.add_argument(
         "--planner",
@@ -1963,18 +1979,40 @@ def main(argv: list[str] | None = None) -> int:
             )
             return 1
 
-        config = OrchestrationConfig(
-            goal=args.goal,
-            resume_run_id=args.resume_run_id,
-            planner=args.planner,
-            worker=args.worker,
-            fallback_worker=args.fallback_worker,
-            controller=args.controller,
-            repair_attempts=args.repair_attempts,
-            max_rework=args.max_rework,
-            worker_timeout_seconds=args.worker_timeout,
-            apply=args.apply,
+        raw_argv = list(argv) if argv is not None else sys.argv[1:]
+        override_flags = {
+            "--planner",
+            "--worker",
+            "--fallback-worker",
+            "--controller",
+            "--repair-attempts",
+            "--max-rework",
+            "--worker-timeout",
+        }
+        resume_overrides = tuple(
+            flag
+            for flag in override_flags
+            if any(token == flag or token.startswith(f"{flag}=") for token in raw_argv)
         )
+        try:
+            config = OrchestrationConfig(
+                goal=args.goal,
+                resume_run_id=args.resume_run_id,
+                planner=args.planner,
+                worker=args.worker,
+                fallback_worker=args.fallback_worker,
+                controller=args.controller,
+                repair_attempts=args.repair_attempts,
+                max_rework=args.max_rework,
+                worker_timeout_seconds=args.worker_timeout,
+                apply=args.apply,
+                owner_action=args.owner_action,
+                owner_note=args.owner_note,
+                resume_overrides=resume_overrides,
+            )
+        except OrchestrationError as exc:
+            print(f"FAIL: {exc}", file=sys.stderr)
+            return 1
         try:
             result = run_orchestration(config, repo_root=git_info.repo_root)
         except OrchestrationError as exc:
