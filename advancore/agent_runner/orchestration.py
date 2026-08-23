@@ -26,6 +26,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import subprocess
 import tempfile
 import uuid
 from dataclasses import asdict, dataclass, field
@@ -365,6 +366,155 @@ def _repo_fingerprint(repo_root: Path) -> dict[str, Any]:
         "status_lines": git_info.status_lines,
         "changed_paths": sorted(_extract_changed_paths(git_info.status_lines)),
     }
+
+
+def _preserve_approved_task_specification(
+    checkpoint: OrchestrationCheckpoint,
+    repo_root: Path,
+    task_path: Path,
+) -> str:
+    """Commit only an owner-approved generated task on its feature branch."""
+    git_info = get_git_info(cwd=repo_root)
+    if git_info.current_branch in {None, "", "main"}:
+        raise OrchestrationError(
+            "Approved task preservation requires a named non-main feature branch"
+        )
+    if checkpoint.branch and git_info.current_branch != checkpoint.branch:
+        raise OrchestrationError("Branch changed before approved task preservation")
+    if checkpoint.expected_head and git_info.head_sha != checkpoint.expected_head:
+        raise OrchestrationError("HEAD changed before approved task preservation")
+
+    try:
+        task_rel = task_path.resolve().relative_to(repo_root.resolve()).as_posix()
+    except ValueError as exc:
+        raise OrchestrationError("Approved task path is outside the repository") from exc
+    if not task_rel.startswith("tasks/") or not task_rel.endswith(".md"):
+        raise OrchestrationError("Approved task path is not a bounded task specification")
+
+    if git_info.is_clean:
+        # An existing governed boundary may already have preserved the task.
+        return git_info.head_sha
+
+    precise_status = subprocess.run(
+        ["git", "status", "--porcelain", "--untracked-files=all"],
+        cwd=repo_root,
+        capture_output=True,
+        text=True,
+    )
+    if precise_status.returncode != 0:
+        raise OrchestrationError("Cannot inspect approved task repository state")
+    changed = sorted(
+        _extract_changed_paths(
+            [line for line in precise_status.stdout.splitlines() if line.strip()]
+        )
+    )
+    if not changed:
+        return git_info.head_sha
+    if changed != [task_rel]:
+        raise OrchestrationError(
+            "Cannot preserve approved task: working tree must contain only the "
+            f"generated task specification; found {changed}"
+        )
+
+    stage = subprocess.run(
+        ["git", "add", "--", task_rel],
+        cwd=repo_root,
+        capture_output=True,
+        text=True,
+    )
+    if stage.returncode != 0:
+        raise OrchestrationError(
+            "Approved task preservation staging failed: " + stage.stderr.strip()
+        )
+    staged = subprocess.run(
+        ["git", "diff", "--cached", "--name-only"],
+        cwd=repo_root,
+        capture_output=True,
+        text=True,
+    )
+    if staged.returncode != 0 or staged.stdout.splitlines() != [task_rel]:
+        raise OrchestrationError("Approved task preservation staged an unexpected path set")
+
+    commit = subprocess.run(
+        ["git", "commit", "--message", f"chore(tasks): approve {checkpoint.task_id}"],
+        cwd=repo_root,
+        capture_output=True,
+        text=True,
+    )
+    if commit.returncode != 0:
+        raise OrchestrationError(
+            "Approved task preservation commit failed: "
+            + (commit.stderr.strip() or commit.stdout.strip())
+        )
+
+    post = get_git_info(cwd=repo_root)
+    if post.current_branch != git_info.current_branch or not post.is_clean:
+        raise OrchestrationError(
+            "Approved task preservation did not leave the feature branch clean"
+        )
+    checkpoint.expected_head = post.head_sha
+    checkpoint.path_fingerprint = []
+    checkpoint.mutations.append(
+        f"source-of-truth handoff: committed approved task specification {task_rel}"
+    )
+    return post.head_sha
+
+
+def _preflight_approved_task_preservation(
+    checkpoint: OrchestrationCheckpoint,
+    repo_root: Path,
+    task_path: Path,
+) -> None:
+    """Reject unsafe repository state before lifecycle approval mutates the task."""
+    git_info = get_git_info(cwd=repo_root)
+    if git_info.current_branch in {None, "", "main"}:
+        raise OrchestrationError(
+            "Approved task preservation requires a named non-main feature branch"
+        )
+    if checkpoint.branch and git_info.current_branch != checkpoint.branch:
+        raise OrchestrationError("Branch changed before approved task preservation")
+    if checkpoint.expected_head and git_info.head_sha != checkpoint.expected_head:
+        raise OrchestrationError("HEAD changed before approved task preservation")
+    try:
+        task_rel = task_path.resolve().relative_to(repo_root.resolve()).as_posix()
+    except ValueError as exc:
+        raise OrchestrationError("Approved task path is outside the repository") from exc
+
+    staged_lines = [
+        line for line in git_info.status_lines
+        if len(line) >= 2 and line[:2] != "??" and line[0] != " "
+    ]
+    if staged_lines:
+        raise OrchestrationError("Approved task preservation requires an empty index")
+    changed = sorted(
+        _extract_changed_paths([line for line in git_info.status_lines if line.strip()])
+    )
+    if any(path.endswith("/") for path in changed):
+        # Default porcelain output may collapse a wholly untracked directory to
+        # ``tasks/``. Resolve only that ambiguous representation before making
+        # the lifecycle mutation; ordinary/mock snapshots need no extra Git call.
+        precise_status = subprocess.run(
+            ["git", "status", "--porcelain", "--untracked-files=all"],
+            cwd=repo_root,
+            capture_output=True,
+            text=True,
+        )
+        if precise_status.returncode != 0:
+            raise OrchestrationError("Cannot inspect generated task repository state")
+        precise_lines = [
+            line for line in precise_status.stdout.splitlines() if line.strip()
+        ]
+        if any(
+            len(line) >= 2 and line[:2] != "??" and line[0] != " "
+            for line in precise_lines
+        ):
+            raise OrchestrationError("Approved task preservation requires an empty index")
+        changed = sorted(_extract_changed_paths(precise_lines))
+    if changed not in ([], [task_rel]):
+        raise OrchestrationError(
+            "Cannot approve generated task: working tree must be clean or contain "
+            f"only {task_rel}; found {changed}"
+        )
 
 
 def _build_planner(name: str) -> WorkerAdapter:
@@ -843,6 +993,10 @@ def _intake_owner_action(
             if action == OwnerAction.APPROVE_TASK
             else TaskStatus.BLOCKED
         )
+        if action == OwnerAction.APPROVE_TASK and config.apply:
+            _preflight_approved_task_preservation(
+                checkpoint, repo_root, task.path
+            )
         lifecycle = transition_task(
             tasks_dir,
             checkpoint.task_id,
@@ -884,6 +1038,14 @@ def _intake_owner_action(
         checkpoint.mutations.append(
             f"owner action: {action.value} via lifecycle API"
         )
+        if action == OwnerAction.APPROVE_TASK:
+            commit_sha = _preserve_approved_task_specification(
+                checkpoint, repo_root, task.path
+            )
+            checkpoint.messages.append(
+                "PASS: approved task specification preserved on the feature "
+                f"branch at {commit_sha} without remote publication"
+            )
         save_checkpoint(checkpoint, repo_root)
         return None
 

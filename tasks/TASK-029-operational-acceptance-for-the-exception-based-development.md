@@ -1,6 +1,6 @@
 # TASK-029 — Operational Acceptance for the Exception-Based Development Loop
 
-STATUS: READY
+STATUS: APPROVED
 
 ## Objective
 
@@ -153,16 +153,47 @@ Resolved before DRAFT approval:
 
 ### Implemented
 
+- Added deterministic temporary-repository acceptance coverage for planner fallback, runner-owned DRAFT construction, both explicit owner pauses/resumes, one bounded Codex worker, runner verification, and controlled feature-branch finalization delegation.
+- Added fail-closed coverage for malformed planner output, worker failure, verification failure, and attempted out-of-scope/publication behavior.
+- Corrected the approved generated-DRAFT handoff: after explicit task approval, orchestration locally commits only the task specification when it is the sole changed path, yielding the clean tree required before worker execution without pushing or touching `main`.
+- Added the operational runbook with checkpoints, evidence, exceptions, and safe resume procedures.
+
 ### Files changed
+
+- `tests/test_exception_development_loop_e2e.py`
+- `docs/runbooks/EXCEPTION_DEVELOPMENT_LOOP.md`
+- `advancore/agent_runner/orchestration.py`
+- `tasks/TASK-029-operational-acceptance-for-the-exception-based-development.md`
 
 ### Database changes
 
+- None.
+
 ### Tests executed and results
+
+- `.venv/bin/python -m pytest tests/test_exception_development_loop_e2e.py -q` — 7 passed.
+- Focused orchestration and owner-decision regression suite — 22 passed.
+- Complete suite — 620 passed.
 
 ### Assumptions
 
+- Existing lifecycle, controller-decision, review-bundle, and finalization boundaries remain authoritative.
+- A local commit containing only the explicitly approved generated task specification is the narrowly bounded source-of-truth handoff authorized by this task; it is not implementation finalization or remote publication.
+
 ### Risks / unresolved issues
+
+- Live remote publication remains intentionally untested and prohibited by this acceptance scenario.
+- A commit failure after the exact task path is staged can leave that task staged for operator inspection; orchestration fails closed and does not push or continue to worker execution.
 
 ### Decisions required
 
+- None for the bounded feature-branch commit and push: controller decision
+  `20260823T023414_TASK-029_APPROVE.json` was validated against the TASK-029
+  review bundle and applied through the lifecycle bridge. Merge, deployment,
+  release, and protected-branch changes remain separately gated.
+
 ### Recommended next step
+
+- Publish the approved exact-scope change to the existing feature branch, then
+  perform one real governed orchestration exercise to confirm the repaired
+  generated-task handoff outside the controlled acceptance fixture.
