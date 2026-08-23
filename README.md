@@ -59,11 +59,15 @@ The Projects page supports the first bounded project workflow:
 - List existing projects in creation order.
 - Create an active project with a required name and optional description.
 - Select a project to view its name, description, and status.
+- Edit an active project's name and optional description.
+- Explicitly archive an active project and immediately refresh its read-only state.
+- Keep archived projects visible and clearly labelled.
 
 Project names use exact-match uniqueness. Names and descriptions are trimmed,
 blank descriptions are stored as absent, and names are limited to 200
-characters. Editing, archiving, status changes, deletion, permissions, search,
-filtering, pagination, and project analytics are intentionally deferred.
+characters. Restoration, deletion, permissions, lifecycle history, search,
+filtering, pagination, bulk actions, and project analytics are intentionally
+deferred.
 
 ## Running tests
 

@@ -1,6 +1,6 @@
 # TASK-039 — Projects edit, archive, and immediate refresh
 
-STATUS: READY
+STATUS: APPROVED
 
 ## Objective
 
@@ -110,16 +110,49 @@ None.
 
 ### Implemented
 
+- Added shared project field normalization plus active-project edit and one-way archive service operations with deterministic safe lifecycle errors.
+- Added repository save/refresh behavior for ordinary Project updates.
+- Added native edit and confirmed archive forms, archived list labels, and read-only archived/unknown-status details.
+- Added exactly-one immediate Streamlit rerun after successful edit/archive and a bounded one-time success notice consumed on the fresh render.
+- Added focused service, repository, and page coverage and updated the README.
+
 ### Files changed
+
+- `tasks/TASK-039-projects-edit-archive-and-immediate-refresh.md`
+- `advancore/pages/projects.py`
+- `advancore/services/project_service.py`
+- `advancore/repositories/project.py`
+- `tests/test_project_service.py`
+- `tests/test_repositories.py`
+- `tests/test_projects_page.py`
+- `README.md`
 
 ### Database changes
 
+None. Existing Project columns and transaction boundaries are reused.
+
 ### Tests executed and results
+
+- Focused Projects tests: 57 passed.
+- Full repository suite: 718 passed.
+- Python compile and modified-module import checks passed.
+- Streamlit in-process app smoke check passed on the Projects route with zero exceptions, all three forms present, and no UI errors or warnings.
+- `git diff --check`, empty-index, exact-scope, and new-file checks passed.
 
 ### Assumptions
 
+- Project lifecycle values remain exactly `active` and `archived`; unknown values remain read-only.
+- Exact-match, case-sensitive project-name uniqueness remains unchanged.
+
 ### Risks / unresolved issues
+
+- Restoration, permissions, lifecycle history, deletion, search, and bulk actions remain intentionally deferred.
+- Publication and deployment remain separate controller/owner-gated actions.
 
 ### Decisions required
 
+None.
+
 ### Recommended next step
+
+Perform independent controller review and a local app startup smoke check, then preserve and publish the feature branch only if both pass.

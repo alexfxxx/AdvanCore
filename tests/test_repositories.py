@@ -68,6 +68,25 @@ class TestProjectRepository:
             repo = ProjectRepository(session)
             assert repo.get_by_name("Missing") is None
 
+    def test_save_flushes_refreshes_and_persists_project_changes(
+        self, sqlite_session_factory
+    ):
+        with session_scope(sqlite_session_factory) as session:
+            repo = ProjectRepository(session)
+            project = repo.add(Project(name="Lifecycle", status="active"))
+            project_id = project.id
+            project.name = "Updated lifecycle"
+            project.status = "archived"
+            saved = repo.save(project)
+            assert saved is project
+            assert saved.name == "Updated lifecycle"
+            assert saved.status == "archived"
+
+        with session_scope(sqlite_session_factory) as session:
+            persisted = ProjectRepository(session).get_by_id(project_id)
+            assert persisted.name == "Updated lifecycle"
+            assert persisted.status == "archived"
+
 
 class TestKnowledgeItemRepository:
     def test_add_and_retrieve_item(self, sqlite_session_factory):

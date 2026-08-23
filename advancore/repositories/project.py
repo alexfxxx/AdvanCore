@@ -35,6 +35,12 @@ class ProjectRepository:
         self._session.refresh(project)
         return project
 
+    def save(self, project: Project) -> Project:
+        """Flush and refresh changes to an existing project."""
+        self._session.flush()
+        self._session.refresh(project)
+        return project
+
     def get_by_name(self, name: str) -> Project | None:
         """Return the project with the exact name, or ``None``."""
         statement = select(Project).where(Project.name == name)

@@ -9,6 +9,9 @@ from advancore.models import Project
 from advancore.repositories import ProjectRepository
 from advancore.services.project_service import (
     DuplicateProjectNameError,
+    ProjectAlreadyArchivedError,
+    ProjectNotFoundError,
+    ProjectReadOnlyError,
     ProjectService,
     ProjectValidationError,
 )
@@ -22,6 +25,8 @@ class FakeProjectRepository(ProjectRepository):
         self._next_id = 1
         self.add_calls = 0
         self.add_error: Exception | None = None
+        self.save_calls = 0
+        self.save_error: Exception | None = None
 
     def get_by_id(self, project_id: int) -> Project | None:
         return next((p for p in self._projects if p.id == project_id), None)
@@ -40,6 +45,12 @@ class FakeProjectRepository(ProjectRepository):
 
     def get_by_name(self, name: str) -> Project | None:
         return next((p for p in self._projects if p.name == name), None)
+
+    def save(self, project: Project) -> Project:
+        self.save_calls += 1
+        if self.save_error:
+            raise self.save_error
+        return project
 
 
 def test_create_project_normalizes_fields_and_defaults_active():
@@ -118,3 +129,115 @@ def test_list_projects_delegates_to_repository():
     service.create_project("One")
     service.create_project("Two")
     assert [project.name for project in service.list_projects()] == ["One", "Two"]
+
+
+def _active_project(
+    repo: FakeProjectRepository,
+    name: str = "Original",
+    description: str = "Details",
+) -> Project:
+    return ProjectService(repo).create_project(name, description)
+
+
+def test_edit_project_normalizes_and_persists_active_project():
+    repo = FakeProjectRepository()
+    original = _active_project(repo)
+    edited = ProjectService(repo).edit_project(original.id, "  Renamed  ", "  New  ")
+    assert edited is original
+    assert (edited.name, edited.description, edited.status) == (
+        "Renamed",
+        "New",
+        "active",
+    )
+    assert repo.save_calls == 1
+    assert repo.add_calls == 1
+
+
+@pytest.mark.parametrize("name", ["", "   ", "x" * 201])
+def test_edit_project_rejects_invalid_name_without_mutation(name):
+    repo = FakeProjectRepository()
+    original = _active_project(repo)
+    before = (original.name, original.description)
+    with pytest.raises(ProjectValidationError):
+        ProjectService(repo).edit_project(original.id, name, "Changed")
+    assert (original.name, original.description) == before
+    assert repo.save_calls == 0
+
+
+def test_edit_project_accepts_limit_blank_description_and_unchanged_self_name():
+    repo = FakeProjectRepository()
+    original = _active_project(repo)
+    edited = ProjectService(repo).edit_project(original.id, "x" * 200, "   ")
+    assert len(edited.name) == 200
+    assert edited.description is None
+    same = ProjectService(repo).edit_project(original.id, "x" * 200, None)
+    assert same is original
+
+
+def test_edit_project_rejects_name_owned_by_another_project():
+    repo = FakeProjectRepository()
+    first = _active_project(repo, "First")
+    _active_project(repo, "Second")
+    with pytest.raises(DuplicateProjectNameError, match="exact name"):
+        ProjectService(repo).edit_project(first.id, "Second")
+    assert first.name == "First"
+    assert repo.save_calls == 0
+
+
+def test_edit_project_translates_race_and_restores_in_memory_values():
+    repo = FakeProjectRepository()
+    original = _active_project(repo)
+    repo.save_error = IntegrityError("update", {}, RuntimeError("secret violation"))
+    with pytest.raises(DuplicateProjectNameError, match="exact name") as error:
+        ProjectService(repo).edit_project(original.id, "Racing update", "Changed")
+    assert "secret" not in str(error.value)
+    assert (original.name, original.description) == ("Original", "Details")
+
+
+def test_edit_project_missing_and_non_active_outcomes_do_not_save():
+    repo = FakeProjectRepository()
+    service = ProjectService(repo)
+    with pytest.raises(ProjectNotFoundError, match="could not be found"):
+        service.edit_project(404, "Missing")
+    item = _active_project(repo)
+    item.status = "archived"
+    with pytest.raises(ProjectReadOnlyError, match="read-only"):
+        service.edit_project(item.id, "Changed")
+    item.status = "unexpected"
+    with pytest.raises(ProjectReadOnlyError, match="read-only"):
+        service.edit_project(item.id, "Changed")
+    assert repo.save_calls == 0
+
+
+def test_archive_project_transitions_only_status_and_persists():
+    repo = FakeProjectRepository()
+    original = _active_project(repo)
+    before = (original.id, original.name, original.description)
+    archived = ProjectService(repo).archive_project(original.id)
+    assert (archived.id, archived.name, archived.description) == before
+    assert archived.status == "archived"
+    assert repo.save_calls == 1
+
+
+def test_archive_project_rejects_missing_archived_and_unknown_without_save():
+    repo = FakeProjectRepository()
+    service = ProjectService(repo)
+    with pytest.raises(ProjectNotFoundError):
+        service.archive_project(404)
+    item = _active_project(repo)
+    item.status = "archived"
+    with pytest.raises(ProjectAlreadyArchivedError, match="already archived"):
+        service.archive_project(item.id)
+    item.status = "unexpected"
+    with pytest.raises(ProjectReadOnlyError, match="unsupported status"):
+        service.archive_project(item.id)
+    assert repo.save_calls == 0
+
+
+def test_archive_failure_restores_active_status():
+    repo = FakeProjectRepository()
+    item = _active_project(repo)
+    repo.save_error = RuntimeError("persistence unavailable")
+    with pytest.raises(RuntimeError):
+        ProjectService(repo).archive_project(item.id)
+    assert item.status == "active"
