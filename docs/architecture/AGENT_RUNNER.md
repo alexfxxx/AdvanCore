@@ -1791,3 +1791,39 @@ render this JSON and relay an explicitly selected command. AdvanCore remains
 the provider-neutral owner of validation and governance classification. The
 presentation client is optional, creates no authority, and must not reinterpret
 an entry as approval, a lifecycle transition, or permission to publish.
+
+---
+
+## 21. Explicit completed-run reconciliation (TASK-030)
+
+An operator may explicitly recognize an already-successful publication whose
+orchestration checkpoint remained stale:
+
+```bash
+.venv/bin/python -m advancore.agent_runner reconcile-completed-run ORCH-<id>
+.venv/bin/python -m advancore.agent_runner reconcile-completed-run ORCH-<id> --apply
+```
+
+This is a preview-first recovery command, not an alternate finalization path.
+It resolves exactly the named checkpoint and requires the authoritative task
+to be `APPROVED`, a named current non-`main` branch matching the checkpoint,
+and identical finalized local and `refs/remotes/origin/<branch>` tips. It reads
+that tracking ref locally and does not fetch or contact a remote. Only
+`--apply` may update the checkpoint.
+
+The command resolves one exact controller/owner `APPROVE` decision from the
+canonical decision directory linked to the checkpoint review bundle and one
+exact `PUSHED` record from the canonical finalization artifact. The record's
+pre-commit HEAD must equal the bundle HEAD; its post/commit HEAD must equal the
+synchronized local/origin tip. Persisted checkpoint decision/finalization paths
+must match when present, but an interrupted checkpoint is not required to have
+recorded evidence created later.
+Missing, malformed, unauthorized, stale, conflicting, duplicated, or ambiguous
+evidence fails closed before mutation.
+
+On success, the runner atomically replaces only the named checkpoint, preserves
+its existing history and evidence references, appends one bounded
+`reconciliation_evidence` entry, and records the already-proven `PUBLISHED`
+outcome. It does not invoke a worker or finalizer and never stages, commits,
+pushes, fetches, merges, changes branches, edits task/controller/review/
+finalization artifacts, or weakens ordinary orchestration resume validation.

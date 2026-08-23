@@ -144,6 +144,7 @@ from advancore.agent_runner.orchestration import (
     OrchestrationPhase,
     OrchestrationResult,
     OrchestrationStatus,
+    reconcile_completed_run,
     run_orchestration,
 )
 from advancore.agent_runner.orchestration_inbox import (
@@ -891,6 +892,19 @@ def main(argv: list[str] | None = None) -> int:
         "--apply",
         action="store_true",
         help="Actually launch planners/workers, write checkpoints, mutate lifecycle, and delegate finalization.",
+    )
+
+    reconcile_parser = subparsers.add_parser(
+        "reconcile-completed-run",
+        help="Explicitly reconcile one stale checkpoint to an existing successful finalization.",
+    )
+    reconcile_parser.add_argument(
+        "run_id", help="Exact orchestration run identifier to reconcile."
+    )
+    reconcile_parser.add_argument(
+        "--apply",
+        action="store_true",
+        help="Atomically mark the checkpoint PUBLISHED after all evidence validates (default: preview).",
     )
 
     inbox_parser = subparsers.add_parser(
@@ -2001,6 +2015,18 @@ def main(argv: list[str] | None = None) -> int:
         print(format_goal_task_report(result))
         success = result.ok or result.status == GoalTaskGenerationStatus.DRY_RUN
         return 0 if success else 1
+
+    if args.command == "reconcile-completed-run":
+        try:
+            git_info = get_git_info(cwd=tasks_dir)
+            result = reconcile_completed_run(
+                args.run_id, git_info.repo_root, apply=args.apply
+            )
+        except Exception as exc:
+            print(f"FAIL: completed-run reconciliation refused: {exc}", file=sys.stderr)
+            return 1
+        print(_format_orchestration_result(result))
+        return 0
 
     if args.command == "orchestrate":
         try:

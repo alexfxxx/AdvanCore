@@ -298,6 +298,7 @@ class OrchestrationCheckpoint:
     owner_action_evidence_path: str | None = None
     owner_action_state: str | None = None
     owner_action_next_action: str | None = None
+    reconciliation_evidence: list[dict[str, str]] = field(default_factory=list)
     created_at: str = field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
     updated_at: str = field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
 
@@ -642,6 +643,233 @@ def load_checkpoint(run_id: str, repo_root: Path) -> OrchestrationCheckpoint:
         return OrchestrationCheckpoint(**data)
     except Exception as exc:
         raise OrchestrationError(f"Invalid checkpoint format: {exc}") from exc
+
+
+def _existing_repo_path(value: str | None, repo_root: Path, label: str) -> Path:
+    """Resolve one existing checkpoint evidence path within *repo_root*."""
+    if not isinstance(value, str) or not value.strip():
+        raise OrchestrationError(f"Missing {label} path")
+    path = Path(value)
+    if not path.is_absolute():
+        path = repo_root / path
+    if path.is_symlink():
+        raise OrchestrationError(f"Invalid {label} path: symbolic links are not allowed")
+    try:
+        resolved = path.resolve(strict=True)
+        resolved.relative_to(repo_root.resolve())
+    except (OSError, ValueError) as exc:
+        raise OrchestrationError(f"Invalid {label} path: {value!r}") from exc
+    if not resolved.is_file():
+        raise OrchestrationError(f"Invalid {label} path: {value!r}")
+    return resolved
+
+
+def _git_value(repo_root: Path, args: list[str], label: str) -> str:
+    """Read one bounded local Git value without contacting a remote."""
+    result = subprocess.run(
+        ["git", *args], cwd=repo_root, capture_output=True, text=True
+    )
+    value = result.stdout.strip()
+    if result.returncode != 0 or not value or "\n" in value:
+        raise OrchestrationError(f"Cannot resolve {label} from local Git state")
+    return value
+
+
+def reconcile_completed_run(
+    run_id: str, repo_root: Path, *, apply: bool = False
+) -> OrchestrationResult:
+    """Recognize one already-pushed run from exact, authoritative evidence.
+
+    This explicit recovery boundary never invokes workers, finalization, or a
+    remote operation.  Every check completes before the checkpoint is replaced.
+    """
+    checkpoint = load_checkpoint(run_id, repo_root)
+    if checkpoint.run_id != run_id:
+        raise OrchestrationError("Checkpoint run identity mismatch")
+    if checkpoint.phase in {
+        OrchestrationPhase.PUBLISHED.value,
+        OrchestrationPhase.BLOCKED.value,
+        OrchestrationPhase.FAILED.value,
+    } or checkpoint.status == OrchestrationStatus.PUBLISHED.value:
+        raise OrchestrationError("Checkpoint already has a terminal or conflicting state")
+    if checkpoint.reconciliation_evidence:
+        raise OrchestrationError("Checkpoint already contains reconciliation evidence")
+
+    git_info = get_git_info(cwd=repo_root)
+    if not git_info.is_clean:
+        raise OrchestrationError(
+            "Completed-run reconciliation requires a clean index and working tree"
+        )
+
+    if not checkpoint.task_id:
+        raise OrchestrationError("Checkpoint has no task identity")
+    try:
+        task = find_task(repo_root / "tasks", checkpoint.task_id)
+    except TaskError as exc:
+        raise OrchestrationError(f"Cannot resolve checkpoint task: {exc}") from exc
+    task_path = _existing_repo_path(checkpoint.task_path, repo_root, "task")
+    if task.path.resolve() != task_path or task.task_id != checkpoint.task_id:
+        raise OrchestrationError("Checkpoint task identity or path mismatch")
+    if task.status != TaskStatus.APPROVED.value:
+        raise OrchestrationError("Checkpoint task is not currently APPROVED")
+
+    branch = _git_value(repo_root, ["symbolic-ref", "--quiet", "--short", "HEAD"], "current branch")
+    if branch == "main" or branch != checkpoint.branch:
+        raise OrchestrationError("Current branch is main or does not match checkpoint branch")
+    local_tip = _git_value(
+        repo_root,
+        ["rev-parse", "--verify", f"refs/heads/{branch}^{{commit}}"],
+        "local branch tip",
+    )
+    origin_tip = _git_value(
+        repo_root,
+        ["rev-parse", "--verify", f"refs/remotes/origin/{branch}^{{commit}}"],
+        "origin tracking tip",
+    )
+    if local_tip != origin_tip:
+        raise OrchestrationError("Local and origin branch tips are not synchronized")
+
+    bundle_path = _existing_repo_path(checkpoint.review_bundle_path, repo_root, "review bundle")
+    if bundle_path.parent != default_review_dir(repo_root).resolve():
+        raise OrchestrationError("Review bundle is outside the canonical evidence directory")
+    try:
+        bundle = load_review_bundle(bundle_path)
+    except Exception as exc:
+        raise OrchestrationError(f"Invalid review bundle: {exc}") from exc
+    task_filename = task.path.name
+    if (
+        bundle.task_id != task.task_id
+        or bundle.task_filename != task_filename
+        or bundle.branch != branch
+    ):
+        raise OrchestrationError("Review bundle linkage mismatch")
+
+    expected_bundle_refs = {str(bundle_path), str(bundle_path.relative_to(repo_root))}
+    matching_decisions: list[tuple[Path, ControllerDecision]] = []
+    for candidate in sorted(default_decisions_dir(repo_root).glob("*.json")):
+        if candidate.is_symlink():
+            raise OrchestrationError(
+                f"Malformed controller decision evidence: {candidate}"
+            )
+        try:
+            item = load_controller_decision(candidate)
+        except Exception as exc:
+            raise OrchestrationError(f"Malformed controller decision evidence: {candidate}") from exc
+        if (
+            item.decision == DecisionValue.APPROVE.value
+            and item.actor_role in {ActorRole.CONTROLLER.value, ActorRole.OWNER.value}
+            and item.task_id == task.task_id
+            and item.task_filename == task_filename
+            and item.bundle_task_id == task.task_id
+            and item.bundle_task_filename == task_filename
+            and item.bundle_branch == branch
+            and item.bundle_pre_head == bundle.pre_head
+            and item.bundle_post_head == bundle.post_head
+            and item.bundle_path in expected_bundle_refs
+        ):
+            matching_decisions.append((candidate.resolve(), item))
+    if len(matching_decisions) != 1:
+        raise OrchestrationError("Controller decision evidence is missing or ambiguous")
+    decision_path, _decision = matching_decisions[0]
+    if checkpoint.decision not in {None, DecisionValue.APPROVE.value}:
+        raise OrchestrationError("Checkpoint contains a conflicting controller decision")
+    if checkpoint.decision_path:
+        recorded_decision = _existing_repo_path(
+            checkpoint.decision_path, repo_root, "controller decision"
+        )
+        if recorded_decision != decision_path:
+            raise OrchestrationError("Checkpoint controller decision linkage mismatch")
+
+    finalization_path = default_finalize_dir(repo_root) / "finalize.jsonl"
+    if checkpoint.finalization_artifact_path:
+        recorded_finalization = Path(checkpoint.finalization_artifact_path)
+        if not recorded_finalization.is_absolute():
+            recorded_finalization = repo_root / recorded_finalization
+        if recorded_finalization.is_dir():
+            recorded_finalization = recorded_finalization / "finalize.jsonl"
+        recorded_finalization = _existing_repo_path(
+            str(recorded_finalization), repo_root, "finalization artifact"
+        )
+        if recorded_finalization != finalization_path.resolve():
+            raise OrchestrationError("Checkpoint finalization artifact linkage mismatch")
+    finalization_path = _existing_repo_path(
+        str(finalization_path), repo_root, "finalization artifact"
+    )
+    decision_refs = {str(decision_path), str(decision_path.relative_to(repo_root))}
+    matches: list[dict[str, Any]] = []
+    try:
+        lines = finalization_path.read_text(encoding="utf-8").splitlines()
+        for line in lines:
+            if not line.strip():
+                continue
+            record = json.loads(line)
+            if not isinstance(record, dict):
+                raise ValueError("record is not an object")
+            if (
+                record.get("mode") == "finalize"
+                and record.get("status") == FinalizationStatus.PUSHED.value
+                and record.get("task_id") == task.task_id
+                and record.get("task_filename") == task_filename
+                and record.get("branch") == branch
+                and record.get("pre_head") == bundle.post_head
+                and record.get("commit_sha") == local_tip
+                and record.get("post_head") == local_tip
+                and record.get("decision_path") in decision_refs
+                and record.get("bundle_path") in expected_bundle_refs
+            ):
+                matches.append(record)
+    except Exception as exc:
+        raise OrchestrationError(f"Malformed finalization evidence: {finalization_path}") from exc
+    if len(matches) != 1:
+        raise OrchestrationError("Successful finalization evidence is missing or ambiguous")
+
+    if not apply:
+        checkpoint.messages.append(
+            "Preview: exact existing approval and PUSHED finalization evidence validated"
+        )
+        return _build_result(
+            checkpoint,
+            ok=True,
+            status=OrchestrationStatus.STALE_EVIDENCE,
+            next_action=f"Re-run reconcile-completed-run {run_id} with --apply.",
+        )
+
+    reconciled_at = datetime.now(timezone.utc).isoformat()
+    checkpoint.phase = OrchestrationPhase.PUBLISHED.value
+    checkpoint.status = OrchestrationStatus.PUBLISHED.value
+    if OrchestrationPhase.FINALIZATION.value not in checkpoint.completed_phases:
+        checkpoint.completed_phases.append(OrchestrationPhase.FINALIZATION.value)
+    if OrchestrationPhase.PUBLISHED.value not in checkpoint.completed_phases:
+        checkpoint.completed_phases.append(OrchestrationPhase.PUBLISHED.value)
+    previous_expected_head = checkpoint.expected_head or ""
+    checkpoint.expected_head = local_tip
+    checkpoint.commit_sha = local_tip
+    checkpoint.push_verified = True
+    checkpoint.decision = DecisionValue.APPROVE.value
+    checkpoint.decision_path = str(decision_path.relative_to(repo_root))
+    checkpoint.finalization_artifact_path = str(finalization_path.relative_to(repo_root))
+    checkpoint.reconciliation_evidence = [{
+        "run_id": run_id,
+        "task_id": task.task_id,
+        "branch": branch,
+        "checkpoint_expected_head_before": previous_expected_head,
+        "finalization_pre_head": str(matches[0].get("pre_head", "")),
+        "commit_sha": local_tip,
+        "decision_path": str(decision_path.relative_to(repo_root)),
+        "review_bundle_path": str(bundle_path.relative_to(repo_root)),
+        "finalization_artifact_path": str(finalization_path.relative_to(repo_root)),
+        "terminal_outcome": FinalizationStatus.PUSHED.value,
+        "reconciled_at": reconciled_at,
+    }]
+    checkpoint.messages.append("Recognized existing PUSHED finalization through explicit reconciliation")
+    checkpoint.mutations.append("atomically reconciled stale checkpoint to PUBLISHED")
+    save_checkpoint(checkpoint, repo_root)
+    return _build_result(
+        checkpoint,
+        ok=True,
+        status=OrchestrationStatus.PUBLISHED,
+        next_action="No further action required; existing finalization was reconciled.",
+    )
 
 
 def _new_checkpoint(config: OrchestrationConfig, repo_root: Path) -> OrchestrationCheckpoint:

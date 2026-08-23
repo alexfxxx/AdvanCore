@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import os
+import subprocess
 from dataclasses import dataclass, field
 from pathlib import Path
 from unittest.mock import MagicMock, patch
@@ -54,6 +55,7 @@ from advancore.agent_runner.orchestration import (
     OrchestrationStatus,
     default_orchestration_dir,
     load_checkpoint,
+    reconcile_completed_run,
     run_orchestration,
     save_checkpoint,
 )
@@ -65,6 +67,111 @@ from advancore.agent_runner.review_bundle import (
 from advancore.agent_runner.runner import PostWorkerVerification, RunnerResult, RunnerStatus
 from advancore.agent_runner.task import Task, find_task
 from advancore.agent_runner.worker import WorkerAdapter, WorkerResult
+
+
+def _completed_run_fixture(tmp_path: Path) -> tuple[Path, OrchestrationCheckpoint, dict[str, Path]]:
+    """Create deterministic local-only evidence for completed-run reconciliation."""
+    repo = tmp_path / "repo"
+    tasks = repo / "tasks"
+    tasks.mkdir(parents=True)
+    (repo / ".gitignore").write_text(".agent_runner/\n", encoding="utf-8")
+    task_path = _write_task(tasks, "TASK-030", "Completed", "READY")
+    subprocess.run(["git", "init", "-b", "feature/reconcile"], cwd=repo, check=True, capture_output=True)
+    subprocess.run(["git", "config", "user.email", "test@example.invalid"], cwd=repo, check=True)
+    subprocess.run(["git", "config", "user.name", "Test"], cwd=repo, check=True)
+    subprocess.run(["git", "add", ".gitignore", "tasks"], cwd=repo, check=True)
+    subprocess.run(["git", "commit", "-m", "fixture"], cwd=repo, check=True, capture_output=True)
+    checkpoint_head = subprocess.run(
+        ["git", "rev-parse", "HEAD"], cwd=repo, check=True, capture_output=True, text=True
+    ).stdout.strip()
+    task_path.write_text(task_path.read_text() + "\nApproved specification preserved.\n")
+    subprocess.run(["git", "add", "tasks"], cwd=repo, check=True)
+    subprocess.run(["git", "commit", "-m", "approved spec"], cwd=repo, check=True, capture_output=True)
+    review_head = subprocess.run(
+        ["git", "rev-parse", "HEAD"], cwd=repo, check=True, capture_output=True, text=True
+    ).stdout.strip()
+
+    review_path = repo / ".agent_runner" / "review" / "bundle.json"
+    review_path.parent.mkdir(parents=True)
+    review = ReviewBundle(
+        timestamp="2026-01-01T00:00:00+00:00",
+        task_id="TASK-030",
+        task_filename=task_path.name,
+        previous_status="IN_PROGRESS",
+        current_status="REVIEW",
+        branch="feature/reconcile",
+        pre_head=review_head,
+        post_head=review_head,
+        runner_status="COMPLETED",
+        worker_type="dry-run",
+        worker_success=True,
+        post_verification_ok=True,
+    )
+    review_path.write_text(json.dumps(serialize_bundle(review)), encoding="utf-8")
+    decision = build_controller_decision(
+        review_path,
+        review,
+        decision=DecisionValue.APPROVE,
+        actor_role=ActorRole.CONTROLLER,
+        task_id="TASK-030",
+        task_filename=task_path.name,
+        repo_root=repo,
+    )
+    decision_path = write_controller_decision(decision, default_decisions_dir(repo))
+    task_path.write_text(task_path.read_text().replace("STATUS: READY", "STATUS: APPROVED"))
+    subprocess.run(["git", "add", "tasks"], cwd=repo, check=True)
+    subprocess.run(["git", "commit", "-m", "finalized implementation"], cwd=repo, check=True, capture_output=True)
+    finalized_head = subprocess.run(
+        ["git", "rev-parse", "HEAD"], cwd=repo, check=True, capture_output=True, text=True
+    ).stdout.strip()
+    subprocess.run(
+        ["git", "update-ref", "refs/remotes/origin/feature/reconcile", finalized_head],
+        cwd=repo,
+        check=True,
+    )
+    finalize_path = repo / ".agent_runner" / "finalize" / "finalize.jsonl"
+    finalize_path.parent.mkdir(parents=True)
+    finalize_record = {
+        "timestamp": "2026-01-01T00:01:00+00:00",
+        "mode": "finalize",
+        "status": "PUSHED",
+        "task_id": "TASK-030",
+        "task_filename": task_path.name,
+        "branch": "feature/reconcile",
+        "pre_head": review_head,
+        "post_head": finalized_head,
+        "commit_sha": finalized_head,
+        "decision_path": str(decision_path.relative_to(repo)),
+        "bundle_path": str(review_path.relative_to(repo)),
+    }
+    finalize_path.write_text(json.dumps(finalize_record) + "\n", encoding="utf-8")
+    checkpoint = OrchestrationCheckpoint(
+        schema_version="advancore-orchestration-v1",
+        run_id="ORCH-completed",
+        goal_hash="0123456789abcdef",
+        goal_summary="Completed",
+        planner="dry-run",
+        worker="dry-run",
+        controller="manual",
+        repair_attempts=0,
+        max_rework=0,
+        apply=True,
+        phase=OrchestrationPhase.FINALIZATION.value,
+        status=OrchestrationStatus.STALE_EVIDENCE.value,
+        branch="feature/reconcile",
+        expected_head=checkpoint_head,
+        task_id="TASK-030",
+        task_path=str(task_path),
+        review_bundle_path=str(review_path.relative_to(repo)),
+        messages=["existing message"],
+    )
+    save_checkpoint(checkpoint, repo)
+    return repo, checkpoint, {
+        "task": task_path,
+        "review": review_path,
+        "decision": decision_path,
+        "finalize": finalize_path,
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -878,6 +985,144 @@ class TestImplementationDecision:
 
         assert mock_finalize.call_count == 0
         assert result.status == OrchestrationStatus.BLOCKED.value
+
+
+# ---------------------------------------------------------------------------
+# Explicit completed-run reconciliation (TASK-030)
+# ---------------------------------------------------------------------------
+
+
+class TestCompletedRunReconciliation:
+    def test_success_recognizes_existing_push_and_preserves_evidence(self, tmp_path: Path):
+        repo, _, paths = _completed_run_fixture(tmp_path)
+        preserved = {name: path.read_bytes() for name, path in paths.items()}
+
+        with patch("advancore.agent_runner.orchestration.run_auto_pipeline") as worker, patch(
+            "advancore.agent_runner.orchestration.run_finalization"
+        ) as finalizer:
+            result = reconcile_completed_run("ORCH-completed", repo, apply=True)
+
+        assert result.ok and result.status == OrchestrationStatus.PUBLISHED.value
+        reconciled = load_checkpoint("ORCH-completed", repo)
+        assert reconciled.phase == OrchestrationPhase.PUBLISHED.value
+        assert reconciled.push_verified is True
+        assert reconciled.reconciliation_evidence[0]["terminal_outcome"] == "PUSHED"
+        assert (
+            reconciled.reconciliation_evidence[0]["checkpoint_expected_head_before"]
+            != reconciled.commit_sha
+        )
+        assert reconciled.messages[0] == "existing message"
+        assert worker.call_count == finalizer.call_count == 0
+        assert {name: path.read_bytes() for name, path in paths.items()} == preserved
+
+    def test_cli_success_and_fail_closed_exit_codes(self, tmp_path: Path, monkeypatch):
+        from advancore.agent_runner.__main__ import main
+
+        repo, _, _ = _completed_run_fixture(tmp_path)
+        monkeypatch.chdir(repo)
+        checkpoint_path = default_orchestration_dir(repo) / "ORCH-completed.json"
+        before = checkpoint_path.read_bytes()
+        assert main(["reconcile-completed-run", "ORCH-completed"]) == 0
+        assert checkpoint_path.read_bytes() == before
+        assert main(["reconcile-completed-run", "ORCH-completed", "--apply"]) == 0
+        assert main(["reconcile-completed-run", "ORCH-missing"]) == 1
+
+    def test_cli_requires_exact_run_identifier(self):
+        from advancore.agent_runner.__main__ import main
+
+        with pytest.raises(SystemExit) as exc:
+            main(["reconcile-completed-run"])
+        assert exc.value.code == 2
+
+    @pytest.mark.parametrize(
+        "case, expected",
+        [
+            ("task_not_approved", "not currently APPROVED"),
+            ("dirty_worktree", "clean index and working tree"),
+            ("wrong_task_path", "ambiguous"),
+            ("main", "main or does not match"),
+            ("detached", "current branch"),
+            ("checkpoint_branch", "does not match checkpoint branch"),
+            ("missing_origin", "origin tracking tip"),
+            ("origin_diverged", "not synchronized"),
+            ("missing_decision", "missing or ambiguous"),
+            ("ambiguous_decision", "missing or ambiguous"),
+            ("malformed_decision", "Malformed controller decision evidence"),
+            ("unauthorized_decision", "missing or ambiguous"),
+            ("non_approve", "missing or ambiguous"),
+            ("decision_linkage", "missing or ambiguous"),
+            ("missing_finalization", "Invalid finalization artifact path"),
+            ("unsuccessful_finalization", "missing or ambiguous"),
+            ("finalization_linkage", "missing or ambiguous"),
+            ("ambiguous_finalization", "missing or ambiguous"),
+        ],
+    )
+    def test_failures_preserve_checkpoint_and_existing_evidence(
+        self, tmp_path: Path, case: str, expected: str
+    ):
+        repo, checkpoint, paths = _completed_run_fixture(tmp_path)
+        if case == "task_not_approved":
+            paths["task"].write_text(paths["task"].read_text().replace("APPROVED", "REVIEW"))
+            subprocess.run(["git", "add", "tasks"], cwd=repo, check=True)
+            subprocess.run(["git", "commit", "-m", "task review state"], cwd=repo, check=True, capture_output=True)
+            changed = subprocess.run(["git", "rev-parse", "HEAD"], cwd=repo, check=True, capture_output=True, text=True).stdout.strip()
+            subprocess.run(["git", "update-ref", "refs/remotes/origin/feature/reconcile", changed], cwd=repo, check=True)
+        elif case == "dirty_worktree":
+            (repo / "unexpected.txt").write_text("dirty\n")
+        elif case == "wrong_task_path":
+            other = repo / "tasks" / "TASK-030-other.md"
+            other.write_text(paths["task"].read_text())
+            subprocess.run(["git", "add", "tasks"], cwd=repo, check=True)
+            subprocess.run(["git", "commit", "-m", "ambiguous task"], cwd=repo, check=True, capture_output=True)
+            changed = subprocess.run(["git", "rev-parse", "HEAD"], cwd=repo, check=True, capture_output=True, text=True).stdout.strip()
+            subprocess.run(["git", "update-ref", "refs/remotes/origin/feature/reconcile", changed], cwd=repo, check=True)
+            checkpoint.task_path = str(other)
+            save_checkpoint(checkpoint, repo)
+        elif case == "checkpoint_branch":
+            checkpoint.branch = "other"
+            save_checkpoint(checkpoint, repo)
+        elif case == "main":
+            subprocess.run(["git", "branch", "-m", "main"], cwd=repo, check=True)
+        elif case == "detached":
+            subprocess.run(["git", "checkout", "--detach"], cwd=repo, check=True, capture_output=True)
+        elif case == "missing_origin":
+            subprocess.run(["git", "update-ref", "-d", "refs/remotes/origin/feature/reconcile"], cwd=repo, check=True)
+        elif case == "origin_diverged":
+            subprocess.run(["git", "update-ref", "refs/remotes/origin/feature/reconcile", checkpoint.expected_head], cwd=repo, check=True)
+        elif case == "missing_decision":
+            paths["decision"].unlink()
+        elif case == "ambiguous_decision":
+            duplicate = paths["decision"].parent / "duplicate.json"
+            duplicate.write_bytes(paths["decision"].read_bytes())
+        elif case == "malformed_decision":
+            (paths["decision"].parent / "malformed.json").write_text("{")
+        elif case in {"unauthorized_decision", "non_approve", "decision_linkage"}:
+            data = json.loads(paths["decision"].read_text())
+            if case == "unauthorized_decision": data["actor_role"] = "worker"
+            if case == "non_approve": data["decision"] = "REWORK"
+            if case == "decision_linkage": data["bundle_post_head"] = "0" * 40
+            paths["decision"].write_text(json.dumps(data))
+        elif case == "missing_finalization":
+            paths["finalize"].unlink()
+        else:
+            line = json.loads(paths["finalize"].read_text())
+            if case == "unsuccessful_finalization": line["status"] = "PUBLICATION_FAILED"
+            if case == "finalization_linkage": line["commit_sha"] = "0" * 40
+            content = json.dumps(line) + "\n"
+            if case == "ambiguous_finalization": content += json.dumps(line) + "\n"
+            paths["finalize"].write_text(content)
+
+        checkpoint_path = default_orchestration_dir(repo) / "ORCH-completed.json"
+        before_checkpoint = checkpoint_path.read_bytes()
+        before_evidence = {
+            name: path.read_bytes() for name, path in paths.items() if path.exists()
+        }
+        with pytest.raises(OrchestrationError, match=expected):
+            reconcile_completed_run("ORCH-completed", repo)
+        assert checkpoint_path.read_bytes() == before_checkpoint
+        assert {
+            name: path.read_bytes() for name, path in paths.items() if path.exists()
+        } == before_evidence
 
 
 # ---------------------------------------------------------------------------

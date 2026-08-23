@@ -1,6 +1,6 @@
 # TASK-030 — Explicit completed-run reconciliation
 
-STATUS: READY
+STATUS: APPROVED
 
 ## Objective
 
@@ -36,9 +36,9 @@ A finalization may complete successfully while its orchestration checkpoint rema
 - Resolve exactly one caller-supplied orchestration run and fail closed when its checkpoint cannot be loaded or is not eligible for reconciliation.
 - Require the checkpoint task to resolve to the same repository task and require its current lifecycle state to be APPROVED.
 - Require a named current branch that is not main and exactly matches the checkpoint branch.
-- Require the checkpoint expected commit, current local branch tip, and the corresponding local origin tracking reference to identify the same commit.
-- Require an existing controller decision with an allowed owner or controller actor, APPROVE value, and exact linkage to the same task and review evidence.
-- Require an existing successful finalization record matching the same task, decision, review evidence, branch, and finalized commit.
+- Require the current local branch tip and corresponding local origin tracking reference to identify the same finalized commit.
+- Resolve exactly one existing controller decision from the canonical decision evidence directory with an allowed owner or controller actor, APPROVE value, and exact linkage to the checkpoint's task and review bundle; validate a checkpoint decision reference when one was persisted, but do not require it after an interrupted handoff.
+- Resolve exactly one successful finalization record from the canonical append-only finalization artifact matching the same task, decision, review evidence, branch, review HEAD as its pre-commit HEAD, and synchronized finalized commit; validate a checkpoint finalization reference when one was persisted, but do not require it after an interrupted handoff.
 - Reject missing, malformed, ambiguous, duplicated, conflicting, stale, or mismatched evidence.
 - Record bounded reconciliation evidence and atomically update only the eligible orchestration checkpoint to its already-proven terminal outcome.
 - Preserve all task, checkpoint, controller, review, audit, and finalization evidence.
@@ -91,7 +91,7 @@ None
 - The command performs no mutation until every eligibility and evidence check succeeds.
 - Reconciliation succeeds only when the resolved task is currently APPROVED and matches the checkpoint task identity and path.
 - Reconciliation succeeds only on a named non-main current branch that exactly matches the checkpoint branch.
-- Reconciliation succeeds only when the checkpoint expected commit, current local branch tip, and local origin tracking tip are identical.
+- Reconciliation succeeds only when the current local branch tip, local origin tracking tip, and finalization post/commit evidence are identical, while the finalization pre-commit HEAD matches the checkpoint review bundle. A stale checkpoint's earlier expected HEAD is preserved as reconciliation evidence rather than incorrectly treated as the published commit.
 - Reconciliation does not fetch or otherwise contact origin to establish synchronization.
 - Exactly one valid APPROVE controller decision is resolved and proven to match the task and review evidence referenced by the checkpoint and finalization record.
 - Exactly one successful finalization record is resolved and proven to match the task, decision, review evidence, branch, and finalized commit.
@@ -104,7 +104,7 @@ None
 
 ## Test requirements
 
-- Add a deterministic success test in a temporary Git repository with a named non-main branch, matching checkpoint commit, synchronized local and local origin-tracking refs, an APPROVED task, one matching APPROVE controller decision, and matching successful finalization evidence.
+- Add a deterministic success test in a temporary Git repository with a named non-main branch, a deliberately pre-finalization stale checkpoint HEAD, synchronized finalized local and local origin-tracking refs, an APPROVED task, one matching APPROVE controller decision, and matching successful finalization evidence.
 - Assert that success updates only the intended checkpoint and bounded reconciliation evidence, preserves all existing evidence, and invokes no worker, finalizer, or publication operation.
 - Add concise parameterized failure tests for task not APPROVED, wrong task identity, main, detached HEAD, checkpoint branch mismatch, checkpoint commit mismatch, missing origin tracking ref, local/origin divergence, missing or malformed decision, unauthorized decision actor, non-APPROVE decision, decision linkage mismatch, missing or unsuccessful finalization, finalization linkage mismatch, and ambiguous evidence.
 - For every negative case, assert a non-zero result and byte-for-byte preservation of the checkpoint and existing evidence.
@@ -139,16 +139,55 @@ None.
 
 ### Implemented
 
+- Added the explicit preview-first `reconcile-completed-run <run-id> [--apply]` CLI command.
+- Added fail-closed task, branch, local-ref, decision, review, and successful
+  finalization linkage validation before mutation.
+- Corrected the worker proposal during independent review so reconciliation
+  follows the real review-bundle -> decision -> finalization pre/post-commit
+  chain even when the interrupted checkpoint never persisted later paths.
+- Added a bounded reconciliation record and atomic transition of the one named
+  checkpoint to its existing `PUBLISHED` outcome.
+- Added local temporary-repository unit and CLI coverage, including evidence
+  preservation on rejected reconciliation.
+
 ### Files changed
+
+- `advancore/agent_runner/orchestration.py`
+- `advancore/agent_runner/__main__.py`
+- `tests/test_orchestration.py`
+- `docs/architecture/AGENT_RUNNER.md`
+- `tasks/TASK-030-explicit-completed-run-reconciliation.md`
 
 ### Database changes
 
+None.
+
 ### Tests executed and results
+
+- `.venv/bin/python -m pytest tests/test_orchestration.py tests/test_agent_runner.py -q`
+  — 104 passed.
+- `.venv/bin/python -m pytest tests/ -q` — 641 passed.
 
 ### Assumptions
 
+- FACT: only a `PUSHED` finalization record is treated as proof of the
+  published terminal orchestration outcome.
+- FACT: origin synchronization is established exclusively from the existing
+  local `refs/remotes/origin/<branch>` reference.
+
 ### Risks / unresolved issues
+
+- The command deliberately validates the existing local origin-tracking ref and
+  does not fetch. It proves agreement with the last locally recorded remote tip,
+  not a new network observation; this limitation is reported in preview output
+  and preserves the no-credentials/no-network recovery boundary.
 
 ### Decisions required
 
+- Independent controller review and approval are required before the bounded
+  feature-branch implementation may be finalized or pushed.
+
 ### Recommended next step
+
+Review the repaired evidence-chain validation and refreshed 641-test result,
+then use the existing controller-decision and finalization boundaries.
