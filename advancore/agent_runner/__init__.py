@@ -99,6 +99,15 @@ from advancore.agent_runner.orchestration import (
     run_orchestration,
     save_checkpoint,
 )
+from advancore.agent_runner.orchestration_inbox import (
+    INBOX_SCHEMA_VERSION,
+    InboxClassification,
+    OrchestrationInbox,
+    OrchestrationInboxEntry,
+    build_orchestration_inbox,
+    format_orchestration_inbox,
+    serialize_orchestration_inbox,
+)
 from advancore.agent_runner.review_bundle import (
     ControllerAction,
     ReviewBundle,
@@ -210,6 +219,13 @@ __all__ = [
     "OrchestrationResult",
     "OrchestrationStatus",
     "OwnerAction",
+    "INBOX_SCHEMA_VERSION",
+    "InboxClassification",
+    "OrchestrationInbox",
+    "OrchestrationInboxEntry",
+    "build_orchestration_inbox",
+    "format_orchestration_inbox",
+    "serialize_orchestration_inbox",
     "default_orchestration_dir",
     "load_checkpoint",
     "run_orchestration",

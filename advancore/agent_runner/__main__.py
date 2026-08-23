@@ -142,6 +142,11 @@ from advancore.agent_runner.orchestration import (
     OrchestrationStatus,
     run_orchestration,
 )
+from advancore.agent_runner.orchestration_inbox import (
+    build_orchestration_inbox,
+    format_orchestration_inbox,
+    serialize_orchestration_inbox,
+)
 
 
 def _format_result(result: RunnerResult) -> str:
@@ -866,6 +871,22 @@ def main(argv: list[str] | None = None) -> int:
         help="Actually launch planners/workers, write checkpoints, mutate lifecycle, and delegate finalization.",
     )
 
+    inbox_parser = subparsers.add_parser(
+        "orchestration-inbox",
+        help="Show unresolved orchestration exceptions (strictly read-only).",
+    )
+    inbox_parser.add_argument(
+        "--json",
+        action="store_true",
+        help="Emit the versioned stable JSON schema.",
+    )
+    inbox_parser.add_argument(
+        "--run",
+        dest="inbox_run_id",
+        default=None,
+        help="Limit the read-only view to one exact orchestration run ID.",
+    )
+
     transition_parser = subparsers.add_parser(
         "transition",
         help="Preview or apply a task-status transition (dry-run by default).",
@@ -1120,6 +1141,23 @@ def main(argv: list[str] | None = None) -> int:
     )
 
     args = parser.parse_args(argv)
+
+    if args.command == "orchestration-inbox":
+        try:
+            git_info = get_git_info(cwd=Path.cwd())
+            inbox = build_orchestration_inbox(
+                git_info.repo_root, run_id=args.inbox_run_id
+            )
+        except Exception as exc:
+            print(f"FAIL: cannot inspect orchestration inbox: {exc}", file=sys.stderr)
+            return 1
+        output = (
+            serialize_orchestration_inbox(inbox)
+            if args.json
+            else format_orchestration_inbox(inbox)
+        )
+        print(output)
+        return 0
 
     if args.command == "controller-transport":
         try:

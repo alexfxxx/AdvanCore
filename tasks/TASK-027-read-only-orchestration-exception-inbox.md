@@ -1,6 +1,6 @@
 # TASK-027 — Read-Only Orchestration Exception Inbox
 
-STATUS: READY
+STATUS: APPROVED
 
 ## Objective
 
@@ -95,16 +95,57 @@ The exception inbox is read-only and does not spend or replace owner authority.
 
 ### Implemented
 
+- Added deterministic, read-only discovery and fail-closed revalidation of
+  local orchestration checkpoints.
+- Added bounded action-required, operator-investigation, and
+  stale-or-invalid-evidence classifications with stable JSON and concise human
+  output.
+- Added `orchestration-inbox [--json] [--run <id>]` without mutation authority.
+- Added focused read-only, malformed/stale, publication, ordering, schema, and
+  CLI tests plus architecture and decision documentation.
+
 ### Files changed
+
+- `advancore/agent_runner/orchestration_inbox.py`
+- `advancore/agent_runner/__main__.py`
+- `advancore/agent_runner/__init__.py`
+- `tests/test_orchestration_inbox.py`
+- `docs/architecture/AGENT_RUNNER.md`
+- `docs/decisions/ADR-027-read-only-orchestration-exception-inbox.md`
+- `tasks/TASK-027-read-only-orchestration-exception-inbox.md`
 
 ### Database changes
 
+- None.
+
 ### Tests and results
+
+- `.venv/bin/python -m pytest tests/test_orchestration_inbox.py -v` — 6 passed.
+- `.venv/bin/python -m pytest tests/ -v` — 601 passed.
+- `git diff --check` — passed.
 
 ### Assumptions
 
+- A `PUBLISHED` checkpoint is safely excludable only when its terminal phase,
+  status, push flag, commit, finalization reference, and completed finalization
+  phase are present and all other checkpoint evidence revalidates.
+- Checkpoint timestamp ordering is oldest first within each urgency class so
+  long-waiting exceptions remain visible.
+
 ### Risks / unresolved issues
+
+- No notification or remote presentation is included; clients must invoke or
+  render the local read-only view on demand.
+- Existing artifact loaders are reused where available; goal-task, auto, and
+  finalization references are containment/existence checked because those
+  modules do not expose equivalent single-artifact read validators.
 
 ### Decisions required
 
+- Independent review and owner approval of TASK-027 completion remain required.
+
 ### Recommended next step
+
+- Review the implementation and verification evidence, then perform any
+  authorized lifecycle/finalization action separately. Do not infer approval
+  from this completion report.

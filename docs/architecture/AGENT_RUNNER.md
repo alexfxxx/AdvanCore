@@ -1727,3 +1727,44 @@ TASK-020 approval and publication gates. See
 `docs/runbooks/WORKER_FALLBACK.md` for the operator procedure and
 `docs/decisions/ADR-023-worker-fallback-operational-validation.md` for the
 validation decision.
+
+---
+
+## 20. Read-Only Orchestration Exception Inbox (TASK-027)
+
+`advancore.agent_runner.orchestration_inbox` projects unresolved local
+checkpoints into a bounded exception list. The CLI discovers runs without a
+caller-supplied ID:
+
+```bash
+.venv/bin/python -m advancore.agent_runner orchestration-inbox
+.venv/bin/python -m advancore.agent_runner orchestration-inbox --json
+.venv/bin/python -m advancore.agent_runner orchestration-inbox --run ORCH-<id>
+```
+
+Discovery is deterministic and limited to JSON checkpoint candidates under
+`.agent_runner/orchestration/`. Every candidate is revalidated against the
+current checkpoint schema, filename/run ID, authoritative task file, bounded
+artifact paths and cross-links, current branch/HEAD/path fingerprint, and
+terminal publication evidence. A verified, idempotent `PUBLISHED` run is
+excluded. Missing, malformed, conflicting, unsafe, unreadable, or stale
+evidence is retained as a fail-closed exception rather than skipped.
+
+Entries are ordered by classification urgency, checkpoint timestamp, and run
+ID. They expose only run and task identity/title, phase/status, a bounded
+reason, bounded evidence references, whether an owner decision is required,
+and one exact preview command. The `advancore-orchestration-inbox-v1` JSON
+schema is stable and contains no goal/task bodies, prompts, transcripts, raw
+worker output, environment, or credentials.
+
+The inbox performs read operations only. It does not normalize checkpoints,
+append audit records, change lifecycle state, create handoffs or decisions,
+launch processes other than read-only Git inspection, resume workers, or
+delegate publication. Its preview command omits `--apply`, and its
+classification never implies approval or recovery.
+
+Codex desktop, a phone-oriented presentation, or another local client may
+render this JSON and relay an explicitly selected command. AdvanCore remains
+the provider-neutral owner of validation and governance classification. The
+presentation client is optional, creates no authority, and must not reinterpret
+an entry as approval, a lifecycle transition, or permission to publish.
