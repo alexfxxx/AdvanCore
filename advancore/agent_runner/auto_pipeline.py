@@ -31,9 +31,18 @@ from advancore.agent_runner.runner import (
     RunnerStatus,
     execute,
     verify_post_worker,
+    write_review_bundle_for_result,
 )
 from advancore.agent_runner.task import Task, TaskError, find_task
-from advancore.agent_runner.validation import ValidationResult, validate
+from advancore.agent_runner.validation import (
+    OwnerReworkEvidence,
+    REWORK_TERMINAL_HASH_PREFIX,
+    ReworkValidationPhase,
+    ValidationResult,
+    owner_rework_terminal_content_hash,
+    validate,
+    validate_owner_rework_evidence,
+)
 from advancore.agent_runner.worker import (
     WorkerAdapter,
     WorkerResult,
@@ -1071,6 +1080,7 @@ def _run_repair_attempt(
     diff_check_runner: Callable[[Path], DiffCheckResult],
     attempt_number: int,
     max_attempts: int,
+    rework_evidence: OwnerReworkEvidence | None = None,
 ) -> AutoPipelineResult:
     """Launch a bounded repair worker and rerun full verification.
 
@@ -1108,9 +1118,39 @@ def _run_repair_attempt(
     result.git_info = pre_git_info
     result.pre_git_info = pre_git_info
 
+    if rework_evidence is not None:
+        before_repair = validate_owner_rework_evidence(
+            rework_evidence,
+            repo_root,
+            phase=ReworkValidationPhase.TERMINAL,
+            task_id=task.task_id,
+            task_path=f"tasks/{task.filename}",
+            allowed_scope=allowed_paths,
+        )
+        if not before_repair:
+            result.status = AutoPipelineStatus.NON_REPAIRABLE
+            result.messages.extend(before_repair.messages)
+            _write_auto_artifact(result)
+            return result
+
     # Launch repair worker with the bounded instruction.
     worker_result = worker.run(instruction, repo_root)
     result.worker_result = worker_result
+
+    if rework_evidence is not None:
+        after_repair = validate_owner_rework_evidence(
+            rework_evidence,
+            repo_root,
+            phase=ReworkValidationPhase.TERMINAL,
+            task_id=task.task_id,
+            task_path=f"tasks/{task.filename}",
+            allowed_scope=allowed_paths,
+        )
+        if not after_repair:
+            result.status = AutoPipelineStatus.NON_REPAIRABLE
+            result.messages.extend(after_repair.messages)
+            _write_auto_artifact(result)
+            return result
 
     if not worker_result.success:
         result.status = AutoPipelineStatus.WORKER_FAILED
@@ -1141,7 +1181,7 @@ def _run_repair_attempt(
         _write_auto_artifact(result)
         return result
 
-    return _run_verification_sequence(
+    verified = _run_verification_sequence(
         result,
         repo_root,
         allowed_paths,
@@ -1149,6 +1189,47 @@ def _run_repair_attempt(
         pytest_runner,
         diff_check_runner,
     )
+    if verified.status != AutoPipelineStatus.READY_FOR_APPROVAL:
+        return verified
+    if rework_evidence is not None:
+        before_review = validate_owner_rework_evidence(
+            rework_evidence,
+            repo_root,
+            phase=ReworkValidationPhase.TERMINAL,
+            task_id=task.task_id,
+            task_path=f"tasks/{task.filename}",
+            allowed_scope=allowed_paths,
+        )
+        if not before_review:
+            verified.status = AutoPipelineStatus.NON_REPAIRABLE
+            verified.messages.extend(before_review.messages)
+            _write_auto_artifact(verified)
+            return verified
+        try:
+            verified.messages.append(
+                REWORK_TERMINAL_HASH_PREFIX
+                + owner_rework_terminal_content_hash(rework_evidence, repo_root)
+            )
+        except (OSError, UnicodeError, ValueError) as exc:
+            verified.status = AutoPipelineStatus.NON_REPAIRABLE
+            verified.messages.append(
+                f"FAIL: cannot bind repaired terminal content: {exc}"
+            )
+            _write_auto_artifact(verified)
+            return verified
+    fresh_runner = RunnerResult(
+        status=RunnerStatus.AWAITING_APPROVAL,
+        task=task,
+        git_info=post_git_info,
+        pre_git_info=pre_git_info,
+        post_git_info=post_git_info,
+        worker_result=worker_result,
+        worker_type=worker.name,
+        post_verification=result.post_verification,
+        messages=list(verified.messages),
+    )
+    verified.review_bundle_path = write_review_bundle_for_result(fresh_runner)
+    return verified
 
 
 def run_auto_pipeline(
@@ -1161,6 +1242,7 @@ def run_auto_pipeline(
     diff_check_runner: Callable[[Path], DiffCheckResult] | None = None,
     max_repair_attempts: int = 0,
     fallback_worker: WorkerAdapter | None = None,
+    rework_evidence: OwnerReworkEvidence | None = None,
 ) -> AutoPipelineResult:
     """Run the full governed auto-pipeline for *task_id* with optional repair.
 
@@ -1227,6 +1309,26 @@ def run_auto_pipeline(
             ],
         )
 
+    if rework_evidence is not None:
+        if task.status.upper() != "REWORK":
+            return _pre_failure(
+                AutoPipelineStatus.VALIDATION_FAILED,
+                ["FAIL: owner rework evidence requires task status REWORK"],
+            )
+        independent_baseline = validate_owner_rework_evidence(
+            rework_evidence,
+            repo_root,
+            phase=ReworkValidationPhase.BASELINE,
+            task_id=task.task_id,
+            task_path=f"tasks/{task.filename}",
+            allowed_scope=safe_allowed,
+        )
+        if not independent_baseline:
+            return _pre_failure(
+                AutoPipelineStatus.VALIDATION_FAILED,
+                independent_baseline.messages,
+            )
+
     if fallback_worker is not None:
         validate_worker_policy(worker.name, fallback_worker.name)
     for configured_worker in (worker, fallback_worker):
@@ -1237,7 +1339,12 @@ def run_auto_pipeline(
     # ``execute()`` validates branch/clean/status, captures pre/post Git snapshots,
     # writes an audit record, and produces a review bundle.
     before_remotes = _remote_fingerprint(repo_root) if fallback_worker else None
-    runner_result = execute(tasks_dir, task_id, worker=worker)
+    runner_result = execute(
+        tasks_dir,
+        task_id,
+        worker=worker,
+        rework_evidence=rework_evidence,
+    )
     primary_worker_name = worker.name
     fallback_attempt: FallbackAttempt | None = None
 
@@ -1261,12 +1368,34 @@ def run_auto_pipeline(
             messages=integrity_messages,
         )
         if failure != ProviderFailure.UNKNOWN and integrity_ok:
-            runner_result = execute(tasks_dir, task_id, worker=fallback_worker)
-            worker = fallback_worker
-            fallback_attempt.terminal_worker = fallback_worker.name
-            fallback_attempt.messages.append(
-                f"Fallback selected explicitly: {primary_worker_name} -> {fallback_worker.name}"
-            )
+            fallback_baseline = None
+            if rework_evidence is not None:
+                fallback_baseline = validate_owner_rework_evidence(
+                    rework_evidence,
+                    repo_root,
+                    phase=ReworkValidationPhase.BASELINE,
+                    task_id=task.task_id,
+                    task_path=f"tasks/{task.filename}",
+                    allowed_scope=safe_allowed,
+                )
+            if fallback_baseline is not None and not fallback_baseline:
+                fallback_attempt.integrity_ok = False
+                fallback_attempt.messages.extend(fallback_baseline.messages)
+                fallback_attempt.messages.append(
+                    "Fallback blocked: reviewed baseline changed after primary worker"
+                )
+            else:
+                runner_result = execute(
+                    tasks_dir,
+                    task_id,
+                    worker=fallback_worker,
+                    rework_evidence=rework_evidence,
+                )
+                worker = fallback_worker
+                fallback_attempt.terminal_worker = fallback_worker.name
+                fallback_attempt.messages.append(
+                    f"Fallback selected explicitly: {primary_worker_name} -> {fallback_worker.name}"
+                )
         else:
             fallback_attempt.messages.append(
                 "Fallback blocked: failure classification or repository integrity was not eligible"
@@ -1308,6 +1437,24 @@ def run_auto_pipeline(
     )
     if fallback_attempt:
         result.messages.extend(fallback_attempt.messages)
+
+    if rework_evidence is not None:
+        independent_terminal = validate_owner_rework_evidence(
+            rework_evidence,
+            repo_root,
+            phase=ReworkValidationPhase.TERMINAL,
+            task_id=task.task_id,
+            task_path=f"tasks/{task.filename}",
+            allowed_scope=safe_allowed,
+        )
+        result.messages.extend(independent_terminal.messages)
+        if not independent_terminal:
+            result.status = AutoPipelineStatus.NON_REPAIRABLE
+            result.messages.append(
+                "Independent auto-pipeline rework verification failed."
+            )
+            _write_auto_artifact(result)
+            return result
 
     if (
         runner_result.worker_result is not None
@@ -1418,6 +1565,7 @@ def run_auto_pipeline(
             diff_check_runner=diff_check_runner,
             attempt_number=attempt_number,
             max_attempts=repair_config.max_attempts,
+            rework_evidence=rework_evidence,
         )
         repair_attempt.worker_success = (
             repair_result.worker_result.success if repair_result.worker_result else None

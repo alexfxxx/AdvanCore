@@ -1,6 +1,6 @@
 # TASK-038 — Phase-aware owner rework evidence boundary
 
-STATUS: READY
+STATUS: APPROVED
 
 ## Objective
 
@@ -118,16 +118,50 @@ None.
 
 ### Implemented
 
+- Added typed, immutable owner-rework evidence bound to the exact prior review, handoff, decision, repository identity, authorized scope, tracked path set, and baseline content.
+- Added separate BASELINE and TERMINAL validation policies so content is frozen before launch and may evolve only on the same reviewed paths after launch.
+- Enforced the evidence independently in the runner and auto-pipeline before primary/fallback launch, after terminal worker outcomes, around repairs, and before fresh review/handoff evidence.
+- Bound fresh review bundles to the exact terminal-content hash and consumed each rework authorization after its fresh handoff was created.
+- Added real-Git regression and end-to-end owner REWORK coverage plus operator and architecture documentation.
+
 ### Files changed
+
+- `advancore/agent_runner/validation.py`
+- `advancore/agent_runner/runner.py`
+- `advancore/agent_runner/auto_pipeline.py`
+- `advancore/agent_runner/orchestration.py`
+- `tests/test_agent_runner.py`
+- `tests/test_orchestration.py`
+- `tests/test_owner_action_orchestration_e2e.py`
+- `docs/architecture/AGENT_RUNNER.md`
+- `docs/runbooks/OWNER_DECISION_RESUME.md`
+- `tasks/TASK-038-phase-aware-owner-rework-evidence-boundary.md`
 
 ### Database changes
 
+None.
+
 ### Tests executed and results
+
+- Focused governance suite: 184 passed.
+- Full repository suite: 691 passed.
+- Python compilation/import sanity checks passed for all four modified agent-runner modules.
+- `git diff --check` passed and the changed-path set remained within the approved scope.
 
 ### Assumptions
 
+- Canonical local Git plumbing remains available for offline repository evidence checks.
+- `.agent_runner/` remains ignored and available for bounded local evidence artifacts.
+
 ### Risks / unresolved issues
+
+- Full repository integrity checks add bounded local runtime during rework validation.
+- GitHub publication remains a separate owner/controller-gated action and was not performed by implementation.
 
 ### Decisions required
 
+None.
+
 ### Recommended next step
+
+Perform independent controller review, then commit and publish the feature branch only if the exact implementation and evidence pass that review.

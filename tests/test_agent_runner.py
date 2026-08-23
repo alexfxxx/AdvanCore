@@ -8,7 +8,9 @@ real repository or on Kimi Code being installed.
 from __future__ import annotations
 
 from dataclasses import dataclass
+import hashlib
 from pathlib import Path
+import subprocess
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -37,6 +39,12 @@ from advancore.agent_runner.audit import (
 from advancore.agent_runner.git_info import GitInfo
 from advancore.agent_runner.runner import RunnerStatus, verify_post_worker
 from advancore.agent_runner.task import Task, TaskError
+from advancore.agent_runner.validation import (
+    OwnerReworkEvidence,
+    ReworkValidationPhase,
+    capture_owner_rework_evidence,
+    validate_owner_rework_evidence,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -66,6 +74,207 @@ def _write_task(
 # ---------------------------------------------------------------------------
 # Task parsing
 # ---------------------------------------------------------------------------
+
+
+def test_phase_aware_owner_rework_evidence_uses_real_git(tmp_path: Path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    subprocess.run(
+        ["git", "init", "-b", "feature/rework"],
+        cwd=repo,
+        check=True,
+        capture_output=True,
+    )
+    subprocess.run(["git", "config", "user.email", "test@example.invalid"], cwd=repo, check=True)
+    subprocess.run(["git", "config", "user.name", "Test"], cwd=repo, check=True)
+    subprocess.run(["git", "remote", "add", "origin", "../remote.git"], cwd=repo, check=True)
+    (repo / ".gitignore").write_text(".agent_runner/\n", encoding="utf-8")
+    tasks = repo / "tasks"
+    tasks.mkdir()
+    task_path = _write_task(tasks, "TASK-038", "Rework", "READY")
+    source = repo / "bounded.py"
+    source.write_text("value = 1\n", encoding="utf-8")
+    subprocess.run(["git", "add", "."], cwd=repo, check=True)
+    subprocess.run(
+        ["git", "commit", "-m", "baseline"],
+        cwd=repo,
+        check=True,
+        capture_output=True,
+    )
+    head = subprocess.run(
+        ["git", "rev-parse", "HEAD"],
+        cwd=repo,
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.strip()
+    subprocess.run(
+        ["git", "update-ref", "refs/remotes/origin/feature/rework", head],
+        cwd=repo,
+        check=True,
+    )
+    source.write_text("value = 2\n", encoding="utf-8")
+    task_path.write_text(
+        task_path.read_text().replace("STATUS: READY", "STATUS: REVIEW"),
+        encoding="utf-8",
+    )
+    evidence_dir = repo / ".agent_runner" / "evidence"
+    evidence_dir.mkdir(parents=True)
+    bundle_path = evidence_dir / "bundle.json"
+    handoff_path = evidence_dir / "handoff.json"
+    decision_path = evidence_dir / "decision.json"
+    bundle_path.write_text("bundle", encoding="utf-8")
+    handoff_path.write_text("handoff", encoding="utf-8")
+    decision_path.write_text("decision", encoding="utf-8")
+    artifact_hash = lambda path: hashlib.sha256(path.read_bytes()).hexdigest()
+    scope = ["bounded.py", f"tasks/{task_path.name}"]
+    evidence = capture_owner_rework_evidence(
+        repo,
+        task_id="TASK-038",
+        task_path=f"tasks/{task_path.name}",
+        run_id="run-038",
+        review_bundle_id=artifact_hash(bundle_path),
+        review_bundle_path=str(bundle_path),
+        handoff_id=artifact_hash(handoff_path),
+        handoff_path=str(handoff_path),
+        decision_id=artifact_hash(decision_path),
+        decision_path=str(decision_path),
+        allowed_scope=scope,
+        owner_note="Refresh after editing.",
+    )
+    assert isinstance(evidence, OwnerReworkEvidence)
+
+    wrong_lifecycle = execute(
+        tasks,
+        "TASK-038",
+        worker=DryRunWorkerAdapter(),
+        rework_evidence=evidence,
+    )
+    assert wrong_lifecycle.status == RunnerStatus.FAILED
+    assert "requires task status REWORK" in " ".join(wrong_lifecycle.messages)
+
+    task_path.write_text(
+        task_path.read_text().replace("STATUS: REVIEW", "STATUS: REWORK"),
+        encoding="utf-8",
+    )
+    baseline = validate_owner_rework_evidence(
+        evidence,
+        repo,
+        phase=ReworkValidationPhase.BASELINE,
+        task_id="TASK-038",
+        task_path=f"tasks/{task_path.name}",
+        run_id="run-038",
+        allowed_scope=scope,
+    )
+    assert baseline
+
+    bundle_path.write_text("mutated", encoding="utf-8")
+    stale_bundle = validate_owner_rework_evidence(
+        evidence,
+        repo,
+        phase=ReworkValidationPhase.BASELINE,
+        task_id="TASK-038",
+        task_path=f"tasks/{task_path.name}",
+        allowed_scope=scope,
+    )
+    assert not stale_bundle
+    assert "review_bundle_id" in stale_bundle.messages[0]
+    bundle_path.write_text("bundle", encoding="utf-8")
+
+    lifecycle_only = task_path.read_text(encoding="utf-8")
+    task_path.write_text(lifecycle_only + "\nunauthorized = true\n", encoding="utf-8")
+    task_mutated = validate_owner_rework_evidence(
+        evidence,
+        repo,
+        phase=ReworkValidationPhase.BASELINE,
+        task_id="TASK-038",
+        task_path=f"tasks/{task_path.name}",
+        allowed_scope=scope,
+    )
+    assert not task_mutated
+    assert "normalized_task_hash" in task_mutated.messages[0]
+    task_path.write_text(lifecycle_only, encoding="utf-8")
+
+    source.write_text("value = 3\n", encoding="utf-8")
+    changed_baseline = validate_owner_rework_evidence(
+        evidence,
+        repo,
+        phase=ReworkValidationPhase.BASELINE,
+        task_id="TASK-038",
+        task_path=f"tasks/{task_path.name}",
+        allowed_scope=scope,
+    )
+    terminal = validate_owner_rework_evidence(
+        evidence,
+        repo,
+        phase=ReworkValidationPhase.TERMINAL,
+        task_id="TASK-038",
+        task_path=f"tasks/{task_path.name}",
+        allowed_scope=scope,
+    )
+    assert not changed_baseline
+    assert "binary_diff_hash" in changed_baseline.messages[0]
+    assert terminal
+
+    (repo / "unexpected.txt").write_text("no\n", encoding="utf-8")
+    unexpected = validate_owner_rework_evidence(
+        evidence,
+        repo,
+        phase=ReworkValidationPhase.TERMINAL,
+        task_id="TASK-038",
+        task_path=f"tasks/{task_path.name}",
+        allowed_scope=scope,
+    )
+    assert not unexpected
+    assert "ambiguous Git state" in unexpected.messages[0]
+
+    (repo / "unexpected.txt").unlink()
+    subprocess.run(
+        ["git", "remote", "set-url", "origin", "../changed.git"],
+        cwd=repo,
+        check=True,
+    )
+    remote_changed = validate_owner_rework_evidence(
+        evidence,
+        repo,
+        phase=ReworkValidationPhase.TERMINAL,
+        task_id="TASK-038",
+        task_path=f"tasks/{task_path.name}",
+        allowed_scope=scope,
+    )
+    assert not remote_changed
+    assert "remote_config_hash" in remote_changed.messages[0]
+
+    subprocess.run(
+        ["git", "remote", "set-url", "origin", "../remote.git"],
+        cwd=repo,
+        check=True,
+    )
+    with pytest.raises(ValueError, match="unsafe repository path"):
+        capture_owner_rework_evidence(
+            repo,
+            task_id="TASK-038",
+            task_path="../escape.md",
+            run_id="run-038",
+            review_bundle_id=artifact_hash(bundle_path),
+            review_bundle_path=str(bundle_path),
+            handoff_id=artifact_hash(handoff_path),
+            handoff_path=str(handoff_path),
+            decision_id=artifact_hash(decision_path),
+            decision_path=str(decision_path),
+            allowed_scope=scope,
+        )
+    subprocess.run(["git", "add", "bounded.py"], cwd=repo, check=True)
+    staged = validate_owner_rework_evidence(
+        evidence,
+        repo,
+        phase=ReworkValidationPhase.TERMINAL,
+        task_id="TASK-038",
+        task_path=f"tasks/{task_path.name}",
+        allowed_scope=scope,
+    )
+    assert not staged
+    assert "ambiguous Git state" in staged.messages[0]
 
 
 class TestTaskParsing:

@@ -1256,9 +1256,10 @@ class TestRework:
                 ):
                     result = run_orchestration(config, repo_root)
 
-        # First run returns REWORK, second run has no new decision -> pause.
-        assert auto_call_count == 2
-        assert result.status == OrchestrationStatus.AWAITING_IMPLEMENTATION_DECISION.value
+        # Synthetic Git metadata cannot create content-bound dirty-baseline
+        # evidence. The real-Git acceptance path covers the successful cycle.
+        assert auto_call_count == 1
+        assert result.status == OrchestrationStatus.STALE_EVIDENCE.value
 
     def test_rework_exhaustion_requires_intervention(self, tmp_path: Path):
         repo_root = tmp_path / "repo"

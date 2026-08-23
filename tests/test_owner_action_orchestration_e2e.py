@@ -4,11 +4,16 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+import subprocess
 from unittest.mock import patch
 
 import pytest
 
-from advancore.agent_runner.auto_pipeline import AutoPipelineResult, AutoPipelineStatus
+from advancore.agent_runner.auto_pipeline import (
+    AutoPipelineResult,
+    AutoPipelineStatus,
+    PytestResult,
+)
 from advancore.agent_runner.controller_decision import (
     DecisionValue,
     build_controller_decision,
@@ -24,6 +29,7 @@ from advancore.agent_runner.goal_task import (
 from advancore.agent_runner.lifecycle import ActorRole
 from advancore.agent_runner.orchestration import (
     OrchestrationConfig,
+    OrchestrationCheckpoint,
     OrchestrationError,
     OrchestrationPhase,
     OrchestrationStatus,
@@ -34,12 +40,157 @@ from advancore.agent_runner.orchestration import (
 )
 from advancore.agent_runner.review_bundle import ReviewBundle, serialize_bundle
 from advancore.agent_runner.task import Task
+from advancore.agent_runner.worker import WorkerAdapter, WorkerResult
 
 
 TASK_ID = "TASK-026"
 TASK_FILENAME = "TASK-026-owner-action-acceptance.md"
 RUN_BRANCH = "task-026-owner-action-acceptance"
 RUN_HEAD = "0260000000000000000000000000000000000000"
+
+
+def test_real_git_owner_rework_reaches_fresh_review_handoff(tmp_path: Path):
+    repo = tmp_path / "real-rework"
+    repo.mkdir()
+    subprocess.run(
+        ["git", "init", "-b", "feature/rework"],
+        cwd=repo,
+        check=True,
+        capture_output=True,
+    )
+    subprocess.run(["git", "config", "user.email", "test@example.invalid"], cwd=repo, check=True)
+    subprocess.run(["git", "config", "user.name", "Test"], cwd=repo, check=True)
+    subprocess.run(["git", "remote", "add", "origin", "../remote.git"], cwd=repo, check=True)
+    (repo / ".gitignore").write_text(".agent_runner/\n", encoding="utf-8")
+    tasks = repo / "tasks"
+    tasks.mkdir()
+    task_path = tasks / "TASK-038-real-rework.md"
+    task_path.write_text(
+        "# TASK-038 — Real rework\n\nSTATUS: READY\n\n"
+        "## Objective\n\nExercise phase-aware rework.\n\n"
+        "## Allowed changed-file scope\n\n"
+        "- `bounded.py`\n- `tasks/TASK-038-real-rework.md`\n\n"
+        "## Owner decisions\n\nNone.\n",
+        encoding="utf-8",
+    )
+    source = repo / "bounded.py"
+    source.write_text("value = 1\n", encoding="utf-8")
+    subprocess.run(["git", "add", "."], cwd=repo, check=True)
+    subprocess.run(
+        ["git", "commit", "-m", "baseline"],
+        cwd=repo,
+        check=True,
+        capture_output=True,
+    )
+    head = subprocess.run(
+        ["git", "rev-parse", "HEAD"],
+        cwd=repo,
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.strip()
+    subprocess.run(
+        ["git", "update-ref", "refs/remotes/origin/feature/rework", head],
+        cwd=repo,
+        check=True,
+    )
+    source.write_text("value = 2\n", encoding="utf-8")
+
+    prior_bundle = ReviewBundle(
+        timestamp="2026-08-23T00:00:00+00:00",
+        task_id="TASK-038",
+        task_filename=task_path.name,
+        previous_status="READY",
+        current_status="READY",
+        branch="feature/rework",
+        pre_head=head,
+        post_head=head,
+        runner_status="awaiting_approval",
+        worker_type="controlled-worker",
+        worker_success=True,
+        post_verification_ok=True,
+        changed_paths=["bounded.py"],
+        recommended_action="REVIEW",
+    )
+    prior_bundle_path = repo / ".agent_runner" / "review" / "prior.json"
+    prior_bundle_path.parent.mkdir(parents=True)
+    prior_bundle_path.write_text(
+        json.dumps(serialize_bundle(prior_bundle)), encoding="utf-8"
+    )
+    checkpoint = OrchestrationCheckpoint(
+        schema_version="advancore-orchestration-v1",
+        run_id="ORCH-real-rework",
+        goal_hash="goal",
+        goal_summary="real rework",
+        planner="dry-run",
+        worker="dry-run",
+        controller="manual",
+        repair_attempts=0,
+        max_rework=1,
+        apply=True,
+        phase=OrchestrationPhase.AWAITING_IMPLEMENTATION_DECISION.value,
+        status=OrchestrationStatus.AWAITING_IMPLEMENTATION_DECISION.value,
+        branch="feature/rework",
+        expected_head=head,
+        path_fingerprint=["bounded.py"],
+        task_id="TASK-038",
+        task_path=str(task_path),
+        task_written=True,
+        review_bundle_path=str(prior_bundle_path),
+        auto_status=AutoPipelineStatus.READY_FOR_APPROVAL.value,
+        completed_phases=[OrchestrationPhase.TASK_EXECUTION.value],
+    )
+    save_checkpoint(checkpoint, repo)
+    pending = run_orchestration(
+        OrchestrationConfig(resume_run_id=checkpoint.run_id, apply=True), repo
+    )
+    assert pending.status == OrchestrationStatus.AWAITING_IMPLEMENTATION_DECISION.value
+    prior_handoff_path = Path(load_checkpoint(checkpoint.run_id, repo).handoff_path or "")
+
+    class ControlledReworkWorker(WorkerAdapter):
+        @property
+        def name(self) -> str:
+            return "controlled-rework"
+
+        def build_command(self, instruction: str, working_dir: Path) -> list[str]:
+            return []
+
+        def run(self, instruction: str, working_dir: Path) -> WorkerResult:
+            (working_dir / "bounded.py").write_text("value = 3\n", encoding="utf-8")
+            return WorkerResult(success=True, message="controlled rework complete")
+
+    passed = PytestResult(
+        command=["pytest"],
+        returncode=0,
+        stdout="1 passed",
+        stderr="",
+        passed_count=1,
+        summary="1 passed",
+    )
+    with patch(
+        "advancore.agent_runner.orchestration.build_worker_adapter",
+        return_value=ControlledReworkWorker(),
+    ):
+        with patch("advancore.agent_runner.auto_pipeline.run_pytest", return_value=passed):
+            result = run_orchestration(
+                OrchestrationConfig(
+                    resume_run_id=checkpoint.run_id,
+                    owner_action=OwnerAction.REWORK_IMPLEMENTATION,
+                    owner_note="Apply the reviewed correction.",
+                    apply=True,
+                ),
+                repo,
+            )
+
+    assert result.status == OrchestrationStatus.AWAITING_IMPLEMENTATION_DECISION.value
+    assert source.read_text(encoding="utf-8") == "value = 3\n"
+    assert "STATUS: REWORK" in task_path.read_text(encoding="utf-8")
+    completed = load_checkpoint(checkpoint.run_id, repo)
+    assert completed.rework_cycles_used == 1
+    assert completed.rework_evidence is not None
+    assert len(completed.consumed_rework_authorizations) == 1
+    assert Path(completed.review_bundle_path or "").resolve() != prior_bundle_path.resolve()
+    assert Path(completed.handoff_path or "").resolve() != prior_handoff_path.resolve()
 
 
 def _git(repo_root: Path, *, head: str = RUN_HEAD) -> GitInfo:

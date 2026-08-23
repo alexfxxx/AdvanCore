@@ -93,6 +93,14 @@ from advancore.agent_runner.review_bundle import (
     load_review_bundle,
 )
 from advancore.agent_runner.task import Task, TaskError, find_task
+from advancore.agent_runner.validation import (
+    OwnerReworkEvidence,
+    REWORK_TERMINAL_HASH_PREFIX,
+    ReworkValidationPhase,
+    capture_owner_rework_evidence,
+    owner_rework_terminal_content_hash,
+    validate_owner_rework_evidence,
+)
 from advancore.agent_runner.worker import (
     DEFAULT_PLANNER_TIMEOUT_SECONDS,
     DEFAULT_WORKER_TIMEOUT_SECONDS,
@@ -299,6 +307,8 @@ class OrchestrationCheckpoint:
     owner_action_state: str | None = None
     owner_action_next_action: str | None = None
     reconciliation_evidence: list[dict[str, str]] = field(default_factory=list)
+    rework_evidence: dict[str, Any] | None = None
+    consumed_rework_authorizations: list[str] = field(default_factory=list)
     created_at: str = field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
     updated_at: str = field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
 
@@ -335,6 +345,30 @@ class OrchestrationResult:
 def _hash_goal(text: str) -> str:
     """Return a deterministic short hash of *text* for correlation."""
     return hashlib.sha256(text.encode("utf-8")).hexdigest()[:16]
+
+
+def _artifact_hash(path: Path) -> str:
+    """Return the full content identity of one bounded governance artifact."""
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def _restore_rework_evidence(raw: dict[str, Any] | None) -> OwnerReworkEvidence | None:
+    """Restore bounded tuple fields from an atomic JSON checkpoint."""
+    if raw is None:
+        return None
+    try:
+        return OwnerReworkEvidence(
+            **{
+                **raw,
+                "allowed_scope": tuple(raw["allowed_scope"]),
+                "changed_paths": tuple(raw["changed_paths"]),
+                "content_hashes": tuple(
+                    tuple(item) for item in raw["content_hashes"]
+                ),
+            }
+        )
+    except (KeyError, TypeError, ValueError) as exc:
+        raise OrchestrationError("Malformed owner rework evidence in checkpoint") from exc
 
 
 def _short_summary(text: str, max_length: int = 120) -> str:
@@ -1685,12 +1719,34 @@ def _phase_task_execution(
             blocking_reason=str(exc),
         )
 
+    try:
+        rework_evidence = _restore_rework_evidence(checkpoint.rework_evidence)
+    except OrchestrationError as exc:
+        return _build_result(
+            checkpoint,
+            ok=False,
+            status=OrchestrationStatus.STALE_EVIDENCE,
+            blocking_reason=str(exc),
+        )
+    if (
+        rework_evidence is not None
+        and rework_evidence.authorization_id
+        in checkpoint.consumed_rework_authorizations
+    ):
+        return _build_result(
+            checkpoint,
+            ok=False,
+            status=OrchestrationStatus.STALE_EVIDENCE,
+            blocking_reason="Owner rework authorization was already consumed",
+        )
+
     auto_result = run_auto_pipeline(
         tasks_dir,
         checkpoint.task_id,
         worker=worker,
         fallback_worker=fallback_worker,
         max_repair_attempts=config.repair_attempts,
+        rework_evidence=rework_evidence,
     )
 
     checkpoint.auto_artifact_path = (
@@ -1791,6 +1847,45 @@ def _phase_awaiting_implementation_decision(
             ],
         )
 
+    try:
+        rework_evidence = _restore_rework_evidence(checkpoint.rework_evidence)
+        if rework_evidence is not None:
+            current_task = find_task(tasks_dir, checkpoint.task_id)
+            current_bundle = Path(checkpoint.review_bundle_path or "")
+            if not current_bundle.is_absolute():
+                current_bundle = repo_root / current_bundle
+            if _artifact_hash(current_bundle) == rework_evidence.review_bundle_id:
+                raise OrchestrationError(
+                    "Successful rework requires a fresh review bundle"
+                )
+            terminal = validate_owner_rework_evidence(
+                rework_evidence,
+                repo_root,
+                phase=ReworkValidationPhase.TERMINAL,
+                task_id=checkpoint.task_id,
+                task_path=f"tasks/{current_task.filename}",
+                run_id=checkpoint.run_id,
+                allowed_scope=parse_task_allowed_scope(current_task.path) or [],
+            )
+            if not terminal:
+                raise OrchestrationError("; ".join(terminal.messages))
+            terminal_marker = (
+                REWORK_TERMINAL_HASH_PREFIX
+                + owner_rework_terminal_content_hash(rework_evidence, repo_root)
+            )
+            terminal_bundle = load_review_bundle(current_bundle)
+            if terminal_marker not in terminal_bundle.messages:
+                raise OrchestrationError(
+                    "Fresh review bundle is not bound to current terminal content"
+                )
+    except (OSError, ValueError, OrchestrationError, TaskError) as exc:
+        return _build_result(
+            checkpoint,
+            ok=False,
+            status=OrchestrationStatus.STALE_EVIDENCE,
+            blocking_reason=f"Cannot create fresh rework handoff: {exc}",
+        )
+
     # Ensure a handoff exists for the review bundle.
     handoff_path: Path | None = None
     if checkpoint.handoff_path:
@@ -1836,6 +1931,10 @@ def _phase_awaiting_implementation_decision(
         checkpoint.handoff_path = str(handoff_path)
         checkpoint.handoff_request_id = handoff.request_id
         checkpoint.messages.append(f"Handoff written to {handoff_path.name}")
+        if rework_evidence is not None:
+            checkpoint.consumed_rework_authorizations.append(
+                rework_evidence.authorization_id
+            )
         if config.apply:
             save_checkpoint(checkpoint, repo_root)
 
@@ -1930,6 +2029,62 @@ def _phase_awaiting_implementation_decision(
                 ok=False,
                 status=OrchestrationStatus.REWORK_EXHAUSTED,
                 blocking_reason=f"Rework budget exhausted ({config.max_rework} cycle(s))",
+            )
+
+        if not (
+            checkpoint.review_bundle_path
+            and checkpoint.handoff_path
+            and checkpoint.decision_path
+        ):
+            return _build_result(
+                checkpoint,
+                ok=False,
+                status=OrchestrationStatus.BLOCKED,
+                blocking_reason=(
+                    "REWORK requires exact review bundle, handoff, and decision evidence"
+                ),
+            )
+        try:
+            reviewed_task = find_task(tasks_dir, checkpoint.task_id)
+            review_path = Path(checkpoint.review_bundle_path)
+            handoff_evidence_path = Path(checkpoint.handoff_path)
+            decision_evidence_path = Path(checkpoint.decision_path)
+            review_path = review_path if review_path.is_absolute() else repo_root / review_path
+            handoff_evidence_path = (
+                handoff_evidence_path
+                if handoff_evidence_path.is_absolute()
+                else repo_root / handoff_evidence_path
+            )
+            decision_evidence_path = (
+                decision_evidence_path
+                if decision_evidence_path.is_absolute()
+                else repo_root / decision_evidence_path
+            )
+            decision_record = load_controller_decision(decision_evidence_path)
+            evidence = capture_owner_rework_evidence(
+                repo_root,
+                task_id=checkpoint.task_id,
+                task_path=f"tasks/{reviewed_task.filename}",
+                run_id=checkpoint.run_id,
+                review_bundle_id=_artifact_hash(review_path),
+                review_bundle_path=str(review_path.resolve()),
+                handoff_id=_artifact_hash(handoff_evidence_path),
+                handoff_path=str(handoff_evidence_path.resolve()),
+                decision_id=_artifact_hash(decision_evidence_path),
+                decision_path=str(decision_evidence_path.resolve()),
+                allowed_scope=parse_task_allowed_scope(reviewed_task.path) or [],
+                owner_note=decision_record.note,
+            )
+            if evidence.authorization_id in checkpoint.consumed_rework_authorizations:
+                raise OrchestrationError("Owner rework authorization was already consumed")
+            checkpoint.rework_evidence = asdict(evidence)
+            save_checkpoint(checkpoint, repo_root)
+        except (OSError, TaskError, ValueError, OrchestrationError) as exc:
+            return _build_result(
+                checkpoint,
+                ok=False,
+                status=OrchestrationStatus.STALE_EVIDENCE,
+                blocking_reason=f"Cannot bind owner REWORK evidence: {exc}",
             )
 
         # Auto-pipeline verification is evidence, not lifecycle authority.  Move
@@ -2027,6 +2182,28 @@ def _phase_awaiting_implementation_decision(
                 status=OrchestrationStatus.BLOCKED,
                 blocking_reason="Controller REWORK decision could not be applied",
                 messages=bridge_result.messages,
+            )
+
+        rebound_task = find_task(tasks_dir, checkpoint.task_id)
+        rebound_evidence = _restore_rework_evidence(checkpoint.rework_evidence)
+        rebound_validation = validate_owner_rework_evidence(
+            rebound_evidence,
+            repo_root,
+            phase=ReworkValidationPhase.BASELINE,
+            task_id=checkpoint.task_id,
+            task_path=f"tasks/{rebound_task.filename}",
+            run_id=checkpoint.run_id,
+            allowed_scope=parse_task_allowed_scope(rebound_task.path) or [],
+        )
+        if not rebound_validation:
+            return _build_result(
+                checkpoint,
+                ok=False,
+                status=OrchestrationStatus.STALE_EVIDENCE,
+                blocking_reason=(
+                    "Lifecycle transition changed reviewed rework content: "
+                    + "; ".join(rebound_validation.messages)
+                ),
             )
 
         if checkpoint.decision_path:

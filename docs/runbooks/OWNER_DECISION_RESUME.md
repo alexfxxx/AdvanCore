@@ -57,13 +57,29 @@ stop: do not create replacement evidence for that same bundle. A completed
 `PUBLISHED` checkpoint may be resumed without an owner action for inspection;
 that resume is idempotent and must not invoke finalization again.
 
+For `REWORK_IMPLEMENTATION`, do not clean, stage, copy, rename, or otherwise
+adjust the reviewed worktree between preview and `--apply`. The applied action
+captures a typed baseline bound to the current review bundle, handoff,
+decision, branch, HEAD, remotes, integrity, exact tracked unstaged paths, and
+file contents. The runner permits the lifecycle's single task `STATUS:` change
+and then revalidates the complete baseline before launching any worker.
+
+During rework, content may change only on that same exact path set. A new or
+missing path, staged/untracked content, rename, deletion, mode change, branch
+or HEAD movement, remote/ref change, integrity failure, or stale evidence stops
+the run without cleanup or publication. A failed primary may use the approved
+fallback only when the original baseline still matches exactly. Success always
+returns a fresh review bundle and handoff for another independent owner review;
+it never reuses the decision that authorized rework.
+
 ## Acceptance evidence
 
-`tests/test_owner_action_orchestration_e2e.py` runs the operational sequence in
-a temporary repository. Goal-task generation, worker verification, Git facts,
-and the final `PUSHED` result are controlled local fakes; lifecycle, decision,
-handoff, checkpoint, resume, and orchestration report behavior use production
-code. No live provider, network, GitHub, credentials, or publication is used.
+`tests/test_owner_action_orchestration_e2e.py` runs the operational sequences
+in temporary repositories. The rework acceptance path uses real local Git for
+branch, HEAD, status, content, diff, remote/ref, and integrity evidence, plus a
+controlled local worker. Other provider and final `PUSHED` results remain
+controlled local fakes. No live provider, network, GitHub, credentials, or
+publication is used.
 
 ## Authority split
 

@@ -1668,6 +1668,36 @@ fail closed, and verified publication is terminal and idempotent.
 - Controller REWORK uses the valid sequence
   `READY/REWORK -> IN_PROGRESS -> REVIEW -> REWORK`, with worker and controller
   attribution kept distinct and one bounded orchestration rework cycle.
+
+### Phase-aware dirty-baseline rework boundary (TASK-038)
+
+An explicit owner `REWORK_IMPLEMENTATION` decision creates one typed,
+single-use `OwnerReworkEvidence` capability. It binds the exact run, task,
+prior review bundle, handoff, decision, bounded owner note, feature branch,
+HEAD, clean index, remotes and remote refs, repository-integrity fingerprint,
+authorized scope, tracked unstaged path set, normalized task content,
+per-file content hashes, and binary-diff hash. A boolean or caller assertion
+cannot authorize a dirty worktree.
+
+Validation is deliberately phase-aware:
+
+- **BASELINE** runs immediately before primary and eligible fallback launch.
+  Every bound identity and content fingerprint must match. The lifecycle may
+  change only the task's one `STATUS:` line, which is normalized for this
+  comparison.
+- **TERMINAL** runs after worker success or failure, after every repair, and
+  before a fresh review bundle or handoff. Content may evolve only on the
+  exact baseline path set; branch, HEAD, index, scope, Git-state shape,
+  remotes, remote refs, repository integrity, and evidence identity must not
+  change.
+
+Staged, untracked, intent-to-add, renamed, deleted, mode-changed, conflicting,
+missing, additional, out-of-scope, malformed, stale, replayed, or consumed
+state fails closed. A primary worker that changed baseline content cannot hand
+that authorization to a fallback. Successful rework produces a new review
+bundle and handoff describing terminal content; the prior decision and
+authorization cannot launch another worker. Failure preserves files and
+historical evidence without staging, reset, commit, push, or publication.
 - Controller APPROVE alone may enter TASK-020 finalization.
 - Success requires TASK-020 `PUSHED` evidence for the same non-`main` branch.
 

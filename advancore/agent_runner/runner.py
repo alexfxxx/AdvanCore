@@ -22,7 +22,15 @@ from advancore.agent_runner.review_bundle import (
     write_review_bundle,
 )
 from advancore.agent_runner.task import find_task
-from advancore.agent_runner.validation import ValidationResult, validate
+from advancore.agent_runner.validation import (
+    OwnerReworkEvidence,
+    REWORK_TERMINAL_HASH_PREFIX,
+    ReworkValidationPhase,
+    ValidationResult,
+    owner_rework_terminal_content_hash,
+    validate,
+    validate_owner_rework_evidence,
+)
 from advancore.agent_runner.worker import (
     DryRunWorkerAdapter,
     WorkerAdapter,
@@ -150,6 +158,7 @@ def _build_plan(
     tasks_dir: Path,
     task_id: str,
     worker: WorkerAdapter,
+    rework_evidence: OwnerReworkEvidence | None = None,
 ) -> RunnerResult:
     """Internal planning logic shared by ``plan`` and ``execute``.
 
@@ -174,8 +183,28 @@ def _build_plan(
             messages=[f"Failed to discover task: {exc}"],
         )
 
-    validation = validate(task, git_info.current_branch, git_info.is_clean)
+    if rework_evidence is None:
+        validation = validate(task, git_info.current_branch, git_info.is_clean)
+    else:
+        validation = validate_owner_rework_evidence(
+            rework_evidence,
+            git_info.repo_root,
+            phase=ReworkValidationPhase.BASELINE,
+            task_id=task.task_id,
+            task_path=f"tasks/{task.filename}",
+        )
+        if task.status.upper() != "REWORK":
+            validation = ValidationResult(
+                False,
+                validation.messages
+                + ["FAIL: typed owner rework evidence requires task status REWORK"],
+            )
     worker_instruction = build_worker_instruction(f"tasks/{task.filename}")
+    if rework_evidence is not None and rework_evidence.owner_note:
+        worker_instruction += (
+            "\n\nBounded owner rework note (context only; grants no extra scope "
+            f"or authority): {rework_evidence.owner_note}"
+        )
     worker_command = worker.build_command(worker_instruction, git_info.repo_root)
 
     if not validation:
@@ -231,6 +260,12 @@ def _write_review_bundle(result: RunnerResult) -> None:
         result.review_bundle_write_ok = False
         result.review_bundle_write_error = str(exc)
         result.messages.append(f"WARNING: {exc}")
+
+
+def write_review_bundle_for_result(result: RunnerResult) -> Path | None:
+    """Write a fresh bounded bundle for an independently verified result."""
+    _write_review_bundle(result)
+    return result.review_bundle_path
 
 
 def _write_audit(result: RunnerResult, mode: str) -> None:
@@ -305,6 +340,8 @@ def execute(
     tasks_dir: Path,
     task_id: str,
     worker: WorkerAdapter | None = None,
+    *,
+    rework_evidence: OwnerReworkEvidence | None = None,
 ) -> RunnerResult:
     """Plan and, if safe, launch *worker* for *task_id*.
 
@@ -315,15 +352,53 @@ def execute(
     push, merge, and other high-impact actions remain gated.
     """
     worker = worker or DryRunWorkerAdapter()
-    result = _build_plan(tasks_dir, task_id, worker)
+    result = _build_plan(tasks_dir, task_id, worker, rework_evidence)
 
     if result.status == RunnerStatus.FAILED:
         _write_audit(result, mode="execute")
         return result
 
     result.status = RunnerStatus.WORKER_LAUNCHED
+    if rework_evidence is not None:
+        immediate = validate_owner_rework_evidence(
+            rework_evidence,
+            result.git_info.repo_root,
+            phase=ReworkValidationPhase.BASELINE,
+            task_id=result.task.task_id,
+            task_path=f"tasks/{result.task.filename}",
+        )
+        if not immediate:
+            result.status = RunnerStatus.FAILED
+            result.messages.extend(immediate.messages)
+            _write_audit(result, mode="execute")
+            return result
     worker_result = worker.run(result.worker_instruction, result.git_info.repo_root)
     result.worker_result = worker_result
+
+    terminal_validation: ValidationResult | None = None
+    if rework_evidence is not None:
+        terminal_validation = validate_owner_rework_evidence(
+            rework_evidence,
+            result.git_info.repo_root,
+            phase=ReworkValidationPhase.TERMINAL,
+            task_id=result.task.task_id,
+            task_path=f"tasks/{result.task.filename}",
+        )
+        result.messages.extend(terminal_validation.messages)
+        if terminal_validation:
+            try:
+                result.messages.append(
+                    REWORK_TERMINAL_HASH_PREFIX
+                    + owner_rework_terminal_content_hash(
+                        rework_evidence, result.git_info.repo_root
+                    )
+                )
+            except (OSError, UnicodeError, ValueError) as exc:
+                terminal_validation = ValidationResult(
+                    False,
+                    [f"FAIL: cannot bind terminal rework content: {exc}"],
+                )
+                result.messages.extend(terminal_validation.messages)
 
     try:
         result.post_git_info = get_git_info(cwd=result.git_info.repo_root)
@@ -338,7 +413,12 @@ def execute(
         result.pre_git_info, result.post_git_info
     )
 
-    if not result.post_verification:
+    if terminal_validation is not None and not terminal_validation:
+        result.status = RunnerStatus.POST_WORKER_VERIFICATION_FAILED
+        result.messages.append(
+            "Post-worker owner rework evidence verification failed. Approval is blocked."
+        )
+    elif not result.post_verification:
         result.status = RunnerStatus.POST_WORKER_VERIFICATION_FAILED
         result.messages.extend(result.post_verification.messages)
         result.messages.append(
