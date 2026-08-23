@@ -1,6 +1,6 @@
 # TASK-040 — First usable Knowledge Hub draft slice
 
-STATUS: READY
+STATUS: APPROVED
 
 ## Objective
 
@@ -97,16 +97,46 @@ None.
 
 ### Implemented
 
+- Added an injected KnowledgeService with trimmed required-field validation and draft-only creation defaults.
+- Replaced the placeholder Knowledge Hub with native draft creation, deterministic list/selection, empty state, and read-only details.
+- Added safe validation, missing-record, creation, and loading outcomes without exception leakage.
+- Added focused service/page coverage and README capability documentation.
+
 ### Files changed
+
+- `tasks/TASK-040-first-usable-knowledge-hub-draft-slice.md`
+- `advancore/pages/knowledge_hub.py`
+- `advancore/services/knowledge_service.py`
+- `tests/test_knowledge_service.py`
+- `tests/test_knowledge_hub_page.py`
+- `README.md`
 
 ### Database changes
 
+None. The existing knowledge_items table and transaction boundary are reused.
+
 ### Tests executed and results
+
+- Focused Knowledge Hub/repository suite: 24 passed.
+- Full repository suite: 734 passed.
+- Python compile/import checks and `git diff --check` passed.
+- In-process Streamlit Knowledge Hub smoke check passed with zero exceptions, list/detail rendering, and no UI errors or warnings.
+- Empty-index, exact-scope, and new-file checks passed.
 
 ### Assumptions
 
+- This first slice creates only unlinked `draft` records and preserves repository creation order.
+- Duplicate titles are permitted because the existing schema does not declare title uniqueness.
+
 ### Risks / unresolved issues
+
+- Editing, approval, search, project linking, source metadata, attachments, AI features, permissions, and deletion remain intentionally deferred.
+- Publication and deployment remain separately gated.
 
 ### Decisions required
 
+None.
+
 ### Recommended next step
+
+Perform independent controller review, then preserve and publish the stacked feature branch only if the exact diff and evidence pass.

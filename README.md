@@ -69,6 +69,17 @@ characters. Restoration, deletion, permissions, lifecycle history, search,
 filtering, pagination, bulk actions, and project analytics are intentionally
 deferred.
 
+## Knowledge Hub
+
+The Knowledge Hub supports the first bounded draft workflow:
+
+- Create a draft with a required title and content.
+- List saved knowledge items in creation order.
+- Select an item to view its read-only title, status, creation time, and content.
+
+Editing, deletion, review/approval, search, project linking, source metadata,
+attachments, AI features, and permissions are intentionally deferred.
+
 ## Running tests
 
 The project uses `pytest`. Run the test suite from the repository root with:
