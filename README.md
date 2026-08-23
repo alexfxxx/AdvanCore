@@ -52,6 +52,19 @@ Future modules may include:
 
 Gate 0 — Platform foundation setup.
 
+## Projects
+
+The Projects page supports the first bounded project workflow:
+
+- List existing projects in creation order.
+- Create an active project with a required name and optional description.
+- Select a project to view its name, description, and status.
+
+Project names use exact-match uniqueness. Names and descriptions are trimmed,
+blank descriptions are stored as absent, and names are limited to 200
+characters. Editing, archiving, status changes, deletion, permissions, search,
+filtering, pagination, and project analytics are intentionally deferred.
+
 ## Running tests
 
 The project uses `pytest`. Run the test suite from the repository root with:
