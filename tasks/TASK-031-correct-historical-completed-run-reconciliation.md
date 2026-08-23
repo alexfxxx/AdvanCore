@@ -1,6 +1,6 @@
 # TASK-031 — Correct historical completed-run reconciliation
 
-STATUS: READY
+STATUS: APPROVED
 
 ## Objective
 
@@ -138,16 +138,47 @@ None.
 
 ### Implemented
 
+- Corrected explicit reconciliation to discover exactly one canonical PUSHED
+  finalization before resolving its exact review and decision evidence chain.
+- Added local ancestry validation so a historical finalized commit may precede
+  later synchronized feature-line commits.
+- Preserved strict checkpoint-path matching, preview immutability, and ordinary
+  orchestration behavior.
+- Added focused and TASK-029-shaped regression coverage and updated runner docs.
+
 ### Files changed
+
+- `advancore/agent_runner/orchestration.py`
+- `tests/test_orchestration.py`
+- `tests/test_exception_development_loop_e2e.py`
+- `docs/architecture/AGENT_RUNNER.md`
+- `docs/runbooks/EXCEPTION_DEVELOPMENT_LOOP.md`
+- `tasks/TASK-031-correct-historical-completed-run-reconciliation.md`
 
 ### Database changes
 
+None.
+
 ### Tests executed and results
+
+- `.venv/bin/pytest -q tests/test_orchestration.py tests/test_exception_development_loop_e2e.py` — 66 passed.
+- `.venv/bin/pytest -q` — 650 passed.
 
 ### Assumptions
 
+- Canonical finalization records use the existing exact repository-relative or
+  absolute evidence references supported by the runner.
+- Existing local origin-tracking refs represent the synchronization evidence;
+  reconciliation never fetches.
+
 ### Risks / unresolved issues
+
+- None identified in local deterministic verification.
 
 ### Decisions required
 
+None for implementation. Independent review/approval remains required.
+
 ### Recommended next step
+
+Inspect the diff and submit the uncommitted changes for independent review.

@@ -675,6 +675,21 @@ def _git_value(repo_root: Path, args: list[str], label: str) -> str:
     return value
 
 
+def _canonical_evidence_path(
+    value: Any, repo_root: Path, canonical_dir: Path, label: str
+) -> Path:
+    """Resolve one referenced evidence file in its canonical local directory."""
+    path = _existing_repo_path(value, repo_root, label)
+    if path.parent != canonical_dir.resolve():
+        raise OrchestrationError(f"{label.capitalize()} is outside the canonical evidence directory")
+    return path
+
+
+def _same_evidence_reference(path: Path, repo_root: Path) -> set[str]:
+    """Return the accepted absolute and repository-relative spellings of *path*."""
+    return {str(path), str(path.relative_to(repo_root))}
+
+
 def reconcile_completed_run(
     run_id: str, repo_root: Path, *, apply: bool = False
 ) -> OrchestrationResult:
@@ -729,9 +744,56 @@ def reconcile_completed_run(
     if local_tip != origin_tip:
         raise OrchestrationError("Local and origin branch tips are not synchronized")
 
-    bundle_path = _existing_repo_path(checkpoint.review_bundle_path, repo_root, "review bundle")
-    if bundle_path.parent != default_review_dir(repo_root).resolve():
-        raise OrchestrationError("Review bundle is outside the canonical evidence directory")
+    finalization_path = default_finalize_dir(repo_root) / "finalize.jsonl"
+    if checkpoint.finalization_artifact_path:
+        recorded_finalization = Path(checkpoint.finalization_artifact_path)
+        if not recorded_finalization.is_absolute():
+            recorded_finalization = repo_root / recorded_finalization
+        if recorded_finalization.is_dir():
+            recorded_finalization = recorded_finalization / "finalize.jsonl"
+        recorded_finalization = _existing_repo_path(
+            str(recorded_finalization), repo_root, "finalization artifact"
+        )
+        if recorded_finalization != finalization_path.resolve():
+            raise OrchestrationError("Checkpoint finalization artifact linkage mismatch")
+    finalization_path = _canonical_evidence_path(
+        str(finalization_path), repo_root, default_finalize_dir(repo_root),
+        "finalization artifact",
+    )
+
+    matches: list[dict[str, Any]] = []
+    try:
+        for line in finalization_path.read_text(encoding="utf-8").splitlines():
+            if not line.strip():
+                continue
+            record = json.loads(line)
+            if not isinstance(record, dict):
+                raise ValueError("record is not an object")
+            if (
+                record.get("mode") == "finalize"
+                and record.get("status") == FinalizationStatus.PUSHED.value
+                and record.get("task_id") == task.task_id
+                and record.get("task_filename") == task.path.name
+                and record.get("branch") == branch
+            ):
+                matches.append(record)
+    except Exception as exc:
+        raise OrchestrationError(f"Malformed finalization evidence: {finalization_path}") from exc
+    if len(matches) != 1:
+        raise OrchestrationError("Successful finalization evidence is missing or ambiguous")
+    finalization = matches[0]
+
+    bundle_path = _canonical_evidence_path(
+        finalization.get("bundle_path"), repo_root, default_review_dir(repo_root),
+        "review bundle",
+    )
+    if checkpoint.review_bundle_path:
+        recorded_bundle = _canonical_evidence_path(
+            checkpoint.review_bundle_path, repo_root, default_review_dir(repo_root),
+            "review bundle",
+        )
+        if recorded_bundle != bundle_path:
+            raise OrchestrationError("Checkpoint review bundle linkage mismatch")
     try:
         bundle = load_review_bundle(bundle_path)
     except Exception as exc:
@@ -744,7 +806,14 @@ def reconcile_completed_run(
     ):
         raise OrchestrationError("Review bundle linkage mismatch")
 
-    expected_bundle_refs = {str(bundle_path), str(bundle_path.relative_to(repo_root))}
+    expected_bundle_refs = _same_evidence_reference(bundle_path, repo_root)
+    if finalization.get("bundle_path") not in expected_bundle_refs:
+        raise OrchestrationError("Finalization review bundle linkage mismatch")
+
+    decision_path = _canonical_evidence_path(
+        finalization.get("decision_path"), repo_root,
+        default_decisions_dir(repo_root), "controller decision",
+    )
     matching_decisions: list[tuple[Path, ControllerDecision]] = []
     for candidate in sorted(default_decisions_dir(repo_root).glob("*.json")):
         if candidate.is_symlink():
@@ -770,7 +839,9 @@ def reconcile_completed_run(
             matching_decisions.append((candidate.resolve(), item))
     if len(matching_decisions) != 1:
         raise OrchestrationError("Controller decision evidence is missing or ambiguous")
-    decision_path, _decision = matching_decisions[0]
+    matched_decision_path, _decision = matching_decisions[0]
+    if matched_decision_path != decision_path:
+        raise OrchestrationError("Finalization controller decision linkage mismatch")
     if checkpoint.decision not in {None, DecisionValue.APPROVE.value}:
         raise OrchestrationError("Checkpoint contains a conflicting controller decision")
     if checkpoint.decision_path:
@@ -779,49 +850,26 @@ def reconcile_completed_run(
         )
         if recorded_decision != decision_path:
             raise OrchestrationError("Checkpoint controller decision linkage mismatch")
-
-    finalization_path = default_finalize_dir(repo_root) / "finalize.jsonl"
-    if checkpoint.finalization_artifact_path:
-        recorded_finalization = Path(checkpoint.finalization_artifact_path)
-        if not recorded_finalization.is_absolute():
-            recorded_finalization = repo_root / recorded_finalization
-        if recorded_finalization.is_dir():
-            recorded_finalization = recorded_finalization / "finalize.jsonl"
-        recorded_finalization = _existing_repo_path(
-            str(recorded_finalization), repo_root, "finalization artifact"
-        )
-        if recorded_finalization != finalization_path.resolve():
-            raise OrchestrationError("Checkpoint finalization artifact linkage mismatch")
-    finalization_path = _existing_repo_path(
-        str(finalization_path), repo_root, "finalization artifact"
+    decision_refs = _same_evidence_reference(decision_path, repo_root)
+    finalized_commit = finalization.get("commit_sha")
+    if (
+        finalization.get("pre_head") != bundle.post_head
+        or finalization.get("post_head") != finalized_commit
+        or finalization.get("decision_path") not in decision_refs
+        or not isinstance(finalized_commit, str)
+        or not finalized_commit
+    ):
+        raise OrchestrationError("Finalization evidence linkage mismatch")
+    _git_value(
+        repo_root, ["rev-parse", "--verify", f"{finalized_commit}^{{commit}}"],
+        "finalized commit",
     )
-    decision_refs = {str(decision_path), str(decision_path.relative_to(repo_root))}
-    matches: list[dict[str, Any]] = []
-    try:
-        lines = finalization_path.read_text(encoding="utf-8").splitlines()
-        for line in lines:
-            if not line.strip():
-                continue
-            record = json.loads(line)
-            if not isinstance(record, dict):
-                raise ValueError("record is not an object")
-            if (
-                record.get("mode") == "finalize"
-                and record.get("status") == FinalizationStatus.PUSHED.value
-                and record.get("task_id") == task.task_id
-                and record.get("task_filename") == task_filename
-                and record.get("branch") == branch
-                and record.get("pre_head") == bundle.post_head
-                and record.get("commit_sha") == local_tip
-                and record.get("post_head") == local_tip
-                and record.get("decision_path") in decision_refs
-                and record.get("bundle_path") in expected_bundle_refs
-            ):
-                matches.append(record)
-    except Exception as exc:
-        raise OrchestrationError(f"Malformed finalization evidence: {finalization_path}") from exc
-    if len(matches) != 1:
-        raise OrchestrationError("Successful finalization evidence is missing or ambiguous")
+    ancestry = subprocess.run(
+        ["git", "merge-base", "--is-ancestor", finalized_commit, local_tip],
+        cwd=repo_root, capture_output=True, text=True,
+    )
+    if ancestry.returncode != 0:
+        raise OrchestrationError("Finalized commit is not an ancestor of synchronized branch tip")
 
     if not apply:
         checkpoint.messages.append(
@@ -843,9 +891,10 @@ def reconcile_completed_run(
         checkpoint.completed_phases.append(OrchestrationPhase.PUBLISHED.value)
     previous_expected_head = checkpoint.expected_head or ""
     checkpoint.expected_head = local_tip
-    checkpoint.commit_sha = local_tip
+    checkpoint.commit_sha = finalized_commit
     checkpoint.push_verified = True
     checkpoint.decision = DecisionValue.APPROVE.value
+    checkpoint.review_bundle_path = str(bundle_path.relative_to(repo_root))
     checkpoint.decision_path = str(decision_path.relative_to(repo_root))
     checkpoint.finalization_artifact_path = str(finalization_path.relative_to(repo_root))
     checkpoint.reconciliation_evidence = [{
@@ -853,8 +902,9 @@ def reconcile_completed_run(
         "task_id": task.task_id,
         "branch": branch,
         "checkpoint_expected_head_before": previous_expected_head,
-        "finalization_pre_head": str(matches[0].get("pre_head", "")),
-        "commit_sha": local_tip,
+        "finalization_pre_head": str(finalization.get("pre_head", "")),
+        "commit_sha": finalized_commit,
+        "synchronized_tip": local_tip,
         "decision_path": str(decision_path.relative_to(repo_root)),
         "review_bundle_path": str(bundle_path.relative_to(repo_root)),
         "finalization_artifact_path": str(finalization_path.relative_to(repo_root)),

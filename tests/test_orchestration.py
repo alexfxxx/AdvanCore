@@ -145,6 +145,20 @@ def _completed_run_fixture(tmp_path: Path) -> tuple[Path, OrchestrationCheckpoin
         "bundle_path": str(review_path.relative_to(repo)),
     }
     finalize_path.write_text(json.dumps(finalize_record) + "\n", encoding="utf-8")
+    (repo / "later-authorized.txt").write_text("later authorized feature work\n")
+    subprocess.run(["git", "add", "later-authorized.txt"], cwd=repo, check=True)
+    subprocess.run(
+        ["git", "commit", "-m", "later authorized feature work"],
+        cwd=repo, check=True, capture_output=True,
+    )
+    current_tip = subprocess.run(
+        ["git", "rev-parse", "HEAD"], cwd=repo, check=True,
+        capture_output=True, text=True,
+    ).stdout.strip()
+    subprocess.run(
+        ["git", "update-ref", "refs/remotes/origin/feature/reconcile", current_tip],
+        cwd=repo, check=True,
+    )
     checkpoint = OrchestrationCheckpoint(
         schema_version="advancore-orchestration-v1",
         run_id="ORCH-completed",
@@ -162,7 +176,6 @@ def _completed_run_fixture(tmp_path: Path) -> tuple[Path, OrchestrationCheckpoin
         expected_head=checkpoint_head,
         task_id="TASK-030",
         task_path=str(task_path),
-        review_bundle_path=str(review_path.relative_to(repo)),
         messages=["existing message"],
     )
     save_checkpoint(checkpoint, repo)
@@ -1006,6 +1019,10 @@ class TestCompletedRunReconciliation:
         reconciled = load_checkpoint("ORCH-completed", repo)
         assert reconciled.phase == OrchestrationPhase.PUBLISHED.value
         assert reconciled.push_verified is True
+        finalized_commit = json.loads(paths["finalize"].read_text())["commit_sha"]
+        assert reconciled.commit_sha == finalized_commit
+        assert reconciled.expected_head != reconciled.commit_sha
+        assert reconciled.reconciliation_evidence[0]["synchronized_tip"] == reconciled.expected_head
         assert reconciled.reconciliation_evidence[0]["terminal_outcome"] == "PUSHED"
         assert (
             reconciled.reconciliation_evidence[0]["checkpoint_expected_head_before"]
@@ -1045,15 +1062,23 @@ class TestCompletedRunReconciliation:
             ("checkpoint_branch", "does not match checkpoint branch"),
             ("missing_origin", "origin tracking tip"),
             ("origin_diverged", "not synchronized"),
-            ("missing_decision", "missing or ambiguous"),
+            ("missing_decision", "Invalid controller decision path"),
             ("ambiguous_decision", "missing or ambiguous"),
             ("malformed_decision", "Malformed controller decision evidence"),
             ("unauthorized_decision", "missing or ambiguous"),
             ("non_approve", "missing or ambiguous"),
             ("decision_linkage", "missing or ambiguous"),
+            ("missing_review", "Invalid review bundle path"),
+            ("malformed_review", "Invalid review bundle"),
+            ("review_linkage", "Review bundle linkage mismatch"),
             ("missing_finalization", "Invalid finalization artifact path"),
+            ("malformed_finalization", "Malformed finalization evidence"),
             ("unsuccessful_finalization", "missing or ambiguous"),
-            ("finalization_linkage", "missing or ambiguous"),
+            ("finalization_linkage", "Finalization evidence linkage mismatch"),
+            ("missing_finalized_commit", "finalized commit"),
+            ("non_ancestor", "not an ancestor"),
+            ("checkpoint_review_conflict", "Checkpoint review bundle linkage mismatch"),
+            ("checkpoint_decision_conflict", "Checkpoint controller decision linkage mismatch"),
             ("ambiguous_finalization", "missing or ambiguous"),
         ],
     )
@@ -1102,12 +1127,46 @@ class TestCompletedRunReconciliation:
             if case == "non_approve": data["decision"] = "REWORK"
             if case == "decision_linkage": data["bundle_post_head"] = "0" * 40
             paths["decision"].write_text(json.dumps(data))
+        elif case == "missing_review":
+            paths["review"].unlink()
+        elif case in {"malformed_review", "review_linkage"}:
+            if case == "malformed_review":
+                paths["review"].write_text("{")
+            else:
+                data = json.loads(paths["review"].read_text())
+                data["branch"] = "feature/other"
+                paths["review"].write_text(json.dumps(data))
         elif case == "missing_finalization":
             paths["finalize"].unlink()
+        elif case == "malformed_finalization":
+            paths["finalize"].write_text("{")
+        elif case in {"checkpoint_review_conflict", "checkpoint_decision_conflict"}:
+            wrong_dir = paths["review"].parent if case == "checkpoint_review_conflict" else paths["decision"].parent
+            wrong = wrong_dir / "wrong.json"
+            source = paths["review"] if case == "checkpoint_review_conflict" else paths["decision"]
+            wrong.write_bytes(source.read_bytes())
+            if case == "checkpoint_review_conflict":
+                checkpoint.review_bundle_path = str(wrong.relative_to(repo))
+            else:
+                wrong_data = json.loads(wrong.read_text())
+                wrong_data["task_id"] = "TASK-other"
+                wrong.write_text(json.dumps(wrong_data))
+                checkpoint.decision_path = str(wrong.relative_to(repo))
+            save_checkpoint(checkpoint, repo)
         else:
             line = json.loads(paths["finalize"].read_text())
             if case == "unsuccessful_finalization": line["status"] = "PUBLICATION_FAILED"
             if case == "finalization_linkage": line["commit_sha"] = "0" * 40
+            if case == "missing_finalized_commit":
+                line["commit_sha"] = line["post_head"] = "0" * 40
+            if case == "non_ancestor":
+                subprocess.run(["git", "checkout", "--orphan", "unrelated"], cwd=repo, check=True, capture_output=True)
+                (repo / "unrelated.txt").write_text("unrelated\n")
+                subprocess.run(["git", "add", "unrelated.txt"], cwd=repo, check=True)
+                subprocess.run(["git", "commit", "-m", "unrelated"], cwd=repo, check=True, capture_output=True)
+                unrelated = subprocess.run(["git", "rev-parse", "HEAD"], cwd=repo, check=True, capture_output=True, text=True).stdout.strip()
+                subprocess.run(["git", "checkout", "feature/reconcile"], cwd=repo, check=True, capture_output=True)
+                line["commit_sha"] = line["post_head"] = unrelated
             content = json.dumps(line) + "\n"
             if case == "ambiguous_finalization": content += json.dumps(line) + "\n"
             paths["finalize"].write_text(content)

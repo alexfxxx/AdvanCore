@@ -1807,17 +1807,25 @@ orchestration checkpoint remained stale:
 This is a preview-first recovery command, not an alternate finalization path.
 It resolves exactly the named checkpoint and requires the authoritative task
 to be `APPROVED`, a named current non-`main` branch matching the checkpoint,
-and identical finalized local and `refs/remotes/origin/<branch>` tips. It reads
+and identical current local and `refs/remotes/origin/<branch>` tips. It reads
 that tracking ref locally and does not fetch or contact a remote. Only
 `--apply` may update the checkpoint.
 
-The command resolves one exact controller/owner `APPROVE` decision from the
-canonical decision directory linked to the checkpoint review bundle and one
-exact `PUSHED` record from the canonical finalization artifact. The record's
-pre-commit HEAD must equal the bundle HEAD; its post/commit HEAD must equal the
-synchronized local/origin tip. Persisted checkpoint decision/finalization paths
-must match when present, but an interrupted checkpoint is not required to have
-recorded evidence created later.
+Evidence discovery begins with exactly one canonical `PUSHED` finalization
+record matching the checkpoint task identity, exact task filename, and current
+feature branch. The record's exact canonical review-bundle and controller-
+decision references are then resolved and validated as one complete chain. The
+decision must be an `APPROVE` from an owner/controller actor, and its task,
+filename, branch, bundle path, and Git identities must match exactly.
+
+The finalized commit must exist in local Git and be an ancestor of the current
+synchronized local/origin-tracking tip. Equality is valid, but later authorized
+commits on the same feature line are also valid. Applied reconciliation records
+the historical finalized commit in `commit_sha` and the newer synchronized tip
+in `expected_head` and `reconciliation_evidence.synchronized_tip`. Any review,
+decision, or finalization reference already persisted in the checkpoint must
+match the independently discovered canonical path exactly; all three may be
+absent from a historically interrupted checkpoint.
 Missing, malformed, unauthorized, stale, conflicting, duplicated, or ambiguous
 evidence fails closed before mutation.
 

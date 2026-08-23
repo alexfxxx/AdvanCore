@@ -104,6 +104,31 @@ Only after the second decision may `agent_runner` delegate the established featu
 - `main`, detached HEAD, changed branch, or changed HEAD: stop. Never switch, reset, rebase, merge, or force-push as an automated recovery.
 - Finalization failure: preserve the checkpoint and finalization artifact. Do not claim publication; escalate for owner/controller review.
 
+### Historical completed-run recognition
+
+If canonical publication evidence proves that a run completed but its
+checkpoint missed the later review, decision, or finalization paths, use only
+the explicit preview-first recovery boundary:
+
+```sh
+.venv/bin/python -m advancore.agent_runner reconcile-completed-run <run-id>
+.venv/bin/python -m advancore.agent_runner reconcile-completed-run <run-id> --apply
+```
+
+The command discovers one matching canonical `PUSHED` finalization and follows
+its exact review and authorized `APPROVE` decision links. It requires a clean,
+named non-`main` feature branch whose local and existing origin-tracking refs
+are equal. The historical finalized commit may be behind that synchronized tip
+only when local Git proves it is an ancestor, allowing later authorized work on
+the same feature line. It performs no fetch or publication action.
+
+Treat zero or multiple finalizations, missing or malformed linked evidence,
+unauthorized or non-`APPROVE` decisions, mismatched checkpoint paths, missing
+commits, and non-ancestor commits as blocked. Do not repair, replace, infer, or
+select among evidence records. Preview validates the full chain without
+changing the checkpoint, evidence, worktree, index, HEAD, branch, or refs;
+`--apply` atomically updates only the eligible checkpoint.
+
 INFERENCE: A safe resume is possible only when the checkpoint, task, current branch/HEAD, review evidence, and explicit decision still agree. Ambiguity is a blocked state, not permission to reconstruct authority.
 
 PROPOSAL: Before any future live-publication exercise, obtain independent approval for the remote, branch protection, and push verification procedure; TASK-029 does not approve that activity.

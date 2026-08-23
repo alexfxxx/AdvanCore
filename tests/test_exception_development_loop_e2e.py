@@ -10,14 +10,25 @@ import pytest
 
 from advancore.agent_runner.auto_pipeline import AutoPipelineResult, AutoPipelineStatus
 from advancore.agent_runner.finalize import FinalizationResult, FinalizationStatus
+from advancore.agent_runner.controller_decision import (
+    DecisionValue,
+    build_controller_decision,
+    default_decisions_dir,
+    write_controller_decision,
+)
+from advancore.agent_runner.lifecycle import ActorRole
 from advancore.agent_runner.goal_task import GoalTaskGenerationResult, GoalTaskGenerationStatus
 from advancore.agent_runner.orchestration import (
     OrchestrationConfig,
+    OrchestrationCheckpoint,
     OrchestrationError,
+    OrchestrationPhase,
     OrchestrationStatus,
     OwnerAction,
     load_checkpoint,
+    reconcile_completed_run,
     run_orchestration,
+    save_checkpoint,
 )
 from advancore.agent_runner.review_bundle import ReviewBundle, serialize_bundle
 from advancore.agent_runner.task import Task
@@ -215,6 +226,101 @@ def test_complete_two_decision_loop_with_controlled_finalization(tmp_path: Path,
     assert checkpoint.owner_action_actor == "owner"
     assert checkpoint.push_verified is True
     assert _git(repo, "remote") == ""
+
+
+def test_reconcile_historical_task_029_shape_after_later_feature_commit(tmp_path: Path):
+    """Recognize canonical historical authority without replaying publication."""
+    repo = _repo(tmp_path)
+    task_path = repo / "tasks" / TASK_NAME
+    task_path.write_text(_task_text("APPROVED"), encoding="utf-8")
+    _git(repo, "add", f"tasks/{TASK_NAME}")
+    _git(repo, "commit", "-m", "approved controlled task")
+    review_head = _git(repo, "rev-parse", "HEAD")
+
+    bundle = ReviewBundle(
+        timestamp="2026-08-23T00:00:00+00:00",
+        task_id=TASK_ID,
+        task_filename=TASK_NAME,
+        previous_status="READY",
+        current_status="REVIEW",
+        branch="feature/task-029",
+        pre_head=review_head,
+        post_head=review_head,
+        runner_status="COMPLETED",
+        worker_type="codex-controlled-fake",
+        worker_success=True,
+        post_verification_ok=True,
+    )
+    bundle_path = repo / ".agent_runner" / "review" / "historical.json"
+    bundle_path.parent.mkdir(parents=True)
+    bundle_path.write_text(json.dumps(serialize_bundle(bundle)), encoding="utf-8")
+    decision = build_controller_decision(
+        bundle_path, bundle, decision=DecisionValue.APPROVE,
+        actor_role=ActorRole.OWNER, task_id=TASK_ID,
+        task_filename=TASK_NAME, repo_root=repo,
+    )
+    decision_path = write_controller_decision(decision, default_decisions_dir(repo))
+
+    (repo / "bounded.py").write_text("accepted = True\n", encoding="utf-8")
+    _git(repo, "add", "bounded.py")
+    _git(repo, "commit", "-m", "historical finalized implementation")
+    finalized_commit = _git(repo, "rev-parse", "HEAD")
+    finalize_path = repo / ".agent_runner" / "finalize" / "finalize.jsonl"
+    finalize_path.parent.mkdir(parents=True)
+    finalize_path.write_text(json.dumps({
+        "timestamp": "2026-08-23T00:01:00+00:00", "mode": "finalize",
+        "status": "PUSHED", "task_id": TASK_ID, "task_filename": TASK_NAME,
+        "branch": "feature/task-029", "pre_head": review_head,
+        "post_head": finalized_commit, "commit_sha": finalized_commit,
+        "decision_path": str(decision_path.relative_to(repo)),
+        "bundle_path": str(bundle_path.relative_to(repo)),
+    }) + "\n", encoding="utf-8")
+
+    (repo / "later-authorized.txt").write_text("later work\n", encoding="utf-8")
+    _git(repo, "add", "later-authorized.txt")
+    _git(repo, "commit", "-m", "later authorized feature work")
+    synchronized_tip = _git(repo, "rev-parse", "HEAD")
+    _git(repo, "update-ref", "refs/remotes/origin/feature/task-029", synchronized_tip)
+    checkpoint = OrchestrationCheckpoint(
+        schema_version="advancore-orchestration-v1", run_id="ORCH-task-029-history",
+        goal_hash="0123456789abcdef", goal_summary="Historical TASK-029",
+        planner="kimi-swarm", fallback_planner="codex", worker="codex",
+        controller="manual", repair_attempts=0, max_rework=0, apply=True,
+        phase=OrchestrationPhase.FINALIZATION.value,
+        status=OrchestrationStatus.STALE_EVIDENCE.value,
+        branch="feature/task-029", expected_head=review_head,
+        task_id=TASK_ID, task_path=str(task_path.relative_to(repo)),
+    )
+    checkpoint_path = save_checkpoint(checkpoint, repo)
+    evidence_before = {
+        path: path.read_bytes() for path in (bundle_path, decision_path, finalize_path)
+    }
+    preview_state = {
+        "checkpoint": checkpoint_path.read_bytes(), "head": _git(repo, "rev-parse", "HEAD"),
+        "status": _git(repo, "status", "--porcelain"),
+        "index": _git(repo, "diff", "--cached", "--binary"),
+        "branch": _git(repo, "symbolic-ref", "--short", "HEAD"),
+        "local": _git(repo, "rev-parse", "refs/heads/feature/task-029"),
+        "tracking": _git(repo, "rev-parse", "refs/remotes/origin/feature/task-029"),
+    }
+
+    preview = reconcile_completed_run(checkpoint.run_id, repo)
+    assert preview.ok and preview.status == OrchestrationStatus.STALE_EVIDENCE.value
+    assert checkpoint_path.read_bytes() == preview_state["checkpoint"]
+    assert _git(repo, "rev-parse", "HEAD") == preview_state["head"]
+    assert _git(repo, "status", "--porcelain") == preview_state["status"]
+    assert _git(repo, "diff", "--cached", "--binary") == preview_state["index"]
+    assert _git(repo, "symbolic-ref", "--short", "HEAD") == preview_state["branch"]
+    assert _git(repo, "rev-parse", "refs/heads/feature/task-029") == preview_state["local"]
+    assert _git(repo, "rev-parse", "refs/remotes/origin/feature/task-029") == preview_state["tracking"]
+
+    applied = reconcile_completed_run(checkpoint.run_id, repo, apply=True)
+    reconciled = load_checkpoint(checkpoint.run_id, repo)
+    assert applied.status == OrchestrationStatus.PUBLISHED.value
+    assert reconciled.commit_sha == finalized_commit
+    assert reconciled.expected_head == synchronized_tip
+    assert reconciled.review_bundle_path == str(bundle_path.relative_to(repo))
+    assert {path: path.read_bytes() for path in evidence_before} == evidence_before
 
 
 @pytest.mark.parametrize(
