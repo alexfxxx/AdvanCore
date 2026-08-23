@@ -10,13 +10,18 @@ from __future__ import annotations
 import json
 import hashlib
 import re
+import subprocess
 from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
 from enum import Enum
 from pathlib import Path
 from typing import Any, Callable
 
-from advancore.agent_runner.controller_decision import load_controller_decision
+from advancore.agent_runner.controller_decision import (
+    DecisionValue,
+    default_decisions_dir,
+    load_controller_decision,
+)
 from advancore.agent_runner.controller_handoff import load_controller_handoff
 from advancore.agent_runner.git_info import get_git_info
 from advancore.agent_runner.orchestration import (
@@ -26,7 +31,13 @@ from advancore.agent_runner.orchestration import (
     OrchestrationStatus,
     default_orchestration_dir,
 )
-from advancore.agent_runner.review_bundle import load_review_bundle
+from advancore.agent_runner.review_bundle import default_review_dir, load_review_bundle
+from advancore.agent_runner.finalize import (
+    FINALIZE_ARTIFACT_FILENAME,
+    FinalizationStatus,
+    default_finalize_dir,
+)
+from advancore.agent_runner.lifecycle import ActorRole
 from advancore.agent_runner.task import TaskError, find_task
 
 
@@ -217,7 +228,11 @@ def _validate_artifact(
 
 
 def _validate_checkpoint(
-    checkpoint: OrchestrationCheckpoint, path: Path, repo_root: Path
+    checkpoint: OrchestrationCheckpoint,
+    path: Path,
+    repo_root: Path,
+    *,
+    check_current_freshness: bool = True,
 ) -> tuple[str | None, str | None, str | None]:
     """Return task title, invalid reason, or stale reason."""
     if not _RUN_ID_RE.fullmatch(checkpoint.run_id) or path.stem != checkpoint.run_id:
@@ -258,7 +273,6 @@ def _validate_checkpoint(
         (checkpoint.decision_path, "decision", load_controller_decision),
         (checkpoint.goal_task_artifact_path, "goal-task artifact", None),
         (checkpoint.auto_artifact_path, "auto artifact", None),
-        (checkpoint.finalization_artifact_path, "finalization artifact", None),
     )
     loaded: dict[str, object] = {}
     for value, label, loader in loaders:
@@ -280,6 +294,9 @@ def _validate_checkpoint(
     bundle = loaded.get("review bundle")
     handoff = loaded.get("handoff")
     decision = loaded.get("decision")
+    if not check_current_freshness:
+        return title, None, None
+
     try:
         bundle_path = (
             _resolve_reference(checkpoint.review_bundle_path, repo_root)
@@ -323,6 +340,164 @@ def _validate_checkpoint(
     return title, None, None
 
 
+def _same_reference(path: Path, value: object, repo_root: Path) -> bool:
+    if not isinstance(value, str) or not value:
+        return False
+    try:
+        return _resolve_reference(value, repo_root) == path
+    except (OSError, ValueError):
+        return False
+
+
+def _terminal_finalization_path(value: str | None, repo_root: Path) -> Path:
+    if not value:
+        raise ValueError("finalization artifact linkage is missing")
+    path = _resolve_reference(value, repo_root)
+    canonical_dir = default_finalize_dir(repo_root).resolve()
+    if path == canonical_dir:
+        path = path / FINALIZE_ARTIFACT_FILENAME
+    if path != canonical_dir / FINALIZE_ARTIFACT_FILENAME:
+        raise ValueError("finalization artifact is not the canonical finalize.jsonl")
+    if path.is_symlink():
+        raise ValueError("symlink evidence is not accepted")
+    if not path.exists():
+        raise ValueError("canonical finalize.jsonl evidence is missing")
+    if not path.is_file():
+        raise ValueError("canonical finalize.jsonl evidence is not a regular file")
+    return path
+
+
+def _load_finalization_records(path: Path) -> list[dict[str, Any]]:
+    records: list[dict[str, Any]] = []
+    try:
+        for line in path.read_text(encoding="utf-8").splitlines():
+            if not line.strip():
+                continue
+            record = json.loads(line)
+            if not isinstance(record, dict):
+                raise ValueError("record is not an object")
+            records.append(record)
+    except Exception as exc:
+        raise ValueError("finalization evidence is malformed") from exc
+    return records
+
+
+def _validate_terminal_publication(
+    checkpoint: OrchestrationCheckpoint, repo_root: Path
+) -> str | None:
+    """Validate one immutable PUBLISHED evidence chain without current freshness."""
+    # The orchestrator records FINALIZATION as completed, then exposes
+    # PUBLISHED as the current terminal phase/status. Requiring PUBLISHED in
+    # both places would reject its own authoritative checkpoint shape.
+    required_phases = {OrchestrationPhase.FINALIZATION.value}
+    if (
+        checkpoint.phase != OrchestrationPhase.PUBLISHED.value
+        or checkpoint.status != OrchestrationStatus.PUBLISHED.value
+        or checkpoint.push_verified is not True
+        or not isinstance(checkpoint.commit_sha, str)
+        or not checkpoint.commit_sha
+        or checkpoint.decision != DecisionValue.APPROVE.value
+        or not required_phases.issubset(set(checkpoint.completed_phases))
+    ):
+        return "published state is incomplete or lacks verified terminal evidence"
+    if not checkpoint.task_id or not checkpoint.task_path or not checkpoint.branch:
+        return "terminal task or feature-line linkage is incomplete"
+    if not checkpoint.review_bundle_path or not checkpoint.decision_path:
+        return "terminal review or decision linkage is incomplete"
+
+    try:
+        task_path = _resolve_reference(checkpoint.task_path, repo_root)
+        task = find_task(repo_root / "tasks", checkpoint.task_id)
+        if task.path.resolve() != task_path or task.task_id != checkpoint.task_id:
+            return "terminal task linkage conflicts with authoritative task evidence"
+        if task.status != "APPROVED":
+            return "terminal task is not currently APPROVED"
+        task_filename = task.path.name
+
+        bundle_path = _resolve_reference(checkpoint.review_bundle_path, repo_root)
+        if (
+            bundle_path.parent != default_review_dir(repo_root).resolve()
+            or bundle_path.is_symlink()
+            or not bundle_path.is_file()
+        ):
+            return "terminal review bundle evidence is missing or unsafe"
+        bundle = load_review_bundle(bundle_path)
+        if (
+            bundle.task_id != checkpoint.task_id
+            or bundle.task_filename != task_filename
+            or bundle.branch != checkpoint.branch
+            or not bundle.post_head
+        ):
+            return "terminal review bundle linkage conflicts with checkpoint"
+
+        decision_path = _resolve_reference(checkpoint.decision_path, repo_root)
+        if (
+            decision_path.parent != default_decisions_dir(repo_root).resolve()
+            or decision_path.is_symlink()
+            or not decision_path.is_file()
+        ):
+            return "terminal controller decision evidence is missing or unsafe"
+        decision = load_controller_decision(decision_path)
+        if decision.decision != DecisionValue.APPROVE.value:
+            return "terminal controller decision is not APPROVE"
+        if decision.actor_role not in {
+            ActorRole.CONTROLLER.value,
+            ActorRole.OWNER.value,
+        }:
+            return "terminal controller decision actor is unauthorized"
+        if (
+            decision.task_id != checkpoint.task_id
+            or decision.task_filename != task_filename
+            or decision.bundle_task_id != checkpoint.task_id
+            or decision.bundle_task_filename != task_filename
+            or decision.bundle_branch != checkpoint.branch
+            or decision.bundle_pre_head != bundle.pre_head
+            or decision.bundle_post_head != bundle.post_head
+            or not _same_reference(bundle_path, decision.bundle_path, repo_root)
+        ):
+            return "terminal controller decision linkage conflicts with review bundle"
+
+        finalization_path = _terminal_finalization_path(
+            checkpoint.finalization_artifact_path, repo_root
+        )
+        records = _load_finalization_records(finalization_path)
+    except (OSError, ValueError, TaskError):
+        return "terminal evidence is missing, malformed, or unsafe"
+    except Exception:
+        return "terminal task, review, or decision evidence is malformed"
+
+    matches = [
+        record
+        for record in records
+        if record.get("mode") == "finalize"
+        and record.get("status") == FinalizationStatus.PUSHED.value
+        and record.get("task_id") == checkpoint.task_id
+    ]
+    if len(matches) != 1:
+        return "successful finalization evidence is missing or ambiguous"
+    record = matches[0]
+    if (
+        record.get("task_filename") != task_filename
+        or record.get("branch") != checkpoint.branch
+        or record.get("pre_head") != bundle.post_head
+        or record.get("post_head") != checkpoint.commit_sha
+        or record.get("commit_sha") != checkpoint.commit_sha
+        or not _same_reference(bundle_path, record.get("bundle_path"), repo_root)
+        or not _same_reference(decision_path, record.get("decision_path"), repo_root)
+    ):
+        return "finalization evidence linkage conflicts with terminal checkpoint"
+
+    commit_check = subprocess.run(
+        ["git", "cat-file", "-e", f"{checkpoint.commit_sha}^{{commit}}"],
+        cwd=repo_root,
+        capture_output=True,
+        text=True,
+    )
+    if commit_check.returncode != 0:
+        return "finalized commit evidence is missing or invalid"
+    return None
+
+
 _OWNER_STATUSES = {
     OrchestrationStatus.AWAITING_TASK_APPROVAL.value,
     OrchestrationStatus.AWAITING_IMPLEMENTATION_DECISION.value,
@@ -358,21 +533,21 @@ def _reason(checkpoint: OrchestrationCheckpoint) -> str:
     return f"orchestration requires investigation at {checkpoint.status}"
 
 
-def _is_verified_published(checkpoint: OrchestrationCheckpoint) -> bool:
-    return bool(
-        checkpoint.phase == OrchestrationPhase.PUBLISHED.value
-        and checkpoint.status == OrchestrationStatus.PUBLISHED.value
-        and checkpoint.push_verified
-        and checkpoint.commit_sha
-        and checkpoint.finalization_artifact_path
-        and OrchestrationPhase.FINALIZATION.value in checkpoint.completed_phases
-    )
-
-
 def _entry_for_checkpoint(
     checkpoint: OrchestrationCheckpoint, path: Path, repo_root: Path
 ) -> OrchestrationInboxEntry | None:
-    title, invalid_reason, stale_reason = _validate_checkpoint(checkpoint, path, repo_root)
+    terminal_claim = (
+        checkpoint.phase == OrchestrationPhase.PUBLISHED.value
+        or checkpoint.status == OrchestrationStatus.PUBLISHED.value
+    )
+    title, invalid_reason, stale_reason = _validate_checkpoint(
+        checkpoint,
+        path,
+        repo_root,
+        check_current_freshness=not terminal_claim,
+    )
+    if not invalid_reason and terminal_claim:
+        invalid_reason = _validate_terminal_publication(checkpoint, repo_root)
     if invalid_reason or stale_reason:
         classification = InboxClassification.STALE_OR_INVALID_EVIDENCE.value
         reason = invalid_reason or stale_reason or "checkpoint evidence is invalid"
@@ -381,12 +556,8 @@ def _entry_for_checkpoint(
             if stale_reason
             else "INVALID_EVIDENCE"
         )
-    elif _is_verified_published(checkpoint):
+    elif terminal_claim:
         return None
-    elif checkpoint.status == OrchestrationStatus.PUBLISHED.value:
-        classification = InboxClassification.STALE_OR_INVALID_EVIDENCE.value
-        reason = "published state is incomplete or lacks verified terminal evidence"
-        status = "INVALID_EVIDENCE"
     elif checkpoint.status in _OWNER_STATUSES:
         classification = InboxClassification.ACTION_REQUIRED.value
         reason = _reason(checkpoint)

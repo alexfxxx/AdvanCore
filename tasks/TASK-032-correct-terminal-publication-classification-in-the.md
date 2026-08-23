@@ -1,6 +1,6 @@
 # TASK-032 — Correct terminal publication classification in the orchestration inbox
 
-STATUS: READY
+STATUS: APPROVED
 
 ## Objective
 
@@ -136,16 +136,63 @@ None.
 
 ### Implemented
 
+- Separated unresolved checkpoint freshness validation from terminal
+  `PUBLISHED` evidence validation.
+- Added fail-closed validation of one authoritative task, review bundle,
+  authorized `APPROVE` decision, successful canonical finalization record,
+  feature line, and review/finalized commit chain.
+- Required the authoritative task to remain `APPROVED` and restricted review
+  and controller-decision evidence to their canonical directories.
+- Aligned terminal completed-phase validation with the orchestrator's real
+  published checkpoint shape: `FINALIZATION` is completed while `PUBLISHED`
+  is the current phase and status.
+- Accepted the established finalization directory representation only by
+  resolving its exact `finalize.jsonl` child.
+- Added deterministic TASK-029/TASK-030/TASK-031-shaped positive regressions,
+  specified negative evidence cases, unresolved freshness coverage, and
+  retained API/CLI read-only snapshot coverage.
+- Updated the inbox decision and agent-runner architecture documentation.
+
 ### Files changed
+
+- `advancore/agent_runner/orchestration_inbox.py`
+- `tests/test_orchestration_inbox.py`
+- `docs/decisions/ADR-027-read-only-orchestration-exception-inbox.md`
+- `docs/architecture/AGENT_RUNNER.md`
+- `tasks/TASK-032-correct-terminal-publication-classification-in-the.md`
 
 ### Database changes
 
+None.
+
 ### Tests executed and results
+
+- `.venv/bin/python -m pytest tests/test_orchestration_inbox.py -q` — 26 passed.
+- `.venv/bin/python -m pytest tests/test_orchestration_inbox.py tests/test_orchestration.py tests/test_controller_decision.py tests/test_review_bundle.py tests/test_finalize.py -q`
+  — 170 passed.
+- `.venv/bin/python -m pytest tests/ -q` — 670 passed.
+- `git diff --check` — passed.
 
 ### Assumptions
 
+- Existing local authoritative task, review-bundle, decision, finalization, and
+  finalized Git-object evidence remains available to the read-only projection.
+- `PUSHED` remains the recognized successful publication outcome emitted by
+  the existing finalization boundary.
+
 ### Risks / unresolved issues
+
+- Historical terminal classification fails closed if any immutable local
+  evidence or the finalized Git object is later removed or malformed.
+- No known test failures or unresolved implementation issues.
 
 ### Decisions required
 
+- Independent controller/owner review and approval of this READY task's
+  implementation; the implementation worker has not self-approved or changed
+  lifecycle status.
+
 ### Recommended next step
+
+Review the scoped diff and completion evidence. If accepted, authorize the
+separate governed commit/finalization workflow.

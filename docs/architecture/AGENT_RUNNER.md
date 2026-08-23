@@ -1768,10 +1768,19 @@ caller-supplied ID:
 Discovery is deterministic and limited to JSON checkpoint candidates under
 `.agent_runner/orchestration/`. Every candidate is revalidated against the
 current checkpoint schema, filename/run ID, authoritative task file, bounded
-artifact paths and cross-links, current branch/HEAD/path fingerprint, and
-terminal publication evidence. A verified, idempotent `PUBLISHED` run is
-excluded. Missing, malformed, conflicting, unsafe, unreadable, or stale
-evidence is retained as a fail-closed exception rather than skipped.
+artifact paths and cross-links, and terminal publication evidence. Unresolved
+checkpoints also retain current branch/HEAD/path-fingerprint freshness checks.
+A terminal `PUBLISHED` claim instead bypasses those mutable-current-state
+checks only after validating its historical evidence chain: authoritative task
+and filename, exact review bundle, authorized owner/controller `APPROVE`
+decision, feature line, linked review/finalized commits, completed terminal
+phases, and exactly one successful `PUSHED` finalization record. A finalization
+reference may name `.agent_runner/finalize/` or its canonical
+`finalize.jsonl`; directory form resolves only that exact child. A fully
+validated historical publication is excluded even after later feature-line
+commits or working-path changes. Missing, malformed, duplicated, ambiguous,
+conflicting, unsafe, unreadable, unsuccessful, or stale unresolved evidence is
+retained as a fail-closed exception rather than skipped.
 
 Entries are ordered by classification urgency, checkpoint timestamp, and run
 ID. They expose only run and task identity/title, phase/status, a bounded
@@ -1785,6 +1794,13 @@ append audit records, change lifecycle state, create handoffs or decisions,
 launch processes other than read-only Git inspection, resume workers, or
 delegate publication. Its preview command omits `--apply`, and its
 classification never implies approval or recovery.
+
+Reasoning labels: **FACT:** terminal publication is established by the linked
+append-only evidence chain, not checkpoint flags alone. **ASSUMPTION:** the
+local immutable evidence and finalized Git object remain available for inbox
+inspection. **INFERENCE:** current repository freshness applies to unresolved
+work but is not authoritative over a fully proven historical outcome.
+**PROPOSAL:** none.
 
 Codex desktop, a phone-oriented presentation, or another local client may
 render this JSON and relay an explicitly selected command. AdvanCore remains
