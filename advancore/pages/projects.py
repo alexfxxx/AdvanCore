@@ -2,6 +2,7 @@
 
 from collections.abc import Iterator
 from contextlib import contextmanager
+import hashlib
 
 import streamlit as st
 
@@ -18,6 +19,8 @@ from advancore.services.project_service import (
 
 _PROJECT_FLASH_KEY = "projects_success_notice"
 _PROJECT_CREATE_GENERATION_KEY = "project_create_generation"
+_PROJECT_SELECTED_VALUE_KEY = "projects_selected_value"
+_PROJECT_SELECTBOX_PREFIX = "projects_selected_id_"
 _PROJECT_SUCCESS_MESSAGES = frozenset(
     {
         "Project created successfully.",
@@ -111,6 +114,24 @@ def _render_success_notice() -> None:
         st.success(message)
 
 
+def _selection_widget_key(projects: list) -> str:
+    """Version the selector from its current saved user-facing labels."""
+    label_material = "\n".join(
+        f"{project.id}\0{project.name}\0{project.status}" for project in projects
+    )
+    label_digest = hashlib.sha256(label_material.encode("utf-8")).hexdigest()[:12]
+    return f"{_PROJECT_SELECTBOX_PREFIX}{label_digest}"
+
+
+def _clear_superseded_selection_state(current_key: str) -> None:
+    """Discard stale selector widgets while retaining the selected value."""
+    for key in tuple(st.session_state):
+        if key == "projects_selected_id" or (
+            key.startswith(_PROJECT_SELECTBOX_PREFIX) and key != current_key
+        ):
+            st.session_state.pop(key, None)
+
+
 def _render_projects() -> None:
     """Load and render the deterministic project list and selected detail."""
     try:
@@ -124,16 +145,27 @@ def _render_projects() -> None:
 
                 st.subheader("Project list")
                 project_by_id = {project.id: project for project in projects}
+                project_ids = list(project_by_id)
+                selection_widget_key = _selection_widget_key(projects)
+                _clear_superseded_selection_state(selection_widget_key)
+                preferred_id = st.session_state.get(_PROJECT_SELECTED_VALUE_KEY)
+                selected_index = (
+                    project_ids.index(preferred_id)
+                    if preferred_id in project_by_id
+                    else 0
+                )
                 selected_id = st.selectbox(
                     "Select a project",
-                    options=list(project_by_id),
+                    options=project_ids,
+                    index=selected_index,
                     format_func=lambda project_id: (
                         f"{project_by_id[project_id].name} (archived)"
                         if project_by_id[project_id].status == "archived"
                         else project_by_id[project_id].name
                     ),
-                    key="projects_selected_id",
+                    key=selection_widget_key,
                 )
+                st.session_state[_PROJECT_SELECTED_VALUE_KEY] = selected_id
 
                 selected = service.get_project(selected_id)
                 if selected is None:
@@ -219,7 +251,7 @@ def render():
     if submitted:
         created_id = _create_project(name, description)
         if created_id is not None:
-            st.session_state["projects_selected_id"] = created_id
+            st.session_state[_PROJECT_SELECTED_VALUE_KEY] = created_id
             st.session_state[_PROJECT_CREATE_GENERATION_KEY] = (
                 create_generation + 1
             )

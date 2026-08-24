@@ -188,7 +188,7 @@ def test_valid_creation_clears_form_reruns_and_selects_new_project(monkeypatch):
         "Project created successfully."
     )
     assert state[projects_page._PROJECT_CREATE_GENERATION_KEY] == 1
-    assert state["projects_selected_id"] == 1
+    assert state[projects_page._PROJECT_SELECTED_VALUE_KEY] == 1
     assert "project_create_name_0" not in state
     assert "project_create_description_0" not in state
     assert "Name: New project" in fake_st.text()
@@ -410,8 +410,31 @@ def test_archive_requires_confirmation_then_reruns_and_refreshes(monkeypatch):
     assert "Project archived successfully." in refreshed.text()
     assert "Status: archived" in refreshed.text()
     assert "Archived project — read-only." in refreshed.text()
+    assert refreshed.selected_option == "Alpha (archived)"
     assert "Project name" not in refreshed.widget_labels
     assert refreshed.rerun_calls == 0
+
+
+def test_selector_label_revision_keeps_project_and_drops_old_widget(monkeypatch):
+    changing = project(1, "Changing")
+    old_widget_key = projects_page._selection_widget_key([changing])
+    state = {
+        projects_page._PROJECT_SELECTED_VALUE_KEY: 1,
+        old_widget_key: 1,
+    }
+    changing.status = "archived"
+    fake_st = FakeStreamlit(session_state=state)
+    install_fakes(
+        monkeypatch, fake_st, ProjectService(FakeRepository([changing]))
+    )
+
+    projects_page.render()
+
+    new_widget_key = projects_page._selection_widget_key([changing])
+    assert fake_st.selected_option == "Changing (archived)"
+    assert old_widget_key not in state
+    assert state[new_widget_key] == 1
+    assert state[projects_page._PROJECT_SELECTED_VALUE_KEY] == 1
 
 
 def test_archived_project_is_labelled_listed_and_read_only(monkeypatch):
