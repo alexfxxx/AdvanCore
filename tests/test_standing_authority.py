@@ -2,6 +2,7 @@
 
 import json
 import os
+import subprocess
 from datetime import datetime, timedelta, timezone
 
 import pytest
@@ -17,7 +18,18 @@ NOW = datetime(2026, 8, 24, 8, 0, tzinfo=timezone.utc)
 
 
 def _service(tmp_path, now=NOW):
-    return StandingAuthorityService(tmp_path / "controller-authority", lambda: now)
+    repo = tmp_path / "repo"
+    if not (repo / ".git").exists():
+        repo.mkdir(parents=True, exist_ok=True)
+        subprocess.run(["git", "init", "-b", "fixture"], cwd=repo, check=True, capture_output=True)
+        subprocess.run(
+            ["git", "remote", "add", "origin", "https://github.com/example/advancore.git"],
+            cwd=repo,
+            check=True,
+        )
+    return StandingAuthorityService(
+        repo, tmp_path / "controller-authority", lambda: now
+    )
 
 
 def _record(service, **overrides):
@@ -86,7 +98,7 @@ def test_expired_exhausted_and_unconfirmed_grants_fail_closed(tmp_path):
         service.consume("TASK-045", "unattended-controller-orchestration", RoutineAction.RUN_TESTS)
 
     expired = _service(tmp_path / "expired", now=NOW + timedelta(hours=4))
-    writer = StandingAuthorityService(expired.state_dir, lambda: NOW)
+    writer = StandingAuthorityService(expired.repo_root, expired.state_dir, lambda: NOW)
     _record(writer)
     with pytest.raises(StandingAuthorityError, match="expired"):
         expired.consume("TASK-045", "unattended-controller-orchestration", RoutineAction.RUN_TESTS)
@@ -104,3 +116,38 @@ def test_unsafe_or_malformed_authority_fails_closed(tmp_path):
     with pytest.raises(StandingAuthorityError, match="invalid"):
         service.consume("TASK-045", "unattended-controller-orchestration", RoutineAction.RUN_TESTS)
 
+
+def test_same_names_and_remote_in_another_clone_cannot_consume_grant(tmp_path):
+    first = _service(tmp_path / "first")
+    _record(first)
+    second = _service(tmp_path / "second")
+    second.state_dir = first.state_dir
+
+    with pytest.raises(StandingAuthorityError, match="repository"):
+        second.consume(
+            "TASK-045", "unattended-controller-orchestration", RoutineAction.RUN_TESTS
+        )
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("branch", 7),
+        ("task_ids", ["TASK-045", 7]),
+        ("allowed_actions", [["run-tests"]]),
+        ("max_uses", "100"),
+        ("uses", False),
+    ],
+)
+def test_malformed_field_types_are_normalized(tmp_path, field, value):
+    service = _service(tmp_path)
+    _record(service)
+    payload = json.loads(service.authority_path.read_text(encoding="utf-8"))
+    payload[field] = value
+    service.authority_path.write_text(json.dumps(payload), encoding="utf-8")
+    os.chmod(service.authority_path, 0o600)
+
+    with pytest.raises(StandingAuthorityError, match="invalid"):
+        service.consume(
+            "TASK-045", "unattended-controller-orchestration", RoutineAction.RUN_TESTS
+        )

@@ -89,6 +89,10 @@ inheritance. Manual approval gates must remain for the owner's return.
 - Explicitly excluded approvals, credentials, merge, `main`, deployment,
   destructive actions and business/compliance decisions.
 - Added deterministic tests and a plain operating runbook.
+- Repaired independent-review findings by binding every grant to the verified
+  local Git common directory plus sanitized origin identity (shared worktrees
+  only), and normalizing malformed field types into the controlled fail-closed
+  error path.
 
 ### Files changed
 
@@ -104,8 +108,8 @@ None.
 
 ### Tests executed and results
 
-- Focused standing-authority suite: 9 passed.
-- Full project suite: 807 passed.
+- Focused standing-authority suite after independent-review repairs: 15 passed.
+- Full project suite after independent-review repairs: 813 passed.
 - Python compile and `git diff --check`: passed.
 
 ### Risks / unresolved issues
