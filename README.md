@@ -72,7 +72,8 @@ not reuse the example database password in production.
 
 Open the local address printed by Streamlit. The Settings page shows whether
 the database is configured and reachable without displaying its connection
-details. When finished, stop the local database with `docker compose down`.
+details. When finished, stop the local database with
+`./scripts/start-advancore.sh --stop`.
 
 After the one-time Python environment setup, the same local startup can be run
 with `./scripts/start-advancore.sh`. Use `--check-only` to check readiness
@@ -122,9 +123,11 @@ The Knowledge Hub supports the first bounded draft workflow:
 
 - Create a draft with a required title and content.
 - List saved knowledge items in creation order.
-- Select an item to view its read-only title, status, creation time, and content.
+- Select an item to view its title, status, creation time, and content.
+- Edit a draft and immediately see its refreshed saved values.
+- Explicitly archive a draft and keep it visible as a read-only record.
 
-Editing, deletion, review/approval, search, project linking, source metadata,
+Deletion, review/approval, search, project linking, source metadata,
 attachments, AI features, and permissions are intentionally deferred.
 
 ## Activity Log

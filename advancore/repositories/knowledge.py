@@ -35,6 +35,13 @@ class KnowledgeItemRepository:
         self._session.refresh(item)
         return item
 
+    def save(self, item: KnowledgeItem) -> KnowledgeItem:
+        """Persist changes to an existing knowledge item and return it."""
+        self._session.add(item)
+        self._session.flush()
+        self._session.refresh(item)
+        return item
+
     def list_by_project(self, project_id: int) -> Sequence[KnowledgeItem]:
         """Return knowledge items linked to the given project."""
         statement = (

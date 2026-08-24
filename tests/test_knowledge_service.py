@@ -3,6 +3,9 @@
 import pytest
 
 from advancore.services.knowledge_service import (
+    KnowledgeAlreadyArchivedError,
+    KnowledgeNotFoundError,
+    KnowledgeReadOnlyError,
     KnowledgeService,
     KnowledgeValidationError,
 )
@@ -12,6 +15,8 @@ class FakeKnowledgeRepository:
     def __init__(self):
         self.items = []
         self.add_calls = 0
+        self.save_calls = 0
+        self.save_error = None
 
     def add(self, item):
         self.add_calls += 1
@@ -24,6 +29,12 @@ class FakeKnowledgeRepository:
 
     def list(self):
         return list(self.items)
+
+    def save(self, item):
+        self.save_calls += 1
+        if self.save_error:
+            raise self.save_error
+        return item
 
 
 def test_create_draft_normalizes_and_sets_bounded_defaults():
@@ -74,3 +85,87 @@ def test_list_and_get_delegate_to_repository():
     assert service.list_items() == [first, second]
     assert service.get_item(second.id) is second
     assert service.get_item(404) is None
+
+
+def test_edit_draft_normalizes_and_persists_without_changing_lifecycle_fields():
+    repo = FakeKnowledgeRepository()
+    original = KnowledgeService(repo).create_draft("Original", "Old")
+    original.project_id = 12
+    original.source_type = "manual"
+    edited = KnowledgeService(repo).edit_draft(
+        original.id, "  Updated  ", "  New content  "
+    )
+    assert edited is original
+    assert (edited.title, edited.content, edited.status) == (
+        "Updated", "New content", "draft"
+    )
+    assert (edited.project_id, edited.source_type) == (12, "manual")
+    assert repo.save_calls == 1
+
+
+@pytest.mark.parametrize(
+    ("title", "content"),
+    [(" ", "Content"), ("x" * 301, "Content"), ("Title", " ")],
+)
+def test_edit_draft_rejects_invalid_fields_without_mutation(title, content):
+    repo = FakeKnowledgeRepository()
+    item = KnowledgeService(repo).create_draft("Original", "Old")
+    with pytest.raises(KnowledgeValidationError):
+        KnowledgeService(repo).edit_draft(item.id, title, content)
+    assert (item.title, item.content) == ("Original", "Old")
+    assert repo.save_calls == 0
+
+
+def test_edit_draft_rejects_missing_and_non_draft_without_save():
+    repo = FakeKnowledgeRepository()
+    service = KnowledgeService(repo)
+    with pytest.raises(KnowledgeNotFoundError):
+        service.edit_draft(404, "Title", "Content")
+    item = service.create_draft("Original", "Old")
+    item.status = "archived"
+    with pytest.raises(KnowledgeReadOnlyError, match="read-only"):
+        service.edit_draft(item.id, "Title", "Content")
+    assert repo.save_calls == 0
+
+
+def test_edit_failure_restores_in_memory_fields():
+    repo = FakeKnowledgeRepository()
+    item = KnowledgeService(repo).create_draft("Original", "Old")
+    repo.save_error = RuntimeError("database unavailable")
+    with pytest.raises(RuntimeError):
+        KnowledgeService(repo).edit_draft(item.id, "Updated", "New")
+    assert (item.title, item.content) == ("Original", "Old")
+
+
+def test_archive_draft_is_one_way_and_preserves_content():
+    repo = FakeKnowledgeRepository()
+    item = KnowledgeService(repo).create_draft("Original", "Old")
+    before = (item.id, item.title, item.content)
+    archived = KnowledgeService(repo).archive_draft(item.id)
+    assert (archived.id, archived.title, archived.content) == before
+    assert archived.status == "archived"
+    assert repo.save_calls == 1
+
+
+def test_archive_rejects_missing_archived_and_unknown_without_save():
+    repo = FakeKnowledgeRepository()
+    service = KnowledgeService(repo)
+    with pytest.raises(KnowledgeNotFoundError):
+        service.archive_draft(404)
+    item = service.create_draft("Original", "Old")
+    item.status = "archived"
+    with pytest.raises(KnowledgeAlreadyArchivedError):
+        service.archive_draft(item.id)
+    item.status = "unexpected"
+    with pytest.raises(KnowledgeReadOnlyError):
+        service.archive_draft(item.id)
+    assert repo.save_calls == 0
+
+
+def test_archive_failure_restores_draft_status():
+    repo = FakeKnowledgeRepository()
+    item = KnowledgeService(repo).create_draft("Original", "Old")
+    repo.save_error = RuntimeError("database unavailable")
+    with pytest.raises(RuntimeError):
+        KnowledgeService(repo).archive_draft(item.id)
+    assert item.status == "draft"
