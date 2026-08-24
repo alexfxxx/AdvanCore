@@ -12,6 +12,7 @@ from advancore.agent_runner.worker import (
     KimiWorkerAdapter,
     build_worker_instruction,
     _isolate_kimi_command,
+    MAX_WORKER_INPUT_BYTES,
 )
 
 
@@ -62,6 +63,22 @@ def test_symlinked_task_is_blocked(tmp_path: Path):
     which.assert_not_called()
 
 
+def test_noncanonical_case_task_reference_is_blocked(tmp_path: Path):
+    instruction = _task(tmp_path, "Normal content.").replace("tasks/", "Tasks/")
+    with patch("advancore.agent_runner.worker.shutil.which") as which:
+        result = CodexWorkerAdapter().run(instruction, tmp_path)
+    assert result.terminal_reason == "credential_access_required"
+    which.assert_not_called()
+
+
+def test_oversized_direct_instruction_is_blocked(tmp_path: Path):
+    instruction = "x" * (MAX_WORKER_INPUT_BYTES + 1)
+    with patch("advancore.agent_runner.worker.shutil.which") as which:
+        result = CodexPlannerAdapter().run(instruction, tmp_path)
+    assert result.terminal_reason == "credential_access_required"
+    which.assert_not_called()
+
+
 def test_kimi_profile_denies_reading_common_credential_locations(tmp_path: Path):
     repo = tmp_path.resolve()
     state = repo / "state"
@@ -72,5 +89,24 @@ def test_kimi_profile_denies_reading_common_credential_locations(tmp_path: Path)
     command = _isolate_kimi_command(["kimi"], service, repo, scratch)
     profile = command[2]
     assert "deny file-read" in profile
-    for protected in (repo / ".env", repo / ".ssh", Path.home() / ".config" / "gh"):
+    for protected in (
+        repo / ".env",
+        repo / ".ssh",
+        Path.home() / ".config" / "gh",
+        Path.home() / ".git-credentials",
+        Path.home() / ".config" / "git" / "credentials",
+    ):
         assert str(protected) in profile
+
+
+def test_codex_planner_receives_minimal_environment(tmp_path: Path, monkeypatch):
+    monkeypatch.setenv("DATABASE_URL", "controller-secret")
+    with patch("advancore.agent_runner.worker.shutil.which", return_value="/usr/bin/codex"), patch(
+        "advancore.agent_runner.worker.run_bounded_worker_process"
+    ) as bounded:
+        CodexPlannerAdapter().run("safe proposal", tmp_path)
+    command = bounded.call_args.args[0]
+    environment = bounded.call_args.kwargs["environment"]
+    assert command[0] == "/usr/bin/codex"
+    assert environment["PATH"] == "/usr/bin:/bin:/usr/sbin:/sbin"
+    assert "DATABASE_URL" not in environment

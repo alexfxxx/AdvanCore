@@ -40,6 +40,9 @@ be separately designed and explicitly approved.
 - Applied it to Kimi, Kimi-Swarm, Codex implementation and Codex planning.
 - Extended Kimi's operating-system sandbox to deny reads from common credential
   files and directories while retaining its own provider authentication path.
+- Repaired independent review by giving Codex planning the same minimal
+  environment, rejecting noncanonical task references and oversized direct
+  instructions, and protecting standard Git credential-store files.
 
 ### Database changes
 
@@ -47,7 +50,7 @@ None.
 
 ### Tests executed and results
 
-- Worker data-boundary and affected worker suites: 40 passed.
+- Worker data-boundary and affected worker/planner suites: 55 passed.
 - `git diff --check`: passed.
 
 ### Decisions required

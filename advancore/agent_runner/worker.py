@@ -67,6 +67,10 @@ KIMI_INHERITED_LOCALE_VARIABLES: tuple[str, ...] = (
 WORKER_TASK_REFERENCE_RE = re.compile(
     r"(?<![A-Za-z0-9_.-])(tasks/TASK-[0-9]+-[A-Za-z0-9_.-]+\.md)"
 )
+WORKER_TASK_LIKE_REFERENCE_RE = re.compile(
+    r"(?<![A-Za-z0-9_.-])(tasks/TASK-[0-9]+-[A-Za-z0-9_.-]+\.md)",
+    re.IGNORECASE,
+)
 WORKER_CREDENTIAL_PATTERNS: tuple[re.Pattern[str], ...] = (
     re.compile(r"-----BEGIN (?:RSA |EC |OPENSSH )?PRIVATE KEY-----"),
     re.compile(r"\bgithub_pat_[A-Za-z0-9_]{20,}\b"),
@@ -89,13 +93,21 @@ def _worker_input_blocked(instruction: str, working_dir: Path) -> bool:
     This is deliberately a high-confidence guard, not a general secret scanner;
     explicit credential capabilities remain an owner-controlled future boundary.
     """
-    if _contains_credential_material(instruction):
+    try:
+        instruction_size = len(instruction.encode("utf-8"))
+    except UnicodeError:
+        return True
+    if instruction_size > MAX_WORKER_INPUT_BYTES or _contains_credential_material(instruction):
         return True
     try:
         repo_root = working_dir.resolve(strict=True)
     except OSError:
         return True
-    for reference in set(WORKER_TASK_REFERENCE_RE.findall(instruction)):
+    task_like_references = set(WORKER_TASK_LIKE_REFERENCE_RE.findall(instruction))
+    canonical_references = set(WORKER_TASK_REFERENCE_RE.findall(instruction))
+    if task_like_references != canonical_references:
+        return True
+    for reference in canonical_references:
         candidate = repo_root / reference
         try:
             resolved = candidate.resolve(strict=True)
@@ -274,6 +286,8 @@ def _isolate_kimi_command(
         account_home / ".netrc",
         account_home / ".npmrc",
         account_home / ".pypirc",
+        account_home / ".git-credentials",
+        account_home / ".config" / "git" / "credentials",
     )
     deny_filters = " ".join(
         [
@@ -935,16 +949,27 @@ class CodexPlannerAdapter(WorkerAdapter):
     def run(self, instruction: str, working_dir: Path) -> WorkerResult:
         if _worker_input_blocked(instruction, working_dir):
             return _credential_block_result(self.timeout_seconds)
-        if not shutil.which(self.executable):
+        resolved_executable = shutil.which(self.executable)
+        if not resolved_executable:
             return WorkerResult(
                 success=False,
                 message=f"Worker executable '{self.executable}' not found in PATH",
                 terminal_reason="launch_failed",
                 timeout_seconds=self.timeout_seconds,
             )
-        return run_bounded_worker_process(
-            self.build_command(instruction, working_dir), working_dir, self.timeout_seconds
-        )
+        with tempfile.TemporaryDirectory(
+            prefix="advancore-codex-planner-", dir="/tmp"
+        ) as scratch_name:
+            command = self.build_command(instruction, working_dir)
+            command[0] = resolved_executable
+            return run_bounded_worker_process(
+                command,
+                working_dir,
+                self.timeout_seconds,
+                environment=_codex_environment(
+                    Path(scratch_name).resolve(strict=True)
+                ),
+            )
 
 
 def validate_planner_policy(primary: str, fallback: str | None = None) -> None:
