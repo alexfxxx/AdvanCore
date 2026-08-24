@@ -15,6 +15,7 @@ from advancore.services.knowledge_service import (
     KnowledgeService,
     KnowledgeValidationError,
 )
+from advancore.ui.formatting import format_utc_timestamp
 
 
 _KNOWLEDGE_FLASH_KEY = "knowledge_success_notice"
@@ -176,11 +177,7 @@ def _render_items() -> None:
                 st.subheader("Knowledge details")
                 st.write(f"Title: {selected.title}")
                 st.write(f"Status: {selected.status}")
-                st.write(
-                    f"Created: {selected.created_at.isoformat()}"
-                    if selected.created_at is not None
-                    else "Created: Not available"
-                )
+                st.write(f"Created: {format_utc_timestamp(selected.created_at)}")
                 content_widget_key = _content_widget_key(
                     selected.id, selected.content
                 )

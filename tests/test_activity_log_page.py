@@ -112,7 +112,7 @@ def test_selected_record_shows_read_only_details_and_fallbacks(monkeypatch):
     assert "Action: project_created" in rendered
     assert "Entity type: project" in rendered
     assert "Entity ID: 17" in rendered
-    assert "Created: 2026-08-23T10:30:00" in rendered
+    assert "Created: 23 Aug 2026, 10:30 UTC" in rendered
     assert "Created project Alpha" in rendered
 
     fallback_st = FakeStreamlit(selected_id=2)
