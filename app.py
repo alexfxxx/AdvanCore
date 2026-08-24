@@ -9,6 +9,7 @@ from advancore.pages import (
     activity_log,
     settings,
 )
+from advancore.ui.theme import apply_command_center_theme
 
 
 st.set_page_config(
@@ -17,8 +18,10 @@ st.set_page_config(
     layout="wide",
 )
 
-st.title(APP_TITLE)
-st.caption("Business Intelligence and Operations Platform")
+apply_command_center_theme(st)
+
+st.title("ADVANCORE")
+st.caption(f"Executive Command Center · {APP_TITLE}")
 
 page = st.sidebar.radio(
     "Navigation",
