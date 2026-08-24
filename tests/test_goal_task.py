@@ -907,6 +907,10 @@ class TestCLI:
             lambda name: "/fake/kimi",
         )
         monkeypatch.setattr(
+            "advancore.agent_runner.worker._kimi_isolation_available",
+            lambda: True,
+        )
+        monkeypatch.setattr(
             "advancore.agent_runner.worker.subprocess.run",
             lambda *args, **kwargs: MagicMock(
                 returncode=0, stdout=output, stderr="", command=[]

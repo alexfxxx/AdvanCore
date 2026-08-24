@@ -108,6 +108,31 @@ from advancore.agent_runner.orchestration_inbox import (
     format_orchestration_inbox,
     serialize_orchestration_inbox,
 )
+from advancore.agent_runner.standing_authority import (
+    RoutineAction,
+    StandingAuthority,
+    StandingAuthorityError,
+    StandingAuthorityService,
+    default_standing_authority_dir,
+)
+from advancore.agent_runner.unattended_review import (
+    IndependentReviewResult,
+    RepairResult,
+    UnattendedReviewResult,
+    UnattendedReviewStatus,
+    run_unattended_review_loop,
+)
+from advancore.agent_runner.worker_routing import (
+    AuthorizedWorkerAdapter,
+    KimiFirstWorkerRoute,
+    build_kimi_first_worker_route,
+)
+from advancore.agent_runner.owner_notifications import (
+    OwnerNotification,
+    OwnerNotificationFeed,
+    build_owner_notification_feed,
+    serialize_owner_notification_feed,
+)
 from advancore.agent_runner.review_bundle import (
     ControllerAction,
     ReviewBundle,
@@ -233,6 +258,23 @@ __all__ = [
     "build_orchestration_inbox",
     "format_orchestration_inbox",
     "serialize_orchestration_inbox",
+    "RoutineAction",
+    "StandingAuthority",
+    "StandingAuthorityError",
+    "StandingAuthorityService",
+    "default_standing_authority_dir",
+    "IndependentReviewResult",
+    "RepairResult",
+    "UnattendedReviewResult",
+    "UnattendedReviewStatus",
+    "run_unattended_review_loop",
+    "AuthorizedWorkerAdapter",
+    "KimiFirstWorkerRoute",
+    "build_kimi_first_worker_route",
+    "OwnerNotification",
+    "OwnerNotificationFeed",
+    "build_owner_notification_feed",
+    "serialize_owner_notification_feed",
     "default_orchestration_dir",
     "load_checkpoint",
     "run_orchestration",

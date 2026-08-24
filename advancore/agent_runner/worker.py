@@ -64,6 +64,103 @@ KIMI_INHERITED_LOCALE_VARIABLES: tuple[str, ...] = (
     "LC_CTYPE",
     "TZ",
 )
+WORKER_TASK_REFERENCE_RE = re.compile(
+    r"(?<![A-Za-z0-9_.-])(tasks/TASK-[0-9]+-[A-Za-z0-9_.-]+\.md)"
+)
+WORKER_TASK_LIKE_REFERENCE_RE = re.compile(
+    r"(?<![A-Za-z0-9_.-])((?:[A-Za-z0-9_.-]+/)*"
+    r"TASK-[0-9]+-[A-Za-z0-9_.-]+\.md)",
+    re.IGNORECASE,
+)
+WORKER_CREDENTIAL_PATTERNS: tuple[re.Pattern[str], ...] = (
+    re.compile(r"-----BEGIN (?:RSA |EC |OPENSSH )?PRIVATE KEY-----"),
+    re.compile(r"\bgithub_pat_[A-Za-z0-9_]{20,}\b"),
+    re.compile(r"\bgh[pousr]_[A-Za-z0-9]{20,}\b"),
+    re.compile(r"\bsk-[A-Za-z0-9_-]{20,}\b"),
+    re.compile(r"\bxox[baprs]-[A-Za-z0-9-]{20,}\b"),
+    re.compile(r"\bAKIA[A-Z0-9]{16}\b"),
+)
+MAX_WORKER_INPUT_BYTES = 256 * 1024
+WORKER_CREDENTIAL_URI_RE = re.compile(
+    r"\b[a-z][a-z0-9+.-]*://[^\s:/@]+:[^\s/@]+@", re.IGNORECASE
+)
+WORKER_SECRET_ASSIGNMENT_RE = re.compile(
+    r"(?im)^\s*(?:export\s+)?"
+    r"(?:[A-Z0-9_]+_(?:TOKEN|SECRET|PASSWORD|PASSWD|API_KEY|PRIVATE_KEY|ACCESS_KEY)"
+    r"|TOKEN|SECRET|PASSWORD|PASSWD|API_KEY|PRIVATE_KEY|ACCESS_KEY|DATABASE_URL)"
+    r"\s*[:=]\s*[\"']?([^\s\"'#]+)"
+)
+WORKER_SECRET_PLACEHOLDERS = frozenset(
+    {"none", "null", "false", "true", "0", "changeme", "placeholder", "redacted"}
+)
+
+
+def _contains_credential_material(value: str) -> bool:
+    if any(pattern.search(value) for pattern in WORKER_CREDENTIAL_PATTERNS):
+        return True
+    if WORKER_CREDENTIAL_URI_RE.search(value):
+        return True
+    for match in WORKER_SECRET_ASSIGNMENT_RE.finditer(value):
+        assigned = match.group(1).strip().lower()
+        if assigned in WORKER_SECRET_PLACEHOLDERS:
+            continue
+        if (
+            assigned.startswith(("<", "${", "$", "your_"))
+            or "example" in assigned
+            or "placeholder" in assigned
+            or set(assigned) == {"*"}
+        ):
+            continue
+        return True
+    return False
+
+
+def _worker_input_blocked(instruction: str, working_dir: Path) -> bool:
+    """Fail closed before a worker can receive likely credential material.
+
+    The instruction and every directly referenced governed task are checked.
+    This is deliberately a high-confidence guard, not a general secret scanner;
+    explicit credential capabilities remain an owner-controlled future boundary.
+    """
+    try:
+        instruction_size = len(instruction.encode("utf-8"))
+    except UnicodeError:
+        return True
+    if instruction_size > MAX_WORKER_INPUT_BYTES or _contains_credential_material(instruction):
+        return True
+    try:
+        repo_root = working_dir.resolve(strict=True)
+    except OSError:
+        return True
+    task_like_references = set(WORKER_TASK_LIKE_REFERENCE_RE.findall(instruction))
+    canonical_references = set(WORKER_TASK_REFERENCE_RE.findall(instruction))
+    if task_like_references != canonical_references:
+        return True
+    for reference in canonical_references:
+        candidate = repo_root / reference
+        try:
+            resolved = candidate.resolve(strict=True)
+            resolved.relative_to(repo_root)
+            if candidate.is_symlink() or resolved.stat().st_size > MAX_WORKER_INPUT_BYTES:
+                return True
+            text = resolved.read_text(encoding="utf-8")
+        except (OSError, UnicodeError, ValueError):
+            return True
+        if _contains_credential_material(text):
+            return True
+    return False
+
+
+def _credential_block_result(timeout_seconds: int) -> WorkerResult:
+    return WorkerResult(
+        success=False,
+        message=(
+            "Worker input blocked: possible credential material requires "
+            "explicit owner review"
+        ),
+        terminal_reason="credential_access_required",
+        timeout_seconds=timeout_seconds,
+    )
 
 
 def _kimi_isolation_available() -> bool:
@@ -111,6 +208,27 @@ def _kimi_environment(scratch_dir: Path) -> dict[str, str]:
         "PATH": KIMI_RUNTIME_PATH,
         "KIMI_CODE_HOME": str(account_home / ".kimi-code"),
         "KIMI_DISABLE_TELEMETRY": "1",
+        "TMPDIR": str(scratch_dir),
+        "TMP": str(scratch_dir),
+        "TEMP": str(scratch_dir),
+        "XDG_CACHE_HOME": str(scratch_dir / "cache"),
+    }
+    for name in KIMI_INHERITED_LOCALE_VARIABLES:
+        value = os.environ.get(name)
+        if value:
+            environment[name] = value
+    return environment
+
+
+def _codex_environment(scratch_dir: Path) -> dict[str, str]:
+    """Return a minimal fixed environment for one governed Codex launch."""
+    account = pwd.getpwuid(os.getuid())
+    account_home = Path(account.pw_dir).resolve()
+    environment = {
+        "HOME": str(account_home),
+        "USER": account.pw_name,
+        "LOGNAME": account.pw_name,
+        "PATH": KIMI_RUNTIME_PATH,
         "TMPDIR": str(scratch_dir),
         "TMP": str(scratch_dir),
         "TEMP": str(scratch_dir),
@@ -180,6 +298,26 @@ def _isolate_kimi_command(
         repo_root / ".python-version",
         repo_root / ".tool-versions",
     )
+    protected_read_subpaths = (
+        repo_root / ".aws",
+        repo_root / ".ssh",
+        repo_root / ".kube",
+        repo_root / ".docker",
+        account_home / ".aws",
+        account_home / ".ssh",
+        account_home / ".kube",
+        account_home / ".docker",
+        account_home / ".gnupg",
+        account_home / ".config" / "gh",
+    )
+    protected_read_literals = (
+        *protected_literals,
+        account_home / ".netrc",
+        account_home / ".npmrc",
+        account_home / ".pypirc",
+        account_home / ".git-credentials",
+        account_home / ".config" / "git" / "credentials",
+    )
     deny_filters = " ".join(
         [
             f'(deny file-write* (require-any '
@@ -192,11 +330,23 @@ def _isolate_kimi_command(
             for path in protected_literals
         ]
     )
+    read_deny_filters = " ".join(
+        [
+            f'(deny file-read* (require-any '
+            f'(literal "{_sandbox_literal(path)}") '
+            f'(subpath "{_sandbox_literal(path)}")))'
+            for path in protected_read_subpaths
+        ]
+        + [
+            f'(deny file-read* (literal "{_sandbox_literal(path)}"))'
+            for path in protected_read_literals
+        ]
+    )
     profile = (
         "(version 1) (allow default) "
         "(deny file-link) "
         f"(deny file-write* (require-not (require-any {allow_filters}))) "
-        f"{deny_filters}"
+        f"{deny_filters} {read_deny_filters}"
     )
     return [str(KIMI_SANDBOX_EXECUTABLE), "-p", profile, *command]
 
@@ -517,6 +667,8 @@ class KimiWorkerAdapter(WorkerAdapter):
         return [self.executable, "--prompt", instruction]
 
     def run(self, instruction: str, working_dir: Path) -> WorkerResult:
+        if _worker_input_blocked(instruction, working_dir):
+            return _credential_block_result(self.timeout_seconds)
         resolved_executable = shutil.which(self.executable)
         if not resolved_executable:
             return WorkerResult(
@@ -658,6 +810,8 @@ class KimiSwarmWorkerAdapter(WorkerAdapter):
         return self.build_command(instruction, working_dir)
 
     def run(self, instruction: str, working_dir: Path) -> WorkerResult:
+        if _worker_input_blocked(instruction, working_dir):
+            return _credential_block_result(self.timeout_seconds)
         resolved_executable = shutil.which(self.executable)
         if not resolved_executable:
             return WorkerResult(
@@ -772,20 +926,33 @@ class CodexWorkerAdapter(WorkerAdapter):
         ]
 
     def run(self, instruction: str, working_dir: Path) -> WorkerResult:
-        if not shutil.which(self.executable):
+        if _worker_input_blocked(instruction, working_dir):
+            return _credential_block_result(self.timeout_seconds)
+        resolved_executable = shutil.which(self.executable)
+        if not resolved_executable:
             return WorkerResult(
                 success=False,
                 message=f"Worker executable '{self.executable}' not found in PATH",
             )
         bounded_instruction = _governed_instruction(instruction, self.allowed_scope)
-        try:
-            command = self.build_command(bounded_instruction, working_dir)
-            return run_bounded_worker_process(command, working_dir, self.timeout_seconds)
-        except Exception as exc:  # pragma: no cover - defensive
-            return WorkerResult(
-                success=False,
-                message=f"Worker launch failed: {type(exc).__name__}",
-            )
+        with tempfile.TemporaryDirectory(
+            prefix="advancore-codex-", dir="/tmp"
+        ) as scratch_name:
+            try:
+                command = self.build_command(bounded_instruction, working_dir)
+                command[0] = resolved_executable
+                environment = _codex_environment(Path(scratch_name).resolve(strict=True))
+                return run_bounded_worker_process(
+                    command,
+                    working_dir,
+                    self.timeout_seconds,
+                    environment=environment,
+                )
+            except Exception as exc:  # pragma: no cover - defensive
+                return WorkerResult(
+                    success=False,
+                    message=f"Worker launch failed: {type(exc).__name__}",
+                )
 
 
 class CodexPlannerAdapter(WorkerAdapter):
@@ -809,16 +976,29 @@ class CodexPlannerAdapter(WorkerAdapter):
         ]
 
     def run(self, instruction: str, working_dir: Path) -> WorkerResult:
-        if not shutil.which(self.executable):
+        if _worker_input_blocked(instruction, working_dir):
+            return _credential_block_result(self.timeout_seconds)
+        resolved_executable = shutil.which(self.executable)
+        if not resolved_executable:
             return WorkerResult(
                 success=False,
                 message=f"Worker executable '{self.executable}' not found in PATH",
                 terminal_reason="launch_failed",
                 timeout_seconds=self.timeout_seconds,
             )
-        return run_bounded_worker_process(
-            self.build_command(instruction, working_dir), working_dir, self.timeout_seconds
-        )
+        with tempfile.TemporaryDirectory(
+            prefix="advancore-codex-planner-", dir="/tmp"
+        ) as scratch_name:
+            command = self.build_command(instruction, working_dir)
+            command[0] = resolved_executable
+            return run_bounded_worker_process(
+                command,
+                working_dir,
+                self.timeout_seconds,
+                environment=_codex_environment(
+                    Path(scratch_name).resolve(strict=True)
+                ),
+            )
 
 
 def validate_planner_policy(primary: str, fallback: str | None = None) -> None:

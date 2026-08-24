@@ -10,7 +10,10 @@ from advancore.services.knowledge_service import KnowledgeService
 
 
 class FakeStreamlit:
-    def __init__(self, *, submitted=False, title="", content="", selected_id=None):
+    def __init__(
+        self, *, submitted=False, title="", content="", selected_id=None,
+        submissions=None, inputs=None, confirmed=False, session_state=None,
+    ):
         self.submitted = submitted
         self.title = title
         self.content = content
@@ -18,6 +21,13 @@ class FakeStreamlit:
         self.messages = []
         self.spinner_labels = []
         self.widget_labels = []
+        self.submissions = submissions or {}
+        self.inputs = inputs or {}
+        self.confirmed = confirmed
+        self.session_state = session_state if session_state is not None else {}
+        self.rerun_calls = 0
+        self._form_key = None
+        self.selectbox_labels = []
 
     def _record(self, kind, value): self.messages.append((kind, str(value)))
     def header(self, value): self._record("header", value)
@@ -27,24 +37,47 @@ class FakeStreamlit:
     def warning(self, value): self._record("warning", value)
     def error(self, value): self._record("error", value)
     def success(self, value): self._record("success", value)
-    def form(self, _key): return nullcontext()
-    def text_input(self, label, **_kwargs):
+    @contextmanager
+    def form(self, key):
+        previous = self._form_key
+        self._form_key = key
+        try:
+            yield
+        finally:
+            self._form_key = previous
+    def text_input(self, label, **kwargs):
         self.widget_labels.append(label)
-        return self.title
+        if label in self.inputs:
+            return self.inputs[label]
+        if label == "Title":
+            return self.title
+        return kwargs.get("value", "")
     def text_area(self, label, **kwargs):
         self.widget_labels.append(label)
         if kwargs.get("disabled"):
             self._record("detail_content", kwargs.get("value", ""))
             return kwargs.get("value", "")
-        return self.content
+        if label in self.inputs:
+            return self.inputs[label]
+        if label == "Content":
+            return self.content
+        return kwargs.get("value", "")
     def form_submit_button(self, label, **_kwargs):
         self.widget_labels.append(label)
-        return self.submitted
+        if self._form_key in self.submissions:
+            return self.submissions[self._form_key]
+        return self.submitted if self._form_key == "create_knowledge_draft" else False
+    def checkbox(self, label, **_kwargs):
+        self.widget_labels.append(label)
+        return self.confirmed
     def spinner(self, label):
         self.spinner_labels.append(label)
         return nullcontext()
-    def selectbox(self, _label, options, **_kwargs):
+    def selectbox(self, _label, options, **kwargs):
+        formatter = kwargs.get("format_func", str)
+        self.selectbox_labels = [formatter(option) for option in options]
         return self.selected_id if self.selected_id is not None else options[0]
+    def rerun(self): self.rerun_calls += 1
     def text(self): return "\n".join(message for _, message in self.messages)
 
 
@@ -52,6 +85,8 @@ class FakeRepository:
     def __init__(self, items=None):
         self.items = list(items or [])
         self.add_calls = 0
+        self.save_calls = 0
+        self.save_error = None
 
     def add(self, item):
         self.add_calls += 1
@@ -62,6 +97,11 @@ class FakeRepository:
     def list(self): return list(self.items)
     def get_by_id(self, item_id):
         return next((item for item in self.items if item.id == item_id), None)
+    def save(self, item):
+        self.save_calls += 1
+        if self.save_error:
+            raise self.save_error
+        return item
 
 
 def _item(item_id, title="Title", content="Content", status="draft"):
@@ -127,6 +167,8 @@ def test_populated_list_and_selected_read_only_detail(monkeypatch):
     assert "Status: draft" in fake_st.text()
     assert "Two" in fake_st.text()
     assert "Created: Not available" in fake_st.text()
+    assert "Knowledge title" in fake_st.widget_labels
+    assert "Archive knowledge draft" in fake_st.widget_labels
 
 
 def test_missing_selected_record_is_safe(monkeypatch):
@@ -157,3 +199,114 @@ def test_unexpected_failures_are_generic_and_do_not_leak(monkeypatch, operation)
     for secret in ("password", "SQL", "traceback"):
         assert secret not in fake_st.text()
     assert not any(kind == "success" for kind, _ in fake_st.messages)
+
+
+def test_successful_edit_reruns_and_refreshed_screen_shows_saved_values(monkeypatch):
+    repo = FakeRepository([_item(1, "Original", "Old")])
+    state = {
+        "knowledge_edit_title_1": "  Updated  ",
+        "knowledge_edit_content_1": "  New content  ",
+        "knowledge_content_1": "Old",
+    }
+    submitted = FakeStreamlit(
+        selected_id=1,
+        submissions={"edit_knowledge_1": True},
+        inputs={
+            "Knowledge title": "  Updated  ",
+            "Knowledge content": "  New content  ",
+        },
+        session_state=state,
+    )
+    _install(monkeypatch, submitted, KnowledgeService(repo))
+    knowledge_hub.render()
+    assert repo.save_calls == 1
+    assert (repo.items[0].title, repo.items[0].content) == (
+        "Updated", "New content"
+    )
+    assert submitted.rerun_calls == 1
+    assert state[knowledge_hub._KNOWLEDGE_FLASH_KEY] == (
+        "Knowledge draft updated successfully."
+    )
+    assert "knowledge_edit_title_1" not in state
+    assert "knowledge_edit_content_1" not in state
+    assert "knowledge_content_1" not in state
+
+    refreshed = FakeStreamlit(selected_id=1, session_state=state)
+    _install(monkeypatch, refreshed, KnowledgeService(repo))
+    knowledge_hub.render()
+    assert "Knowledge draft updated successfully." in refreshed.text()
+    assert "Title: Updated" in refreshed.text()
+    assert "New content" in refreshed.text()
+    assert refreshed.rerun_calls == 0
+
+
+def test_archive_requires_confirmation_then_refreshes_read_only_state(monkeypatch):
+    repo = FakeRepository([_item(1, "Original", "Old")])
+    unconfirmed = FakeStreamlit(
+        selected_id=1, submissions={"archive_knowledge_1": True}
+    )
+    _install(monkeypatch, unconfirmed, KnowledgeService(repo))
+    knowledge_hub.render()
+    assert repo.save_calls == 0
+    assert "Confirm archiving" in unconfirmed.text()
+
+    state = {}
+    confirmed = FakeStreamlit(
+        selected_id=1,
+        submissions={"archive_knowledge_1": True},
+        confirmed=True,
+        session_state=state,
+    )
+    _install(monkeypatch, confirmed, KnowledgeService(repo))
+    knowledge_hub.render()
+    assert repo.items[0].status == "archived"
+    assert confirmed.rerun_calls == 1
+
+    refreshed = FakeStreamlit(selected_id=1, session_state=state)
+    _install(monkeypatch, refreshed, KnowledgeService(repo))
+    knowledge_hub.render()
+    assert "Knowledge draft archived successfully." in refreshed.text()
+    assert "Archived knowledge draft — read-only." in refreshed.text()
+    assert "Original (archived)" in refreshed.selectbox_labels
+    assert "Knowledge title" not in refreshed.widget_labels
+
+
+def test_unknown_status_and_unknown_flash_are_never_treated_as_trusted(monkeypatch):
+    state = {knowledge_hub._KNOWLEDGE_FLASH_KEY: "untrusted content"}
+    fake_st = FakeStreamlit(selected_id=1, session_state=state)
+    repo = FakeRepository([_item(1, status="unexpected")])
+    _install(monkeypatch, fake_st, KnowledgeService(repo))
+    knowledge_hub.render()
+    assert "unsupported status" in fake_st.text()
+    assert "untrusted content" not in fake_st.text()
+    assert "Knowledge title" not in fake_st.widget_labels
+
+
+@pytest.mark.parametrize("operation", ["edit", "archive"])
+def test_lifecycle_failures_are_generic_and_do_not_rerun(monkeypatch, operation):
+    class FailingService:
+        def list_items(self): return [_item(1)]
+        def get_item(self, _item_id): return _item(1)
+        def edit_draft(self, *_args):
+            raise RuntimeError("password SQL token traceback")
+        def archive_draft(self, *_args):
+            raise RuntimeError("password SQL token traceback")
+
+    fake_st = FakeStreamlit(
+        selected_id=1,
+        submissions={f"{operation}_knowledge_1": True},
+        inputs={"Knowledge title": "Title", "Knowledge content": "Content"},
+        confirmed=True,
+    )
+    _install(monkeypatch, fake_st, FailingService())
+    knowledge_hub.render()
+    expected = (
+        "Knowledge draft update failed"
+        if operation == "edit"
+        else "Knowledge draft archive failed"
+    )
+    assert expected in fake_st.text()
+    for secret in ("password", "SQL", "token", "traceback"):
+        assert secret not in fake_st.text()
+    assert fake_st.rerun_calls == 0
+    assert not fake_st.session_state
