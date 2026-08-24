@@ -42,6 +42,8 @@ manual editor handoff for the owner's return.
 - Added a stable, provider-neutral notification projection over TASK-027.
 - Added deterministic deduplication identifiers and bounded content.
 - Excluded all commands, evidence references and raw/sensitive fields.
+- Repaired independent review by whitelisting task/run identifiers and replacing
+  all inbox-supplied titles/reasons with controlled notification templates.
 
 ### Database changes
 
@@ -49,7 +51,7 @@ None.
 
 ### Tests executed and results
 
-- Focused notification and validated-inbox suites: 29 passed.
+- Focused notification and validated-inbox suites after repair: 30 passed.
 - Python compile and `git diff --check`: passed.
 
 ### Decisions required

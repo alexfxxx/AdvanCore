@@ -68,3 +68,34 @@ def test_empty_inbox_produces_empty_feed():
     feed = build_owner_notification_feed(OrchestrationInbox(INBOX_SCHEMA_VERSION, ()))
     assert feed.notifications == ()
 
+
+def test_projected_fields_never_forward_untrusted_inbox_text():
+    sensitive = OrchestrationInboxEntry(
+        run_id="/Users/alex/secret-token",
+        task_id="ghp_secret_value",
+        task_title="password=hunter2",
+        phase="INVALID",
+        status="INVALID_EVIDENCE",
+        classification="stale-or-invalid-evidence",
+        reason="DATABASE_URL=postgres://password@private-host",
+        evidence_references=("/private/path",),
+        owner_decision_required=False,
+        command="send token",
+    )
+    serialized = serialize_owner_notification_feed(
+        build_owner_notification_feed(OrchestrationInbox(INBOX_SCHEMA_VERSION, (sensitive,)))
+    )
+    for prohibited in (
+        "/Users/alex",
+        "ghp_",
+        "hunter2",
+        "DATABASE_URL",
+        "private-host",
+        "/private/path",
+        "send token",
+    ):
+        assert prohibited not in serialized
+    payload = json.loads(serialized)["notifications"][0]
+    assert payload["task_id"] is None
+    assert payload["run_id"].startswith("ORCH-redacted-")
+    assert payload["message"].startswith("Automation evidence")
