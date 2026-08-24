@@ -22,11 +22,19 @@ Authoritative artifacts use one OS-account-wide location shared by every AdvanCo
 
 Neither artifact may contain credentials, tokens, browser content, provider responses, prompts, transcripts, environment dumps, customer data, or arbitrary command output.
 
-On the approved macOS execution path, `agent_runner` launches Kimi and all of its descendants inside an OS sandbox that denies writes to the complete controller-state root. Path placement and file modes are not treated as sufficient isolation. If the approved isolation executable is unavailable, Kimi fails closed before reservation or launch; an approved Codex fallback may still be considered through the unchanged fallback gates.
+On the approved macOS execution path, `agent_runner` launches Kimi and all of its descendants inside an OS sandbox that denies writes to the complete controller-state root. Path placement and file modes are not treated as sufficient isolation. Before refreshing or reserving usage, `agent_runner` runs a fixed harmless sandbox capability probe. If the profile cannot actually start—for example, because Codex Desktop is already inside a sandbox—Kimi fails closed before reservation or launch; an approved Codex fallback may still be considered through the unchanged fallback gates.
 
 ## Local controller responsibility
 
-The installed Kimi CLI does not currently provide a confirmed stable machine-readable quota endpoint. Codex desktop, another approved local controller, or a future reviewed provider adapter must therefore refresh the bounded snapshot from an authenticated provider reading. This local action supplies evidence only; it does not gain worker, controller, owner, publication, billing, or deployment authority.
+The installed Kimi CLI does not currently provide a confirmed stable machine-readable quota command. Codex desktop, another approved local controller, or a future reviewed provider adapter supplies a small trusted probe that obtains the authenticated reading without returning credentials to AdvanCore. This local capability supplies evidence only; it does not gain worker, controller, owner, publication, billing, or deployment authority.
+
+The fixed probe path is `~/Library/Application Support/AdvanCore/agent_runner/probes/kimi-usage` on macOS (or the corresponding `~/.local/state/advancore/agent_runner/probes/kimi-usage` path on other supported systems). It must be an owner-executable regular file owned by the current OS user and must not be group- or world-writable. It receives no arguments and runs with a sanitized environment. Its complete standard output must be one JSON object with exactly these fields:
+
+```json
+{"schema_version":1,"provider":"kimi","weekly_used_percent":12,"checked_at":"2026-08-28T03:00:00Z","reset_at":"2026-09-04T02:46:00Z"}
+```
+
+The reviewed probe owns interaction with the authenticated Kimi client. It must not emit tokens, provider response bodies, browser contents or diagnostics. When evidence is missing, stale or reset-expired, `agent_runner` invokes this probe automatically before Kimi preflight. Missing, unsafe, failed or invalid probe output keeps Kimi paused and allows only the existing approved fallback evaluation.
 
 Record a fresh reading from the repository root:
 
@@ -50,8 +58,8 @@ The recording command rejects stale or inconsistent evidence. It never logs into
 
 ## Operating sequence
 
-1. An approved local controller obtains the current provider reading.
-2. It records only the bounded fields above.
+1. When the existing reading is unavailable or stale, `agent_runner` asks the fixed approved controller probe for a fresh reading.
+2. The probe returns only the bounded fields above; AdvanCore strictly validates and records them.
 3. The Dashboard shows used percentage, policy limit, local runtime, reset/freshness, and allowed or paused state.
 4. Immediately before a Kimi launch, the adapter independently reloads and validates the evidence.
 5. If allowed, `agent_runner` exclusively locks the machine-wide ledger and reserves a timeout bounded by both remaining weekly runtime and time remaining before reset. A concurrent launch from any checkout fails closed instead of sharing the same allowance. The absolute reset deadline is checked again immediately before process creation so pre-launch verification cannot consume the guard interval and accidentally start Kimi after reset.

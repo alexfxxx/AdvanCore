@@ -47,7 +47,8 @@ def _render_worker_usage() -> None:
     else:
         st.warning(
             "Kimi usage status is unavailable or stale. Kimi launches are paused "
-            "until an approved local controller refreshes the reading."
+            "unless the approved local controller probe can refresh the reading; "
+            "an approved fallback may be used."
         )
     if summary.checked_at and summary.reset_at:
         checked = summary.checked_at.strftime("%Y-%m-%d %H:%M UTC")

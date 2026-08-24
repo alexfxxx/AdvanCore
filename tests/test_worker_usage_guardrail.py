@@ -1,6 +1,8 @@
 """Worker-boundary tests for the Kimi weekly usage guardrail."""
 
 from datetime import datetime, timedelta, timezone
+import json
+import subprocess
 from unittest.mock import patch
 
 from advancore.agent_runner.auto_pipeline import (
@@ -37,6 +39,8 @@ def test_kimi_blocks_before_process_launch_at_policy_limit(tmp_path):
         "advancore.services.worker_usage_service._default_usage_dir",
         return_value=service.usage_dir,
     ), patch("advancore.agent_runner.worker.shutil.which", return_value="/usr/bin/kimi"), patch(
+        "advancore.agent_runner.worker._kimi_isolation_available", return_value=True
+    ), patch(
         "advancore.agent_runner.worker.run_bounded_worker_process"
     ) as bounded:
         result = adapter.run("instruction", tmp_path)
@@ -53,11 +57,14 @@ def test_kimi_swarm_blocks_when_usage_evidence_is_missing(tmp_path):
         "advancore.services.worker_usage_service._default_usage_dir",
         return_value=usage_dir,
     ), patch("advancore.agent_runner.worker.shutil.which", return_value="/usr/bin/kimi"), patch(
+        "advancore.agent_runner.worker._kimi_isolation_available", return_value=True
+    ), patch(
         "advancore.agent_runner.worker.run_bounded_worker_process"
     ) as bounded:
         result = adapter.run("instruction", tmp_path)
     assert result.success is False
     assert "quota/capacity paused" in result.message
+    assert "automatic provider usage refresh is unavailable" in result.message
     bounded.assert_not_called()
 
 
@@ -73,6 +80,8 @@ def test_available_kimi_run_uses_remaining_timeout_and_records_runtime(tmp_path)
         "advancore.services.worker_usage_service._default_usage_dir",
         return_value=service.usage_dir,
     ), patch("advancore.agent_runner.worker.shutil.which", return_value="/usr/bin/kimi"), patch(
+        "advancore.agent_runner.worker._kimi_isolation_available", return_value=True
+    ), patch(
         "advancore.agent_runner.worker.run_bounded_worker_process", return_value=expected
     ) as bounded:
         result = adapter.run("instruction", tmp_path)
@@ -81,6 +90,44 @@ def test_available_kimi_run_uses_remaining_timeout_and_records_runtime(tmp_path)
     assert bounded.call_args.args[0][0] == "/usr/bin/sandbox-exec"
     assert str(service.protected_state_root) in bounded.call_args.args[0][2]
     assert service.get_summary().runtime_seconds == 3501
+
+
+def test_kimi_automatically_refreshes_missing_usage_then_runs_as_primary(tmp_path):
+    now = datetime.now(timezone.utc)
+    usage_dir = _usage_dir(tmp_path)
+    service = WorkerUsageService(tmp_path, usage_dir=usage_dir)
+    probe = service.controller_probe_path("kimi")
+    probe.parent.mkdir(parents=True)
+    payload = json.dumps(
+        {
+            "schema_version": 1,
+            "provider": "kimi",
+            "weekly_used_percent": 5,
+            "checked_at": now.isoformat(),
+            "reset_at": (now + timedelta(days=4)).isoformat(),
+        }
+    )
+    probe.write_text(f"#!/bin/sh\nprintf '%s\\n' '{payload}'\n", encoding="utf-8")
+    probe.chmod(0o700)
+    adapter = KimiWorkerAdapter()
+    expected = WorkerResult(True, message="ok")
+
+    with patch(
+        "advancore.services.worker_usage_service._default_usage_dir",
+        return_value=usage_dir,
+    ), patch("advancore.agent_runner.worker.shutil.which", return_value="/usr/bin/kimi"), patch(
+        "advancore.agent_runner.worker._kimi_isolation_available", return_value=True
+    ), patch(
+        "advancore.agent_runner.worker.run_bounded_worker_process", return_value=expected
+    ) as bounded:
+        result = adapter.run("instruction", tmp_path)
+
+    assert result is expected
+    bounded.assert_called_once()
+    summary = service.get_summary()
+    assert summary.state.value == "AVAILABLE"
+    assert summary.weekly_used_percent == 5
+    assert summary.source == "kimi-cli"
 
 
 def test_kimi_blocks_before_reservation_without_os_isolation(tmp_path):
@@ -98,6 +145,23 @@ def test_kimi_blocks_before_reservation_without_os_isolation(tmp_path):
     assert "OS isolation is unavailable" in result.message
     bounded.assert_not_called()
     assert service.get_summary().runtime_seconds == 0
+
+
+def test_kimi_isolation_probe_requires_successful_sandbox_start():
+    from advancore.agent_runner.worker import _kimi_isolation_available
+
+    with patch("advancore.agent_runner.worker.Path.is_file", return_value=True), patch(
+        "advancore.agent_runner.worker.subprocess.run",
+        return_value=subprocess.CompletedProcess([], 71),
+    ) as run:
+        assert _kimi_isolation_available() is False
+    assert run.call_args.args[0][-1] == "/usr/bin/true"
+
+    with patch("advancore.agent_runner.worker.Path.is_file", return_value=True), patch(
+        "advancore.agent_runner.worker.subprocess.run",
+        return_value=subprocess.CompletedProcess([], 0),
+    ):
+        assert _kimi_isolation_available() is True
 
 
 def test_reset_deadline_is_rechecked_immediately_before_process_launch(tmp_path):

@@ -50,11 +50,31 @@ WORKER_RECOVERY_ACTION = (
 )
 KIMI_EXECUTABLE = "kimi"
 KIMI_SANDBOX_EXECUTABLE = Path("/usr/bin/sandbox-exec")
+KIMI_SANDBOX_PROBE_TIMEOUT_SECONDS = 5
+KIMI_SANDBOX_PROBE_PROFILE = "(version 1) (allow default)"
 
 
 def _kimi_isolation_available() -> bool:
-    """Return whether the approved local Kimi OS confinement is available."""
-    return KIMI_SANDBOX_EXECUTABLE.is_file()
+    """Prove that the approved local Kimi OS confinement can actually start."""
+    if not KIMI_SANDBOX_EXECUTABLE.is_file():
+        return False
+    try:
+        completed = subprocess.run(
+            [
+                str(KIMI_SANDBOX_EXECUTABLE),
+                "-p",
+                KIMI_SANDBOX_PROBE_PROFILE,
+                "/usr/bin/true",
+            ],
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            check=False,
+            timeout=KIMI_SANDBOX_PROBE_TIMEOUT_SECONDS,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return False
+    return completed.returncode == 0
 
 
 def _sandbox_literal(path: Path) -> str:
@@ -96,11 +116,15 @@ def _kimi_usage_preflight(
         )
     service = WorkerUsageService(working_dir)
     try:
+        service.auto_refresh_if_needed("kimi")
         preflight = service.preflight("kimi", timeout_seconds)
     except UsageBudgetError as exc:
+        message = str(exc)
+        if not message.startswith("provider quota/capacity paused:"):
+            message = f"provider quota/capacity paused: {message}"
         return service, None, WorkerResult(
             success=False,
-            message=str(exc),
+            message=message,
             terminal_reason="quota_or_capacity",
             timeout_seconds=timeout_seconds,
         )

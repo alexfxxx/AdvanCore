@@ -15,6 +15,8 @@ import json
 import math
 import os
 import pwd
+import stat
+import subprocess
 import sys
 import tempfile
 import uuid
@@ -34,6 +36,9 @@ USAGE_SNAPSHOT_MAX_AGE_SECONDS = 15 * 60
 MIN_NEW_PERIOD_RESET_ADVANCE = timedelta(days=1)
 RESET_BOUNDARY_GUARD_SECONDS = 5
 MAX_EVIDENCE_BYTES = 16 * 1024
+USAGE_PROBE_SCHEMA_VERSION = 1
+USAGE_PROBE_TIMEOUT_SECONDS = 10
+MAX_USAGE_PROBE_OUTPUT_BYTES = 16 * 1024
 
 
 class UsageBudgetError(ValueError):
@@ -243,6 +248,10 @@ class WorkerUsageService:
     def lock_path(self, provider: str) -> Path:
         return self.usage_dir / f"{_validate_provider(provider)}.lock"
 
+    def controller_probe_path(self, provider: str) -> Path:
+        """Return the fixed controller-owned executable used for usage refresh."""
+        return self.protected_state_root / "probes" / f"{_validate_provider(provider)}-usage"
+
     @property
     def protected_state_root(self) -> Path:
         """Directory that an implementation worker must be denied write access to."""
@@ -253,9 +262,104 @@ class WorkerUsageService:
             self.usage_dir.mkdir(parents=True, mode=0o700, exist_ok=True)
             if self.usage_dir.is_symlink() or not self.usage_dir.is_dir():
                 raise UsageBudgetError("usage evidence location is invalid")
+            if (
+                self.protected_state_root.is_symlink()
+                or not self.protected_state_root.is_dir()
+            ):
+                raise UsageBudgetError("usage evidence location is invalid")
+            os.chmod(self.protected_state_root, 0o700)
             os.chmod(self.usage_dir, 0o700)
         except OSError as exc:
             raise UsageBudgetError("usage evidence location is unavailable") from exc
+
+    def _validated_controller_probe(self, provider: str) -> Path:
+        """Validate the fixed probe without accepting worker-controlled commands."""
+        path = self.controller_probe_path(provider)
+        try:
+            metadata = path.lstat()
+        except OSError as exc:
+            raise UsageBudgetError(
+                "automatic provider usage refresh is unavailable"
+            ) from exc
+        if (
+            stat.S_ISLNK(metadata.st_mode)
+            or not stat.S_ISREG(metadata.st_mode)
+            or metadata.st_uid != os.getuid()
+            or metadata.st_mode & (stat.S_IWGRP | stat.S_IWOTH)
+            or not metadata.st_mode & stat.S_IXUSR
+        ):
+            raise UsageBudgetError("automatic provider usage refresh is unsafe")
+        return path
+
+    def refresh_from_controller_probe(self, provider: str = "kimi") -> UsageSnapshot:
+        """Refresh bounded evidence through a fixed, trusted local probe.
+
+        The probe owns provider authentication and may emit only the documented
+        bounded JSON fields. AdvanCore neither receives nor stores credentials.
+        """
+        provider = _validate_provider(provider)
+        self._ensure_usage_dir()
+        probe = self._validated_controller_probe(provider)
+        account_home = pwd.getpwuid(os.getuid()).pw_dir
+        environment = {
+            "HOME": account_home,
+            "PATH": "/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin",
+            "LANG": "C.UTF-8",
+        }
+        try:
+            completed = subprocess.run(
+                [str(probe)],
+                cwd=self.protected_state_root,
+                env=environment,
+                capture_output=True,
+                text=True,
+                check=False,
+                timeout=USAGE_PROBE_TIMEOUT_SECONDS,
+            )
+        except (OSError, subprocess.SubprocessError) as exc:
+            raise UsageBudgetError(
+                "automatic provider usage refresh failed"
+            ) from exc
+        if (
+            completed.returncode != 0
+            or len(completed.stdout.encode("utf-8")) > MAX_USAGE_PROBE_OUTPUT_BYTES
+        ):
+            raise UsageBudgetError("automatic provider usage refresh failed")
+        try:
+            payload = json.loads(completed.stdout)
+        except json.JSONDecodeError as exc:
+            raise UsageBudgetError(
+                "automatic provider usage refresh is invalid"
+            ) from exc
+        expected = {
+            "schema_version",
+            "provider",
+            "weekly_used_percent",
+            "checked_at",
+            "reset_at",
+        }
+        if not isinstance(payload, dict) or set(payload) != expected:
+            raise UsageBudgetError("automatic provider usage refresh is invalid")
+        if payload["schema_version"] != USAGE_PROBE_SCHEMA_VERSION:
+            raise UsageBudgetError("automatic provider usage refresh is invalid")
+        if payload["provider"] != provider:
+            raise UsageBudgetError("automatic provider usage refresh is invalid")
+        return self.record_snapshot(
+            provider,
+            payload["weekly_used_percent"],
+            _timestamp(payload["checked_at"], "checked_at"),
+            _timestamp(payload["reset_at"], "reset_at"),
+            "kimi-cli",
+        )
+
+    def auto_refresh_if_needed(self, provider: str = "kimi") -> UsageSummary:
+        """Refresh stale or unavailable evidence, then return current status."""
+        provider = _validate_provider(provider)
+        summary = self.get_summary(provider)
+        if summary.state != UsageState.UNAVAILABLE:
+            return summary
+        self.refresh_from_controller_probe(provider)
+        return self.get_summary(provider)
 
     def _acquire_lock(self, provider: str) -> TextIO:
         self._ensure_usage_dir()

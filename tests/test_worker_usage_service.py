@@ -34,6 +34,15 @@ def _record(service, used=10.0, checked=NOW, reset=RESET):
     )
 
 
+def _write_probe(service, payload, mode=0o700):
+    path = service.controller_probe_path("kimi")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    body = json.dumps(payload, sort_keys=True)
+    path.write_text(f"#!/bin/sh\nprintf '%s\\n' '{body}'\n", encoding="utf-8")
+    path.chmod(mode)
+    return path
+
+
 def _charge(service, seconds):
     preflight = service.preflight("kimi", math.ceil(seconds))
     return service.record_runtime("kimi", seconds, preflight)
@@ -55,6 +64,58 @@ def test_valid_snapshot_is_available_and_outside_worker_workspace(tmp_path):
     }
     for prohibited in ("token", "password", "prompt", "transcript"):
         assert prohibited not in service.snapshot_path("kimi").read_text().lower()
+
+
+def test_unavailable_snapshot_is_automatically_refreshed_by_controller_probe(tmp_path):
+    service = _service(tmp_path)
+    _write_probe(
+        service,
+        {
+            "schema_version": 1,
+            "provider": "kimi",
+            "weekly_used_percent": 12,
+            "checked_at": NOW.isoformat(),
+            "reset_at": RESET.isoformat(),
+        },
+    )
+
+    summary = service.auto_refresh_if_needed("kimi")
+
+    assert summary.state == UsageState.AVAILABLE
+    assert summary.weekly_used_percent == 12
+    assert summary.source == "kimi-cli"
+    evidence = service.snapshot_path("kimi").read_text(encoding="utf-8").lower()
+    for prohibited in ("token", "password", "prompt", "transcript"):
+        assert prohibited not in evidence
+
+
+@pytest.mark.parametrize(
+    ("payload", "mode", "message"),
+    [
+        ({"unexpected": True}, 0o700, "refresh is invalid"),
+        (
+            {
+                "schema_version": 1,
+                "provider": "kimi",
+                "weekly_used_percent": 12,
+                "checked_at": NOW.isoformat(),
+                "reset_at": RESET.isoformat(),
+            },
+            0o722,
+            "refresh is unsafe",
+        ),
+    ],
+)
+def test_automatic_refresh_rejects_invalid_or_worker_writable_probe(
+    tmp_path, payload, mode, message
+):
+    service = _service(tmp_path)
+    _write_probe(service, payload, mode=mode)
+
+    with pytest.raises(UsageBudgetError, match=message):
+        service.auto_refresh_if_needed("kimi")
+
+    assert service.get_summary().state == UsageState.UNAVAILABLE
 
 
 def test_usage_directory_inside_worker_workspace_is_rejected(tmp_path):

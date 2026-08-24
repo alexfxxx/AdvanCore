@@ -15,7 +15,7 @@ The owner wants AdvanCore development automation to preserve provider capacity f
 - The owner set a Kimi policy limit of 20% of the provider-reported weekly allowance.
 - The owner set an additional local Kimi automation runtime limit of one hour per week.
 - Kimi's current provider-reported weekly usage is 44%, with a reset expected on 28 August 2026.
-- The installed Kimi CLI exposes the usage reading interactively rather than through a stable machine-readable API.
+- The installed Kimi CLI exposes the usage reading interactively rather than through a confirmed stable machine-readable command.
 - `agent_runner` remains the authority boundary and already supports explicitly approved worker fallback.
 - `.agent_runner/` is local and Git-ignored, but worker usage authority must not be stored inside that worker-writable tree.
 
@@ -28,12 +28,13 @@ The owner wants AdvanCore development automation to preserve provider capacity f
 - Return a quota/capacity-classifiable failure so an already configured approved fallback may be considered through the existing integrity checks.
 - Show Kimi reported usage, policy cap, runtime, reset, freshness and allowed/paused state on the Dashboard.
 - Provide a small local snapshot-recording command in the usage service module for an approved controller/operator to refresh the provider reading.
+- Automatically request a fresh bounded reading from a fixed controller-owned probe when evidence is missing, stale or reset-expired; validate its executable and exact JSON contract before accepting it.
 - Document which capability is permanent AdvanCore policy and which local controller action refreshes the authenticated provider reading.
 - Add deterministic service, worker and Dashboard tests.
 
 ## Explicitly out of scope
 
-- Scraping Kimi websites, storing Kimi credentials, automating Kimi login, or claiming a stable Kimi quota API exists.
+- Scraping Kimi websites, storing Kimi credentials, automating Kimi login, accepting worker-selected refresh commands, or claiming a stable Kimi quota command exists.
 - Automatically purchasing credits, changing membership, bypassing provider limits, or inferring exact remaining tokens from local session logs.
 - Changing Codex limits, owner/controller authority, fallback eligibility, repair/rework budgets, publication policy, or GitHub/main/deployment behavior.
 - Allowing a worker to approve, refresh, or lower its own usage evidence during a run.
@@ -66,6 +67,7 @@ None. Usage status and runtime accounting are local, bounded, Git-ignored JSON a
 - Preserve a stable provider-period identity across small reset-time adjustments; provider usage and charged runtime must not decrease within that period.
 - Fingerprint evidence across worker execution and quarantine any unexpected alteration.
 - Require an approved OS write-isolation boundary around controller state for Kimi and all descendants; fail closed before reservation if isolation is unavailable.
+- Prove the OS isolation profile can actually start before refreshing or reserving usage; executable presence alone is insufficient.
 - Share one provider ledger and lock across all local AdvanCore clones/worktrees.
 - Clamp launches to a guarded pre-reset deadline and carry any unexpectedly cross-reset charge into the next verified provider period.
 - Check usage before process launch; a blocked launch must not run Kimi or mutate the repository.
@@ -82,6 +84,7 @@ None. Usage status and runtime accounting are local, bounded, Git-ignored JSON a
 - Existing approved fallback may classify the guardrail as quota/capacity but still requires unchanged-repository integrity.
 - Dashboard displays the current Kimi usage policy and clearly shows allowed or paused state.
 - Local snapshot recording validates typed values and writes no secret material.
+- Missing or stale evidence is automatically refreshed through a fixed, owner-only controller probe; invalid, missing or unsafe probes fail closed and permit only the existing approved fallback path.
 - All relevant and full tests pass with exact changed paths inside scope.
 
 ## Test requirements
@@ -113,11 +116,13 @@ None. On 23 August 2026 the owner explicitly selected a 20% Kimi weekly allowanc
 - Preserved the existing provider-failure classification and repository-integrity gates for explicitly configured approved fallback.
 - Added a read-only Dashboard budget section showing Kimi reported usage, policy cap, local runtime, freshness/reset, and allowed/paused/unavailable state.
 - Added a bounded local command to record/show a fresh provider reading without credentials or provider scraping.
+- Added automatic missing/stale-reading refresh through a fixed owner-only controller probe with a strict bounded JSON contract and sanitized environment.
 - Added an operating runbook separating permanent AdvanCore policy from local authenticated reading refresh by Codex desktop or another approved controller.
 - Preserved fail-closed behavior during the schema transition: the legacy 44% reading is not trusted or silently promoted into the new controller-owned schema, so Kimi remains unavailable until an approved controller records a fresh reading.
 - Repaired independent-review findings by adding a stable period identifier, non-decreasing same-period evidence, exclusive launch locking, pre-launch timeout reservation, crash-safe charging, evidence fingerprinting, and fail-closed quarantine.
 - Repaired the second independent-review findings by moving to one OS-account-wide ledger, placing Kimi and its descendants under macOS write denial for controller state, failing closed without isolation, bounding launches before reset, and carrying delayed cross-reset charges forward.
 - Rechecked the absolute provider-reset deadline immediately before process creation so slow repository verification cannot start Kimi after the fresh-reading boundary.
+- Replaced the sandbox executable-presence check with a real pre-reservation capability probe, so nested-sandbox denial is classified before Kimi is invoked and the approved fallback can run.
 
 ### Files changed
 
@@ -138,8 +143,8 @@ None.
 
 ### Tests and results
 
-- Focused usage, worker, Dashboard, planner, fallback, orchestration and timeout verification: 232 passed.
-- Full project suite with the documented local PostgreSQL configuration: 781 passed.
+- Third-repair focused usage, worker, Dashboard, fallback and task verification: 99 passed.
+- Full project suite with the documented local PostgreSQL configuration: 787 passed.
 - Python compile/import and `git diff --check`: passed.
 - Streamlit Dashboard AppTest smoke: zero exceptions; rendered Kimi usage unavailable, policy limit 20%, and the fail-closed refresh warning expected during secure-schema transition.
 - Exact scope, unstaged/staged/new-file and controller-state checks: passed; authoritative usage evidence is outside Git and shared across checkouts.
@@ -151,7 +156,7 @@ None.
 
 ### Risks / unresolved issues
 
-- Kimi currently has no confirmed stable machine-readable quota API, so an approved local controller must refresh the bounded usage snapshot from an authenticated reading.
+- Kimi currently has no confirmed stable machine-readable quota command. A one-time reviewed local probe must bridge the authenticated Kimi client to AdvanCore's bounded JSON contract; thereafter `agent_runner` refreshes missing/stale readings automatically.
 - The runtime budget counts local process wall time rather than vendor tokens; the provider percentage remains the primary allowance evidence.
 - Controller evidence is outside every worker repository, shared across local checkouts, lock-serialized, fingerprint-checked, and protected from Kimi writes by the approved macOS sandbox. A future multi-user or remotely hosted worker deployment still requires a reviewed platform-specific isolation or authenticated service boundary.
 - The current approved Kimi isolation adapter is macOS-specific. On a platform without an approved equivalent, Kimi pauses before launch and an already approved fallback may be considered.
@@ -163,4 +168,4 @@ None for implementation. Independent controller review is still required before 
 
 ### Recommended next step
 
-Commit and publish the repaired TASK-044 feature branch, then independently verify the three P1 repairs before merge; keep Kimi paused until a fresh authenticated reading is recorded.
+Commit and publish the repaired TASK-044 feature branch, then rerun independent Bugbot review before merge. Install and review the local authenticated Kimi usage probe once the official Kimi Code CLI is available; until then the existing approved Codex fallback remains eligible.

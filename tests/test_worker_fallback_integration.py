@@ -120,6 +120,7 @@ def _run_pipeline(
     *,
     primary_mode: str = "availability",
     fallback_mode: str = "success",
+    isolation_available: bool = True,
 ):
     repo, tasks, fake_bin = _repo(tmp_path)
     now = datetime.now(timezone.utc)
@@ -135,6 +136,10 @@ def _run_pipeline(
     monkeypatch.setattr(
         "advancore.services.worker_usage_service._default_usage_dir",
         lambda _repo: usage_dir,
+    )
+    monkeypatch.setattr(
+        "advancore.agent_runner.worker._kimi_isolation_available",
+        lambda: isolation_available,
     )
     # The test runner itself is already sandboxed and macOS forbids applying a
     # nested sandbox profile. Unit coverage verifies the production wrapper;
@@ -175,6 +180,23 @@ def test_clean_availability_failure_uses_codex_once_then_verifies(
     assert result.fallback_attempt.integrity_ok
     assert result.primary_worker == "kimi-swarm"
     assert result.fallback_worker == result.terminal_worker == "codex"
+
+
+def test_nested_sandbox_unavailable_uses_codex_without_launching_or_reserving_kimi(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    repo, result, invocations = _run_pipeline(
+        tmp_path, monkeypatch, isolation_available=False
+    )
+
+    assert invocations == ["codex"]
+    assert result.status == AutoPipelineStatus.READY_FOR_APPROVAL
+    assert result.fallback_attempt
+    assert result.fallback_attempt.failure == ProviderFailure.QUOTA_OR_CAPACITY
+    assert result.fallback_attempt.integrity_ok
+    assert result.terminal_worker == "codex"
+    usage_dir = tmp_path / "controller-state" / "usage"
+    assert WorkerUsageService(repo, usage_dir=usage_dir).get_summary().runtime_seconds == 0
 
 
 @pytest.mark.parametrize("primary_mode", ["unknown", "worktree", "index", "branch", "head", "remote"])
