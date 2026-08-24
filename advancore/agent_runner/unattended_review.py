@@ -51,10 +51,12 @@ class UnattendedReviewResult:
 
 
 def _summary(value: object) -> str:
-    text = " ".join(str(value).split())
-    if not text:
-        return "No bounded summary was supplied."
-    return text[:MAX_SUMMARY_LENGTH]
+    if not isinstance(value, str):
+        raise ValueError("bounded summary must be text")
+    text = " ".join(value.split())
+    if not text or len(text) > MAX_SUMMARY_LENGTH:
+        raise ValueError("bounded summary is invalid")
+    return text
 
 
 def _valid_review(value: object) -> bool:
@@ -66,7 +68,20 @@ def _valid_review(value: object) -> bool:
         and not isinstance(value.findings_count, bool)
         and value.findings_count >= 0
         and bool(value.clean) == (value.findings_count == 0)
-        and (value.clean or value.repairable or not value.repairable)
+        and (not value.clean or not value.repairable)
+        and isinstance(value.summary, str)
+        and bool(value.summary.strip())
+        and len(value.summary) <= MAX_SUMMARY_LENGTH
+    )
+
+
+def _valid_repair(value: object) -> bool:
+    return (
+        isinstance(value, RepairResult)
+        and isinstance(value.success, bool)
+        and isinstance(value.summary, str)
+        and bool(value.summary.strip())
+        and len(value.summary) <= MAX_SUMMARY_LENGTH
     )
 
 
@@ -89,17 +104,20 @@ def run_unattended_review_loop(
     while True:
         try:
             authority.consume(task_id, branch, RoutineAction.INDEPENDENT_REVIEW)
-        except StandingAuthorityError as exc:
+        except StandingAuthorityError:
             return UnattendedReviewResult(
                 UnattendedReviewStatus.AUTHORITY_BLOCKED,
                 reviews,
                 repairs,
                 latest_findings,
-                _summary(exc),
+                "Routine authority is unavailable; owner attention is required.",
                 True,
             )
         try:
             review = reviewer()
+            if not _valid_review(review):
+                raise ValueError("malformed review evidence")
+            review_summary = _summary(review.summary)
         except Exception as exc:
             return UnattendedReviewResult(
                 UnattendedReviewStatus.REVIEW_FAILED,
@@ -110,15 +128,6 @@ def run_unattended_review_loop(
                 True,
             )
         reviews += 1
-        if not _valid_review(review):
-            return UnattendedReviewResult(
-                UnattendedReviewStatus.REVIEW_FAILED,
-                reviews,
-                repairs,
-                latest_findings,
-                "Independent reviewer returned malformed bounded evidence.",
-                True,
-            )
         latest_findings = review.findings_count
         if review.clean:
             return UnattendedReviewResult(
@@ -126,7 +135,7 @@ def run_unattended_review_loop(
                 reviews,
                 repairs,
                 0,
-                _summary(review.summary),
+                review_summary,
                 True,
             )
         if not review.repairable:
@@ -135,7 +144,7 @@ def run_unattended_review_loop(
                 reviews,
                 repairs,
                 review.findings_count,
-                _summary(review.summary),
+                review_summary,
                 True,
             )
         if repairs >= max_repairs:
@@ -144,22 +153,25 @@ def run_unattended_review_loop(
                 reviews,
                 repairs,
                 review.findings_count,
-                _summary(review.summary),
+                review_summary,
                 True,
             )
         try:
             authority.consume(task_id, branch, RoutineAction.BOUNDED_REPAIR)
-        except StandingAuthorityError as exc:
+        except StandingAuthorityError:
             return UnattendedReviewResult(
                 UnattendedReviewStatus.AUTHORITY_BLOCKED,
                 reviews,
                 repairs,
                 review.findings_count,
-                _summary(exc),
+                "Routine authority is unavailable; owner attention is required.",
                 True,
             )
         try:
             repair = repairer(review)
+            if not _valid_repair(repair):
+                raise ValueError("malformed repair evidence")
+            repair_summary = _summary(repair.summary)
         except Exception as exc:
             return UnattendedReviewResult(
                 UnattendedReviewStatus.REPAIR_FAILED,
@@ -170,22 +182,12 @@ def run_unattended_review_loop(
                 True,
             )
         repairs += 1
-        if not isinstance(repair, RepairResult) or not isinstance(repair.success, bool):
-            return UnattendedReviewResult(
-                UnattendedReviewStatus.REPAIR_FAILED,
-                reviews,
-                repairs,
-                review.findings_count,
-                "Repair worker returned malformed bounded evidence.",
-                True,
-            )
         if not repair.success:
             return UnattendedReviewResult(
                 UnattendedReviewStatus.REPAIR_FAILED,
                 reviews,
                 repairs,
                 review.findings_count,
-                _summary(repair.summary),
+                repair_summary,
                 True,
             )
-

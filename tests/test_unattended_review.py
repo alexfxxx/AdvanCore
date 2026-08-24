@@ -116,3 +116,29 @@ def test_malformed_and_failed_tools_stop_safely():
     )
     assert failed.status == UnattendedReviewStatus.REPAIR_FAILED
 
+
+def test_malformed_typed_fields_and_summary_objects_never_escape():
+    malformed_reviews = [
+        IndependentReviewResult(True, 0, True, "clean cannot be repairable"),
+        IndependentReviewResult(True, 0, False, None),
+        IndependentReviewResult(False, 1, True, object()),
+        IndependentReviewResult(False, True, True, "boolean count"),
+    ]
+    for evidence in malformed_reviews:
+        result = run_unattended_review_loop(
+            task_id="TASK-046",
+            branch="feature",
+            authority=Authority(),
+            reviewer=lambda evidence=evidence: evidence,
+            repairer=Mock(),
+        )
+        assert result.status == UnattendedReviewStatus.REVIEW_FAILED
+
+    malformed_repair = run_unattended_review_loop(
+        task_id="TASK-046",
+        branch="feature",
+        authority=Authority(),
+        reviewer=lambda: review(False, 1, True),
+        repairer=lambda _review: RepairResult(True, None),
+    )
+    assert malformed_repair.status == UnattendedReviewStatus.REPAIR_FAILED

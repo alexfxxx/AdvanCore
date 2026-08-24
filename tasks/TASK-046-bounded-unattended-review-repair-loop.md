@@ -57,6 +57,9 @@ next ten tasks while leaving manual approvals for their return.
   exhaustion, non-repairable findings, malformed evidence, failures or missing
   authority.
 - Kept clean review as evidence requiring later manual implementation approval.
+- Repaired independent review by strictly validating every callback field and
+  keeping all validation/summary normalization inside the controlled reviewer
+  or repair failure boundary.
 
 ### Files changed
 
@@ -72,7 +75,7 @@ None.
 
 ### Tests executed and results
 
-- Focused standing-authority plus unattended-review suites: 22 passed.
+- Focused standing-authority plus unattended-review suites: 23 passed.
 - Python compile and `git diff --check`: passed.
 
 ### Decisions required
