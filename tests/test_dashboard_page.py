@@ -74,7 +74,7 @@ def _install(monkeypatch, fake_st, service, usage_summary=None):
 
 def test_dashboard_renders_all_bounded_metrics(monkeypatch):
     fake_st = FakeStreamlit()
-    summary = DashboardSummary(4, 2, 1, 1, 5, 3, 2)
+    summary = DashboardSummary(4, 2, 1, 1, 5, 3, 2, 9, 4, 3, 2)
     _install(monkeypatch, fake_st, FakeService(summary))
     dashboard.render()
     assert "Loading overview..." in fake_st.spinner_labels
@@ -89,6 +89,10 @@ def test_dashboard_renders_all_bounded_metrics(monkeypatch):
         ("Total knowledge items", 5),
         ("Draft knowledge items", 3),
         ("Other knowledge statuses", 2),
+        ("Total activity events", 9),
+        ("Project activity events", 4),
+        ("Knowledge activity events", 3),
+        ("Other activity events", 2),
     ]
     assert "Core application shell operational." in fake_st.text()
     assert "Database connected." in fake_st.text()
@@ -96,9 +100,13 @@ def test_dashboard_renders_all_bounded_metrics(monkeypatch):
 
 def test_dashboard_empty_state_renders_zero_metrics(monkeypatch):
     fake_st = FakeStreamlit()
-    _install(monkeypatch, fake_st, FakeService(DashboardSummary(0, 0, 0, 0, 0, 0, 0)))
+    _install(
+        monkeypatch,
+        fake_st,
+        FakeService(DashboardSummary(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0)),
+    )
     dashboard.render()
-    assert len(fake_st.metrics) == 10
+    assert len(fake_st.metrics) == 14
     assert all(value == 0 for _, value in fake_st.metrics[3:])
 
 
@@ -130,7 +138,7 @@ def test_dashboard_shows_allowed_and_paused_kimi_states(monkeypatch):
         _install(
             monkeypatch,
             fake_st,
-            FakeService(DashboardSummary(0, 0, 0, 0, 0, 0, 0)),
+            FakeService(DashboardSummary(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0)),
             _usage_summary(state, used, 120),
         )
         dashboard.render()

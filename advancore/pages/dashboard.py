@@ -6,7 +6,11 @@ from pathlib import Path
 
 import streamlit as st
 
-from advancore.repositories import KnowledgeItemRepository, ProjectRepository
+from advancore.repositories import (
+    ActivityLogRepository,
+    KnowledgeItemRepository,
+    ProjectRepository,
+)
 from advancore.services.dashboard_service import DashboardService
 from advancore.services.worker_usage_service import UsageState, WorkerUsageService
 
@@ -17,7 +21,9 @@ def _dashboard_service() -> Iterator[DashboardService]:
 
     with session_scope() as session:
         yield DashboardService(
-            ProjectRepository(session), KnowledgeItemRepository(session)
+            ProjectRepository(session),
+            KnowledgeItemRepository(session),
+            ActivityLogRepository(session),
         )
 
 
@@ -82,4 +88,10 @@ def render():
     st.metric("Total knowledge items", summary.total_knowledge)
     st.metric("Draft knowledge items", summary.draft_knowledge)
     st.metric("Other knowledge statuses", summary.other_knowledge)
+
+    st.subheader("Activity overview")
+    st.metric("Total activity events", summary.total_activity)
+    st.metric("Project activity events", summary.project_activity)
+    st.metric("Knowledge activity events", summary.knowledge_activity)
+    st.metric("Other activity events", summary.other_activity)
     st.caption("Use the navigation menu to manage Projects or capture Knowledge drafts.")
