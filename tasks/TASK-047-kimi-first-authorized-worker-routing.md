@@ -63,6 +63,8 @@ None.
 
 - Focused routing, worker-isolation/fallback, unattended-review and
   standing-authority suites after repair: 50 passed.
+- Independent review's expanded relevant suite: 78 passed; no findings.
+- Full project suite: 826 passed.
 - Python compile and `git diff --check`: passed.
 
 ### Decisions required
