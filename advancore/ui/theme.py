@@ -128,7 +128,16 @@ label > div > div > div:first-child {{
     box-shadow: 0 16px 36px rgba(40, 73, 132, 0.12);
 }}
 [data-testid="stMetricLabel"] {{ color: var(--adv-muted); }}
-[data-testid="stMetricValue"] {{ color: var(--adv-text); }}
+[data-testid="stMetricValue"],
+[data-testid="stMetricValue"] > div,
+[data-testid="stMetricValue"] > div > p {{
+    color: var(--adv-text);
+    white-space: normal !important;
+    overflow: visible !important;
+    text-overflow: clip !important;
+    overflow-wrap: anywhere;
+    line-height: 1.18;
+}}
 div[data-testid="stExpander"] {{
     background: rgba(255, 255, 255, 0.90);
     border: 1px solid var(--adv-border);

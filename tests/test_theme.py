@@ -23,6 +23,12 @@ def test_theme_is_local_responsive_and_has_no_script_dependency():
     assert "@media (max-width: 900px)" in COMMAND_CENTER_CSS
     assert "flex-wrap: wrap" in COMMAND_CENTER_CSS
     assert 'data-testid="stMetric"' in COMMAND_CENTER_CSS
+    assert 'data-testid="stMetricValue"' in COMMAND_CENTER_CSS
+    assert "white-space: normal !important" in COMMAND_CENTER_CSS
+    assert "overflow: visible !important" in COMMAND_CENTER_CSS
+    assert "text-overflow: clip !important" in COMMAND_CENTER_CSS
+    assert "overflow-wrap: anywhere" in COMMAND_CENTER_CSS
+    assert '[data-testid="stMetricValue"] > div > p' in COMMAND_CENTER_CSS
     assert '[data-testid="stSidebar"] * { color: #26364d !important; }' in (
         COMMAND_CENTER_CSS
     )
