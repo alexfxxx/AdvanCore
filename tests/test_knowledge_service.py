@@ -1,6 +1,11 @@
 """Deterministic tests for the draft-only KnowledgeService."""
 
 import pytest
+from sqlalchemy import create_engine, select
+
+from advancore.models import Base, KnowledgeItem
+from advancore.repositories import KnowledgeItemRepository
+from advancore.services.database import create_session_factory, session_scope
 
 from advancore.services.knowledge_service import (
     KnowledgeAlreadyArchivedError,
@@ -36,6 +41,16 @@ class FakeKnowledgeRepository:
             raise self.save_error
         return item
 
+
+class FakeActivityService:
+    def __init__(self):
+        self.calls = []
+        self.error = None
+
+    def record_activity(self, action, entity_type, entity_id):
+        self.calls.append((action, entity_type, entity_id))
+        if self.error:
+            raise self.error
 
 def test_create_draft_normalizes_and_sets_bounded_defaults():
     repo = FakeKnowledgeRepository()
@@ -169,3 +184,58 @@ def test_archive_failure_restores_draft_status():
     with pytest.raises(RuntimeError):
         KnowledgeService(repo).archive_draft(item.id)
     assert item.status == "draft"
+
+
+def test_successful_mutations_record_exact_minimal_knowledge_events():
+    repo = FakeKnowledgeRepository()
+    activity = FakeActivityService()
+    service = KnowledgeService(repo, activity)
+
+    created = service.create_draft("Recorded", "Private content")
+    service.edit_draft(created.id, "Recorded update", "Changed")
+    service.archive_draft(created.id)
+
+    assert activity.calls == [
+        ("knowledge_created", "knowledge", created.id),
+        ("knowledge_updated", "knowledge", created.id),
+        ("knowledge_archived", "knowledge", created.id),
+    ]
+    assert all("Private" not in str(call) for call in activity.calls)
+
+
+@pytest.mark.parametrize("operation", ["edit", "archive"])
+def test_activity_failure_restores_knowledge_mutation_state(operation):
+    repo = FakeKnowledgeRepository()
+    item = KnowledgeService(repo).create_draft("Original", "Details")
+    activity = FakeActivityService()
+    activity.error = RuntimeError("activity unavailable")
+    service = KnowledgeService(repo, activity)
+
+    with pytest.raises(RuntimeError, match="activity unavailable"):
+        if operation == "edit":
+            service.edit_draft(item.id, "Changed", "New")
+        else:
+            service.archive_draft(item.id)
+
+    assert (item.title, item.content, item.status) == (
+        "Original",
+        "Details",
+        "draft",
+    )
+
+
+def test_activity_failure_rolls_back_database_knowledge_insert():
+    engine = create_engine("sqlite:///:memory:")
+    Base.metadata.create_all(engine)
+    session_factory = create_session_factory(engine)
+    activity = FakeActivityService()
+    activity.error = RuntimeError("activity unavailable")
+
+    with pytest.raises(RuntimeError, match="activity unavailable"):
+        with session_scope(session_factory) as session:
+            KnowledgeService(
+                KnowledgeItemRepository(session), activity
+            ).create_draft("Rolled back", "Private content")
+
+    with session_scope(session_factory) as session:
+        assert session.scalars(select(KnowledgeItem)).all() == []
