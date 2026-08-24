@@ -68,7 +68,8 @@ WORKER_TASK_REFERENCE_RE = re.compile(
     r"(?<![A-Za-z0-9_.-])(tasks/TASK-[0-9]+-[A-Za-z0-9_.-]+\.md)"
 )
 WORKER_TASK_LIKE_REFERENCE_RE = re.compile(
-    r"(?<![A-Za-z0-9_.-])(tasks/TASK-[0-9]+-[A-Za-z0-9_.-]+\.md)",
+    r"(?<![A-Za-z0-9_.-])((?:[A-Za-z0-9_.-]+/)*"
+    r"TASK-[0-9]+-[A-Za-z0-9_.-]+\.md)",
     re.IGNORECASE,
 )
 WORKER_CREDENTIAL_PATTERNS: tuple[re.Pattern[str], ...] = (
@@ -80,10 +81,38 @@ WORKER_CREDENTIAL_PATTERNS: tuple[re.Pattern[str], ...] = (
     re.compile(r"\bAKIA[A-Z0-9]{16}\b"),
 )
 MAX_WORKER_INPUT_BYTES = 256 * 1024
+WORKER_CREDENTIAL_URI_RE = re.compile(
+    r"\b[a-z][a-z0-9+.-]*://[^\s:/@]+:[^\s/@]+@", re.IGNORECASE
+)
+WORKER_SECRET_ASSIGNMENT_RE = re.compile(
+    r"(?im)^\s*(?:export\s+)?"
+    r"(?:[A-Z0-9_]+_(?:TOKEN|SECRET|PASSWORD|PASSWD|API_KEY|PRIVATE_KEY|ACCESS_KEY)"
+    r"|TOKEN|SECRET|PASSWORD|PASSWD|API_KEY|PRIVATE_KEY|ACCESS_KEY|DATABASE_URL)"
+    r"\s*[:=]\s*[\"']?([^\s\"'#]+)"
+)
+WORKER_SECRET_PLACEHOLDERS = frozenset(
+    {"none", "null", "false", "true", "0", "changeme", "placeholder", "redacted"}
+)
 
 
 def _contains_credential_material(value: str) -> bool:
-    return any(pattern.search(value) for pattern in WORKER_CREDENTIAL_PATTERNS)
+    if any(pattern.search(value) for pattern in WORKER_CREDENTIAL_PATTERNS):
+        return True
+    if WORKER_CREDENTIAL_URI_RE.search(value):
+        return True
+    for match in WORKER_SECRET_ASSIGNMENT_RE.finditer(value):
+        assigned = match.group(1).strip().lower()
+        if assigned in WORKER_SECRET_PLACEHOLDERS:
+            continue
+        if (
+            assigned.startswith(("<", "${", "$", "your_"))
+            or "example" in assigned
+            or "placeholder" in assigned
+            or set(assigned) == {"*"}
+        ):
+            continue
+        return True
+    return False
 
 
 def _worker_input_blocked(instruction: str, working_dir: Path) -> bool:

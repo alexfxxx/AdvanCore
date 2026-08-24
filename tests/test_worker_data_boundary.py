@@ -71,6 +71,54 @@ def test_noncanonical_case_task_reference_is_blocked(tmp_path: Path):
     which.assert_not_called()
 
 
+@pytest.mark.parametrize(
+    "replacement",
+    ["tasks/./TASK-053-data-boundary.md", "TASK-053-data-boundary.md"],
+)
+def test_noncanonical_structural_task_reference_is_blocked(
+    tmp_path: Path, replacement: str
+):
+    instruction = _task(tmp_path, "Normal content.").replace(
+        "tasks/TASK-053-data-boundary.md", replacement
+    )
+    with patch("advancore.agent_runner.worker.shutil.which") as which:
+        result = CodexWorkerAdapter().run(instruction, tmp_path)
+    assert result.terminal_reason == "credential_access_required"
+    which.assert_not_called()
+
+
+@pytest.mark.parametrize(
+    "credential",
+    [
+        "DATABASE_URL=postgresql://person:private-value@database.example/app",
+        "GITHUB_TOKEN=ordinary-looking-private-value",
+        "SERVICE_PASSWORD: private-value",
+    ],
+)
+def test_common_credential_forms_in_task_are_blocked(
+    tmp_path: Path, credential: str
+):
+    instruction = _task(tmp_path, credential)
+    with patch("advancore.agent_runner.worker.shutil.which") as which:
+        result = CodexWorkerAdapter().run(instruction, tmp_path)
+    assert result.terminal_reason == "credential_access_required"
+    assert "private-value" not in result.message
+    which.assert_not_called()
+
+
+@pytest.mark.parametrize(
+    "placeholder",
+    ["GITHUB_TOKEN=<redacted>", "API_KEY=${API_KEY}", "PASSWORD=placeholder"],
+)
+def test_explicit_placeholders_do_not_create_false_credential_match(
+    tmp_path: Path, placeholder: str
+):
+    instruction = _task(tmp_path, placeholder)
+    with patch("advancore.agent_runner.worker.shutil.which", return_value=None):
+        result = CodexWorkerAdapter().run(instruction, tmp_path)
+    assert result.terminal_reason != "credential_access_required"
+
+
 def test_oversized_direct_instruction_is_blocked(tmp_path: Path):
     instruction = "x" * (MAX_WORKER_INPUT_BYTES + 1)
     with patch("advancore.agent_runner.worker.shutil.which") as which:

@@ -43,6 +43,9 @@ be separately designed and explicitly approved.
 - Repaired independent review by giving Codex planning the same minimal
   environment, rejecting noncanonical task references and oversized direct
   instructions, and protecting standard Git credential-store files.
+- Hardened follow-up review for dot-segment task paths, credential-bearing URI
+  user information and secret-named assignments while permitting explicit
+  placeholder values.
 
 ### Database changes
 
@@ -50,7 +53,7 @@ None.
 
 ### Tests executed and results
 
-- Worker data-boundary and affected worker/planner suites: 55 passed.
+- Worker data-boundary and affected worker/planner suites: 63 passed.
 - `git diff --check`: passed.
 
 ### Decisions required
