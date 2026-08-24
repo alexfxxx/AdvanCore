@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import shutil
+import math
 import os
 import re
 import signal
@@ -10,6 +11,7 @@ import subprocess
 import time
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import ClassVar
 
@@ -47,10 +49,36 @@ WORKER_RECOVERY_ACTION = (
     "Explicitly resume or start a separately reviewed worker invocation."
 )
 KIMI_EXECUTABLE = "kimi"
+KIMI_SANDBOX_EXECUTABLE = Path("/usr/bin/sandbox-exec")
+
+
+def _kimi_isolation_available() -> bool:
+    """Return whether the approved local Kimi OS confinement is available."""
+    return KIMI_SANDBOX_EXECUTABLE.is_file()
+
+
+def _sandbox_literal(path: Path) -> str:
+    return str(path).replace("\\", "\\\\").replace('"', '\\"')
+
+
+def _isolate_kimi_command(
+    command: list[str], service: WorkerUsageService | None
+) -> list[str]:
+    """Confine Kimi and descendants away from controller-owned state."""
+    if service is None:
+        return command
+    profile = (
+        '(version 1) (allow default) (deny file-write* (subpath "'
+        + _sandbox_literal(service.protected_state_root)
+        + '"))'
+    )
+    return [str(KIMI_SANDBOX_EXECUTABLE), "-p", profile, *command]
 
 
 def _kimi_usage_preflight(
-    executable: str, working_dir: Path, timeout_seconds: int
+    executable: str,
+    working_dir: Path,
+    timeout_seconds: int,
 ) -> tuple[WorkerUsageService | None, UsagePreflight | None, WorkerResult | None]:
     """Enforce the production Kimi budget before process launch.
 
@@ -59,6 +87,13 @@ def _kimi_usage_preflight(
     """
     if executable != KIMI_EXECUTABLE:
         return None, None, None
+    if not _kimi_isolation_available():
+        return None, None, WorkerResult(
+            success=False,
+            message="provider quota/capacity paused: Kimi OS isolation is unavailable",
+            terminal_reason="quota_or_capacity",
+            timeout_seconds=timeout_seconds,
+        )
     service = WorkerUsageService(working_dir)
     try:
         preflight = service.preflight("kimi", timeout_seconds)
@@ -174,12 +209,39 @@ def _terminate_process_group(process: subprocess.Popen[str]) -> None:
 
 
 def run_bounded_worker_process(
-    command: list[str], working_dir: Path, timeout_seconds: int
+    command: list[str],
+    working_dir: Path,
+    timeout_seconds: int,
+    launch_deadline: datetime | None = None,
 ) -> WorkerResult:
     """Run one local worker in an isolated session with governed termination."""
     timeout_seconds = validate_worker_timeout(timeout_seconds)
     repo_root = working_dir.resolve(strict=True)
     before = _git_evidence(repo_root)
+    if launch_deadline is not None:
+        if launch_deadline.tzinfo is None:
+            return WorkerResult(
+                success=False,
+                command=command,
+                message="provider quota/capacity paused: launch deadline is invalid",
+                terminal_reason="quota_or_capacity",
+                timeout_seconds=timeout_seconds,
+            )
+        deadline_remaining = math.floor(
+            (
+                launch_deadline.astimezone(timezone.utc)
+                - datetime.now(timezone.utc)
+            ).total_seconds()
+        )
+        if deadline_remaining <= 0:
+            return WorkerResult(
+                success=False,
+                command=command,
+                message="provider quota/capacity paused: provider reset reached before launch",
+                terminal_reason="quota_or_capacity",
+                timeout_seconds=timeout_seconds,
+            )
+        timeout_seconds = min(timeout_seconds, deadline_remaining)
     try:
         process = subprocess.Popen(
             command, cwd=repo_root, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
@@ -337,6 +399,7 @@ class KimiWorkerAdapter(WorkerAdapter):
         )
         if blocked is not None:
             return blocked
+        command = _isolate_kimi_command(command, usage_service)
         effective_timeout = (
             usage_preflight.allowed_timeout_seconds
             if usage_preflight is not None else self.timeout_seconds
@@ -359,7 +422,12 @@ class KimiWorkerAdapter(WorkerAdapter):
             return _record_kimi_runtime(
                 result, usage_service, usage_preflight, time.monotonic() - started_at
             )
-        result = run_bounded_worker_process(command, working_dir, effective_timeout)
+        result = run_bounded_worker_process(
+            command,
+            working_dir,
+            effective_timeout,
+            usage_preflight.launch_deadline if usage_preflight is not None else None,
+        )
         return _record_kimi_runtime(
             result, usage_service, usage_preflight, time.monotonic() - started_at
         )
@@ -459,6 +527,7 @@ class KimiSwarmWorkerAdapter(WorkerAdapter):
         )
         if blocked is not None:
             return blocked
+        command = _isolate_kimi_command(command, usage_service)
         effective_timeout = (
             usage_preflight.allowed_timeout_seconds
             if usage_preflight is not None else self.timeout_seconds
@@ -479,7 +548,12 @@ class KimiSwarmWorkerAdapter(WorkerAdapter):
             return _record_kimi_runtime(
                 result, usage_service, usage_preflight, time.monotonic() - started_at
             )
-        result = run_bounded_worker_process(command, working_dir, effective_timeout)
+        result = run_bounded_worker_process(
+            command,
+            working_dir,
+            effective_timeout,
+            usage_preflight.launch_deadline if usage_preflight is not None else None,
+        )
         return _record_kimi_runtime(
             result, usage_service, usage_preflight, time.monotonic() - started_at
         )

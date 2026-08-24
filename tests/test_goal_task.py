@@ -881,6 +881,10 @@ class TestCLI:
     def test_cli_execute_writes_draft(self, tmp_path: Path, monkeypatch):
         repo_root, tasks_dir = self._setup_repo(tmp_path)
         monkeypatch.chdir(repo_root)
+        monkeypatch.setattr(
+            "advancore.services.worker_usage_service._default_usage_dir",
+            lambda _repo: tmp_path / "controller-state" / "usage",
+        )
         now = datetime.now(timezone.utc)
         WorkerUsageService(repo_root).record_snapshot(
             "kimi", 1, now, now + timedelta(days=4), "owner-verified"

@@ -14,6 +14,8 @@ import hashlib
 import json
 import math
 import os
+import pwd
+import sys
 import tempfile
 import uuid
 from dataclasses import asdict, dataclass
@@ -30,6 +32,7 @@ KIMI_WEEKLY_PERCENT_LIMIT = 20.0
 KIMI_WEEKLY_RUNTIME_LIMIT_SECONDS = 60 * 60
 USAGE_SNAPSHOT_MAX_AGE_SECONDS = 15 * 60
 MIN_NEW_PERIOD_RESET_ADVANCE = timedelta(days=1)
+RESET_BOUNDARY_GUARD_SECONDS = 5
 MAX_EVIDENCE_BYTES = 16 * 1024
 
 
@@ -61,6 +64,7 @@ class RuntimeLedger:
     period_id: str
     reset_at: datetime
     runtime_seconds: int
+    carryover_seconds: int
 
 
 @dataclass(frozen=True)
@@ -88,6 +92,7 @@ class UsagePreflight:
     allowed_timeout_seconds: int
     reserved_seconds: int
     reset_at: datetime
+    launch_deadline: datetime
     summary: UsageSummary
 
 
@@ -199,10 +204,14 @@ def _is_within(path: Path, parent: Path) -> bool:
     return path == parent or parent in path.parents
 
 
-def _default_usage_dir(repo_root: Path) -> Path:
-    """Return a deterministic controller state directory outside *repo_root*."""
-    identity = hashlib.sha256(str(repo_root).encode("utf-8")).hexdigest()[:20]
-    return repo_root.parent / ".advancore-controller" / identity / "usage"
+def _default_usage_dir(_repo_root: Path) -> Path:
+    """Return one OS-account-wide usage store shared by every checkout."""
+    account_home = Path(pwd.getpwuid(os.getuid()).pw_dir).resolve()
+    if sys.platform == "darwin":
+        state_root = account_home / "Library" / "Application Support" / "AdvanCore"
+    else:
+        state_root = account_home / ".local" / "state" / "advancore"
+    return state_root / "agent_runner" / "usage"
 
 
 class WorkerUsageService:
@@ -233,6 +242,11 @@ class WorkerUsageService:
 
     def lock_path(self, provider: str) -> Path:
         return self.usage_dir / f"{_validate_provider(provider)}.lock"
+
+    @property
+    def protected_state_root(self) -> Path:
+        """Directory that an implementation worker must be denied write access to."""
+        return self.usage_dir.parent
 
     def _ensure_usage_dir(self) -> None:
         try:
@@ -320,7 +334,8 @@ class WorkerUsageService:
         provider = _validate_provider(provider)
         payload = _read_json(self.runtime_path(provider))
         expected = {
-            "schema_version", "provider", "period_id", "reset_at", "runtime_seconds"
+            "schema_version", "provider", "period_id", "reset_at",
+            "runtime_seconds", "carryover_seconds",
         }
         if set(payload) != expected:
             raise UsageBudgetError("runtime evidence is invalid")
@@ -339,10 +354,21 @@ class WorkerUsageService:
             runtime_seconds=_strict_int(
                 payload["runtime_seconds"], "runtime_seconds", 0, 8 * 24 * 60 * 60
             ),
+            carryover_seconds=_strict_int(
+                payload["carryover_seconds"],
+                "carryover_seconds",
+                0,
+                KIMI_WEEKLY_RUNTIME_LIMIT_SECONDS,
+            ),
         )
 
     def _write_runtime(
-        self, provider: str, period_id: str, reset_at: datetime, runtime_seconds: int
+        self,
+        provider: str,
+        period_id: str,
+        reset_at: datetime,
+        runtime_seconds: int,
+        carryover_seconds: int,
     ) -> None:
         _atomic_write_json(
             self.runtime_path(provider),
@@ -352,6 +378,7 @@ class WorkerUsageService:
                 "period_id": period_id,
                 "reset_at": _canonical_timestamp(reset_at),
                 "runtime_seconds": runtime_seconds,
+                "carryover_seconds": carryover_seconds,
             },
         )
 
@@ -478,12 +505,24 @@ class WorkerUsageService:
                 raise UsageBudgetError(
                     "provider quota/capacity paused: weekly runtime limit reached"
                 )
-            reserved = min(requested_timeout_seconds, remaining)
+            reset_remaining = (
+                math.floor((snapshot.reset_at - now).total_seconds())
+                - RESET_BOUNDARY_GUARD_SECONDS
+            )
+            if reset_remaining <= 0:
+                raise UsageBudgetError(
+                    "provider quota/capacity paused: provider reset is too close"
+                )
+            reserved = min(requested_timeout_seconds, remaining, reset_remaining)
             self._write_runtime(
                 provider,
                 snapshot.period_id,
                 snapshot.reset_at,
                 ledger.runtime_seconds + reserved,
+                min(
+                    KIMI_WEEKLY_RUNTIME_LIMIT_SECONDS,
+                    ledger.carryover_seconds + reserved,
+                ),
             )
             preflight = UsagePreflight(
                 provider=provider,
@@ -491,6 +530,9 @@ class WorkerUsageService:
                 allowed_timeout_seconds=reserved,
                 reserved_seconds=reserved,
                 reset_at=snapshot.reset_at,
+                launch_deadline=snapshot.reset_at - timedelta(
+                    seconds=RESET_BOUNDARY_GUARD_SECONDS
+                ),
                 summary=summary,
             )
             self._active_reservation = _ActiveReservation(
@@ -555,10 +597,14 @@ class WorkerUsageService:
                         "weekly usage cannot decrease within the active provider period"
                     )
                 period_id = str(uuid.uuid4()) if is_new_period else current.period_id
-                runtime_seconds = 0 if is_new_period else ledger.runtime_seconds
+                runtime_seconds = (
+                    ledger.carryover_seconds if is_new_period else ledger.runtime_seconds
+                )
+                carryover_seconds = 0 if is_new_period else ledger.carryover_seconds
             else:
                 period_id = str(uuid.uuid4())
                 runtime_seconds = 0
+                carryover_seconds = 0
 
             snapshot_payload = {
                 "schema_version": USAGE_SCHEMA_VERSION,
@@ -569,7 +615,9 @@ class WorkerUsageService:
                 "reset_at": _canonical_timestamp(reset),
                 "source": source,
             }
-            self._write_runtime(provider, period_id, reset, runtime_seconds)
+            self._write_runtime(
+                provider, period_id, reset, runtime_seconds, carryover_seconds
+            )
             _atomic_write_json(snapshot_path, snapshot_payload)
             loaded = self._load_snapshot(provider, now)
             self._load_runtime(provider, loaded.period_id)
@@ -617,8 +665,23 @@ class WorkerUsageService:
                 preflight.reserved_seconds, max(1, math.ceil(elapsed_seconds))
             )
             updated = ledger.runtime_seconds - preflight.reserved_seconds + charged
+            if ledger.carryover_seconds < preflight.reserved_seconds:
+                raise UsageBudgetError("runtime carryover reservation changed")
+            carryover = ledger.carryover_seconds - preflight.reserved_seconds
+            if now >= snapshot.reset_at:
+                # A suspended or delayed process may settle after the guarded
+                # deadline. Conservatively carry its entire charge into the
+                # next verified provider period so rollover cannot erase it.
+                carryover = min(
+                    KIMI_WEEKLY_RUNTIME_LIMIT_SECONDS,
+                    carryover + charged,
+                )
             self._write_runtime(
-                provider, snapshot.period_id, snapshot.reset_at, updated
+                provider,
+                snapshot.period_id,
+                snapshot.reset_at,
+                updated,
+                carryover,
             )
             return RuntimeLedger(
                 schema_version=USAGE_SCHEMA_VERSION,
@@ -626,6 +689,7 @@ class WorkerUsageService:
                 period_id=snapshot.period_id,
                 reset_at=snapshot.reset_at,
                 runtime_seconds=updated,
+                carryover_seconds=carryover,
             )
         except UsageBudgetError:
             self._write_quarantine(provider, now)

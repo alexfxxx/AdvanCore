@@ -123,7 +123,8 @@ def _run_pipeline(
 ):
     repo, tasks, fake_bin = _repo(tmp_path)
     now = datetime.now(timezone.utc)
-    WorkerUsageService(repo).record_snapshot(
+    usage_dir = tmp_path / "controller-state" / "usage"
+    WorkerUsageService(repo, usage_dir=usage_dir).record_snapshot(
         "kimi", 1, now, now + timedelta(days=4), "owner-verified"
     )
     log = _install_workers(fake_bin)
@@ -131,6 +132,17 @@ def _run_pipeline(
     monkeypatch.setenv("WORKER_LOG", str(log))
     monkeypatch.setenv("PRIMARY_MODE", primary_mode)
     monkeypatch.setenv("FALLBACK_MODE", fallback_mode)
+    monkeypatch.setattr(
+        "advancore.services.worker_usage_service._default_usage_dir",
+        lambda _repo: usage_dir,
+    )
+    # The test runner itself is already sandboxed and macOS forbids applying a
+    # nested sandbox profile. Unit coverage verifies the production wrapper;
+    # this integration fixture exercises the governed worker/fallback flow.
+    monkeypatch.setattr(
+        "advancore.agent_runner.worker._isolate_kimi_command",
+        lambda command, _service: command,
+    )
     result = run_auto_pipeline(
         tasks,
         "TASK-023",

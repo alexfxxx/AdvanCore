@@ -64,6 +64,17 @@ def test_usage_directory_inside_worker_workspace_is_rejected(tmp_path):
         WorkerUsageService(repo, usage_dir=repo / ".agent_runner" / "usage")
 
 
+def test_default_usage_store_is_shared_across_separate_checkouts(tmp_path):
+    first_repo = tmp_path / "first-checkout"
+    second_repo = tmp_path / "second-checkout"
+    first_repo.mkdir()
+    second_repo.mkdir()
+    first = WorkerUsageService(first_repo)
+    second = WorkerUsageService(second_repo)
+    assert first.usage_dir == second.usage_dir
+    assert first.lock_path("kimi") == second.lock_path("kimi")
+
+
 @pytest.mark.parametrize("used", [20, 44, 100])
 def test_at_or_over_twenty_percent_is_paused(tmp_path, used):
     service = _service(tmp_path)
@@ -146,6 +157,16 @@ def test_abandoned_worker_keeps_full_reservation_fail_closed(tmp_path):
     preflight = service.preflight("kimi", 1800)
     service.abandon_reservation(preflight)
     assert service.get_summary().runtime_seconds == 1800
+    next_now = RESET + timedelta(minutes=1)
+    next_service = WorkerUsageService(
+        service.repo_root,
+        now_provider=lambda: next_now,
+        usage_dir=service.usage_dir,
+    )
+    next_service.record_snapshot(
+        "kimi", 1, next_now, next_now + timedelta(days=7), "owner-verified"
+    )
+    assert next_service.get_summary().runtime_seconds == 1800
 
 
 def test_valid_long_run_can_settle_after_snapshot_freshness_window(tmp_path):
@@ -163,6 +184,41 @@ def test_valid_long_run_can_settle_after_snapshot_freshness_window(tmp_path):
     ledger = service.record_runtime("kimi", 960, preflight)
     assert ledger.runtime_seconds == 960
     assert not service.quarantine_path("kimi").exists()
+
+
+def test_launch_is_clamped_before_reset_and_crossing_charge_carries_forward(tmp_path):
+    clock = [NOW]
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    usage_dir = tmp_path / "controller-state" / "usage"
+    service = WorkerUsageService(
+        repo, now_provider=lambda: clock[0], usage_dir=usage_dir
+    )
+    near_reset = NOW + timedelta(seconds=20)
+    service.record_snapshot("kimi", 1, NOW, near_reset, "owner-verified")
+    preflight = service.preflight("kimi", 1800)
+    assert preflight.allowed_timeout_seconds == 15
+
+    clock[0] = near_reset + timedelta(seconds=1)
+    ledger = service.record_runtime("kimi", 15, preflight)
+    assert ledger.carryover_seconds == 15
+
+    next_now = near_reset + timedelta(minutes=1)
+    next_service = WorkerUsageService(
+        repo, now_provider=lambda: next_now, usage_dir=usage_dir
+    )
+    next_service.record_snapshot(
+        "kimi", 1, next_now, near_reset + timedelta(days=7), "owner-verified"
+    )
+    assert next_service.get_summary().runtime_seconds == 15
+
+
+def test_launch_is_blocked_inside_reset_guard_window(tmp_path):
+    service = _service(tmp_path)
+    reset = NOW + timedelta(seconds=4)
+    service.record_snapshot("kimi", 1, NOW, reset, "owner-verified")
+    with pytest.raises(UsageBudgetError, match="reset is too close"):
+        service.preflight("kimi", 60)
 
 
 def test_small_reset_adjustment_preserves_period_and_runtime(tmp_path):

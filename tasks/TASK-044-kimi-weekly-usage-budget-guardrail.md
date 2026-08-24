@@ -21,7 +21,7 @@ The owner wants AdvanCore development automation to preserve provider capacity f
 
 ## In scope
 
-- Add a provider-neutral local usage snapshot contract in controller-owned state outside the worker repository, with strict validation and no credentials.
+- Add a provider-neutral, OS-account-wide local usage snapshot contract in controller-owned state outside every worker repository, with strict validation and no credentials.
 - Add a Kimi policy of 20% provider-reported weekly usage and 3,600 seconds local runtime per provider week.
 - Require a fresh, unexpired usage snapshot before every Kimi or Kimi-Swarm implementation/planner launch; stale, missing, malformed, reset-expired, at-limit, or runtime-exhausted state must block before process launch.
 - Bound a Kimi launch timeout to the remaining weekly runtime and record actual elapsed Kimi process time in a separate local runtime ledger.
@@ -65,6 +65,9 @@ None. Usage status and runtime accounting are local, bounded, Git-ignored JSON a
 - Serialize Kimi launches with an exclusive controller lock, reserve bounded runtime before launch, and retain the full reservation after an ambiguous interruption.
 - Preserve a stable provider-period identity across small reset-time adjustments; provider usage and charged runtime must not decrease within that period.
 - Fingerprint evidence across worker execution and quarantine any unexpected alteration.
+- Require an approved OS write-isolation boundary around controller state for Kimi and all descendants; fail closed before reservation if isolation is unavailable.
+- Share one provider ledger and lock across all local AdvanCore clones/worktrees.
+- Clamp launches to a guarded pre-reset deadline and carry any unexpectedly cross-reset charge into the next verified provider period.
 - Check usage before process launch; a blocked launch must not run Kimi or mutate the repository.
 - A usage block may enable only the existing explicit one-hop approved fallback path and must not weaken its repository-integrity checks.
 - The Dashboard is read-only and must not let an app user alter usage evidence or limits.
@@ -113,6 +116,8 @@ None. On 23 August 2026 the owner explicitly selected a 20% Kimi weekly allowanc
 - Added an operating runbook separating permanent AdvanCore policy from local authenticated reading refresh by Codex desktop or another approved controller.
 - Preserved fail-closed behavior during the schema transition: the legacy 44% reading is not trusted or silently promoted into the new controller-owned schema, so Kimi remains unavailable until an approved controller records a fresh reading.
 - Repaired independent-review findings by adding a stable period identifier, non-decreasing same-period evidence, exclusive launch locking, pre-launch timeout reservation, crash-safe charging, evidence fingerprinting, and fail-closed quarantine.
+- Repaired the second independent-review findings by moving to one OS-account-wide ledger, placing Kimi and its descendants under macOS write denial for controller state, failing closed without isolation, bounding launches before reset, and carrying delayed cross-reset charges forward.
+- Rechecked the absolute provider-reset deadline immediately before process creation so slow repository verification cannot start Kimi after the fresh-reading boundary.
 
 ### Files changed
 
@@ -133,11 +138,11 @@ None.
 
 ### Tests and results
 
-- Focused usage, worker, Dashboard, planner, fallback and timeout verification: 88 passed.
-- Full project suite with the documented local PostgreSQL configuration: 776 passed.
+- Focused usage, worker, Dashboard, planner, fallback, orchestration and timeout verification: 232 passed.
+- Full project suite with the documented local PostgreSQL configuration: 781 passed.
 - Python compile/import and `git diff --check`: passed.
 - Streamlit Dashboard AppTest smoke: zero exceptions; rendered Kimi usage unavailable, policy limit 20%, and the fail-closed refresh warning expected during secure-schema transition.
-- Exact scope, unstaged/staged/new-file and ignored-artifact checks: passed; `.agent_runner/usage/` remains ignored.
+- Exact scope, unstaged/staged/new-file and controller-state checks: passed; authoritative usage evidence is outside Git and shared across checkouts.
 
 ### Assumptions
 
@@ -148,7 +153,8 @@ None.
 
 - Kimi currently has no confirmed stable machine-readable quota API, so an approved local controller must refresh the bounded usage snapshot from an authenticated reading.
 - The runtime budget counts local process wall time rather than vendor tokens; the provider percentage remains the primary allowance evidence.
-- Controller evidence is outside the worker repository, mode-restricted, lock-serialized and fingerprint-checked. A future multi-user or remotely hosted worker deployment still requires a separate authenticated service/OS identity boundary.
+- Controller evidence is outside every worker repository, shared across local checkouts, lock-serialized, fingerprint-checked, and protected from Kimi writes by the approved macOS sandbox. A future multi-user or remotely hosted worker deployment still requires a reviewed platform-specific isolation or authenticated service boundary.
+- The current approved Kimi isolation adapter is macOS-specific. On a platform without an approved equivalent, Kimi pauses before launch and an already approved fallback may be considered.
 - The secure version-2 evidence store intentionally starts unavailable rather than importing the stale version-1 reading; a fresh authenticated Kimi reading is required before Kimi can resume.
 
 ### Decisions required
