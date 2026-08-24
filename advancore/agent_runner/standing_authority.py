@@ -105,7 +105,6 @@ class StandingAuthorityService:
         now_provider: Callable[[], datetime] = _utc_now,
     ):
         self.repo_root = repo_root.resolve(strict=True)
-        self.repository_id = self._repository_identity()
         self.state_dir = (state_dir or default_standing_authority_dir()).resolve()
         self.now_provider = now_provider
 
@@ -160,6 +159,12 @@ class StandingAuthorityService:
         remote = self._normalized_remote(self._git("remote", "get-url", "origin"))
         material = f"{info.st_dev}:{info.st_ino}:{common_dir}:{remote}".encode("utf-8")
         return hashlib.sha256(material).hexdigest()
+
+    def _current_branch(self) -> str:
+        branch = self._git("symbolic-ref", "--quiet", "--short", "HEAD")
+        if not _BRANCH_RE.fullmatch(branch) or branch in {"main", "master"}:
+            raise StandingAuthorityError("current repository branch is not eligible")
+        return branch
 
     @property
     def authority_path(self) -> Path:
@@ -303,24 +308,33 @@ class StandingAuthorityService:
         if owner_confirmed is not True:
             raise StandingAuthorityError("explicit owner confirmation is required")
         now = self.now_provider().astimezone(timezone.utc)
-        authority = StandingAuthority(
-            schema_version=STANDING_AUTHORITY_SCHEMA,
-            authorization_id=str(uuid.uuid4()),
-            repository_id=self.repository_id,
-            issued_at=_canonical(now),
-            expires_at=_canonical(expires_at),
-            branch=branch,
-            task_ids=tuple(sorted(set(task_ids))),
-            allowed_actions=tuple(
-                sorted({item.value if isinstance(item, RoutineAction) else str(item) for item in allowed_actions})
-            ),
-            max_uses=max_uses,
-            uses=0,
-            source="owner-explicit",
-        )
-        self._validate(authority)
         lock = self._lock()
         try:
+            live_repository_id = self._repository_identity()
+            live_branch = self._current_branch()
+            if branch != live_branch:
+                raise StandingAuthorityError("standing authority branch is not current")
+            authority = StandingAuthority(
+                schema_version=STANDING_AUTHORITY_SCHEMA,
+                authorization_id=str(uuid.uuid4()),
+                repository_id=live_repository_id,
+                issued_at=_canonical(now),
+                expires_at=_canonical(expires_at),
+                branch=branch,
+                task_ids=tuple(sorted(set(task_ids))),
+                allowed_actions=tuple(
+                    sorted(
+                        {
+                            item.value if isinstance(item, RoutineAction) else str(item)
+                            for item in allowed_actions
+                        }
+                    )
+                ),
+                max_uses=max_uses,
+                uses=0,
+                source="owner-explicit",
+            )
+            self._validate(authority)
             self._write(authority)
         finally:
             lock.close()
@@ -333,13 +347,17 @@ class StandingAuthorityService:
         try:
             authority = self._load()
             now = self.now_provider().astimezone(timezone.utc)
-            if authority.repository_id != self.repository_id:
+            live_repository_id = self._repository_identity()
+            live_branch = self._current_branch()
+            if authority.repository_id != live_repository_id:
                 raise StandingAuthorityError("standing authority does not cover this repository")
+            if branch != live_branch or authority.branch != live_branch:
+                raise StandingAuthorityError("standing authority does not cover the current branch")
             if now < _timestamp(authority.issued_at, "issued_at") or now >= _timestamp(
                 authority.expires_at, "expires_at"
             ):
                 raise StandingAuthorityError("standing authority is expired")
-            if task_id not in authority.task_ids or branch != authority.branch:
+            if task_id not in authority.task_ids:
                 raise StandingAuthorityError("standing authority does not cover this task and branch")
             if action_value not in authority.allowed_actions:
                 raise StandingAuthorityError("standing authority does not cover this action")

@@ -93,6 +93,9 @@ inheritance. Manual approval gates must remain for the owner's return.
   local Git common directory plus sanitized origin identity (shared worktrees
   only), and normalizing malformed field types into the controlled fail-closed
   error path.
+- Repaired the follow-up review finding by recomputing the repository identity
+  and checked-out non-`main` branch under the consumption lock rather than
+  trusting a cached identity or caller-supplied branch label.
 
 ### Files changed
 
@@ -108,7 +111,7 @@ None.
 
 ### Tests executed and results
 
-- Focused standing-authority suite after independent-review repairs: 15 passed.
+- Focused standing-authority suite after independent-review repairs: 16 passed.
 - Full project suite after independent-review repairs: 813 passed.
 - Python compile and `git diff --check`: passed.
 

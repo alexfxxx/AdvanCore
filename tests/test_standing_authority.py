@@ -21,7 +21,12 @@ def _service(tmp_path, now=NOW):
     repo = tmp_path / "repo"
     if not (repo / ".git").exists():
         repo.mkdir(parents=True, exist_ok=True)
-        subprocess.run(["git", "init", "-b", "fixture"], cwd=repo, check=True, capture_output=True)
+        subprocess.run(
+            ["git", "init", "-b", "unattended-controller-orchestration"],
+            cwd=repo,
+            check=True,
+            capture_output=True,
+        )
         subprocess.run(
             ["git", "remote", "add", "origin", "https://github.com/example/advancore.git"],
             cwd=repo,
@@ -125,6 +130,33 @@ def test_same_names_and_remote_in_another_clone_cannot_consume_grant(tmp_path):
 
     with pytest.raises(StandingAuthorityError, match="repository"):
         second.consume(
+            "TASK-045", "unattended-controller-orchestration", RoutineAction.RUN_TESTS
+        )
+
+
+def test_live_branch_and_remote_are_revalidated_at_consumption(tmp_path):
+    branch_service = _service(tmp_path / "branch")
+    _record(branch_service)
+    subprocess.run(
+        ["git", "switch", "-c", "main"],
+        cwd=branch_service.repo_root,
+        check=True,
+        capture_output=True,
+    )
+    with pytest.raises(StandingAuthorityError, match="branch"):
+        branch_service.consume(
+            "TASK-045", "unattended-controller-orchestration", RoutineAction.RUN_TESTS
+        )
+
+    remote_service = _service(tmp_path / "remote")
+    _record(remote_service)
+    subprocess.run(
+        ["git", "remote", "set-url", "origin", "https://github.com/example/other.git"],
+        cwd=remote_service.repo_root,
+        check=True,
+    )
+    with pytest.raises(StandingAuthorityError, match="repository"):
+        remote_service.consume(
             "TASK-045", "unattended-controller-orchestration", RoutineAction.RUN_TESTS
         )
 
