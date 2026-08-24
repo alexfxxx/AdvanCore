@@ -893,6 +893,11 @@ def main(argv: list[str] | None = None) -> int:
         action="store_true",
         help="Actually launch planners/workers, write checkpoints, mutate lifecycle, and delegate finalization.",
     )
+    orchestrate_parser.add_argument(
+        "--unattended",
+        action="store_true",
+        help="Use standing routine authority with the fixed Kimi-Swarm to Codex route.",
+    )
 
     reconcile_parser = subparsers.add_parser(
         "reconcile-completed-run",
@@ -2081,6 +2086,7 @@ def main(argv: list[str] | None = None) -> int:
             "--repair-attempts",
             "--max-rework",
             "--worker-timeout",
+            "--unattended",
         }
         resume_overrides = tuple(
             flag
@@ -2104,6 +2110,7 @@ def main(argv: list[str] | None = None) -> int:
                 owner_action=args.owner_action,
                 owner_note=args.owner_note,
                 resume_overrides=resume_overrides,
+                unattended=args.unattended,
             )
         except OrchestrationError as exc:
             print(f"FAIL: {exc}", file=sys.stderr)

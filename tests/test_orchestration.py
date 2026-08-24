@@ -1496,6 +1496,25 @@ class TestCLI:
 
 
 class TestGovernance:
+    def test_unattended_mode_requires_fixed_kimi_first_route(self):
+        with pytest.raises(OrchestrationError, match="requires worker kimi-swarm"):
+            OrchestrationConfig(goal="work", unattended=True)
+        with pytest.raises(OrchestrationError, match="requires worker kimi-swarm"):
+            OrchestrationConfig(
+                goal="work",
+                worker="codex",
+                fallback_worker="kimi-swarm",
+                unattended=True,
+            )
+
+        config = OrchestrationConfig(
+            goal="work",
+            worker="kimi-swarm",
+            fallback_worker="codex",
+            unattended=True,
+        )
+        assert config.unattended is True
+
     def test_no_code_path_targets_main(self, tmp_path: Path):
         repo_root = tmp_path / "repo"
         config = OrchestrationConfig(goal="Add feature", apply=True)
