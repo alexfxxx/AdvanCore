@@ -115,6 +115,13 @@ from advancore.agent_runner.standing_authority import (
     StandingAuthorityService,
     default_standing_authority_dir,
 )
+from advancore.agent_runner.unattended_review import (
+    IndependentReviewResult,
+    RepairResult,
+    UnattendedReviewResult,
+    UnattendedReviewStatus,
+    run_unattended_review_loop,
+)
 from advancore.agent_runner.review_bundle import (
     ControllerAction,
     ReviewBundle,
@@ -245,6 +252,11 @@ __all__ = [
     "StandingAuthorityError",
     "StandingAuthorityService",
     "default_standing_authority_dir",
+    "IndependentReviewResult",
+    "RepairResult",
+    "UnattendedReviewResult",
+    "UnattendedReviewStatus",
+    "run_unattended_review_loop",
     "default_orchestration_dir",
     "load_checkpoint",
     "run_orchestration",
