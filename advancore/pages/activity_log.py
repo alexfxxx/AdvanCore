@@ -7,6 +7,7 @@ import streamlit as st
 
 from advancore.repositories import ActivityLogRepository
 from advancore.services.activity_service import ActivityLogService
+from advancore.ui.formatting import format_utc_timestamp
 
 
 _ENTITY_FILTERS = ("all", "project", "knowledge")
@@ -92,11 +93,7 @@ def render():
                 st.write(f"Action: {selected.action}")
                 st.write(f"Entity type: {selected.entity_type or 'Not provided'}")
                 st.write(f"Entity ID: {selected.entity_id or 'Not provided'}")
-                st.write(
-                    f"Created: {selected.created_at.isoformat()}"
-                    if selected.created_at is not None
-                    else "Created: Not available"
-                )
+                st.write(f"Created: {format_utc_timestamp(selected.created_at)}")
                 st.text_area(
                     "Details",
                     value=selected.details or "Not provided",
