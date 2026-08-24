@@ -50,6 +50,7 @@ None.
 
 - Knowledge service and page suites: 30 passed.
 - Repository suite: 9 passed against the local test database.
+- Full repository suite after integration: 858 passed.
 - `git diff --check`: passed.
 
 ### Decisions required
