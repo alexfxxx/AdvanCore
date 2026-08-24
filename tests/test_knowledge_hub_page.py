@@ -28,6 +28,7 @@ class FakeStreamlit:
         self.rerun_calls = 0
         self._form_key = None
         self.selectbox_labels = []
+        self.selected_option = None
 
     def _record(self, kind, value): self.messages.append((kind, str(value)))
     def header(self, value): self._record("header", value)
@@ -55,8 +56,12 @@ class FakeStreamlit:
     def text_area(self, label, **kwargs):
         self.widget_labels.append(label)
         if kwargs.get("disabled"):
-            self._record("detail_content", kwargs.get("value", ""))
-            return kwargs.get("value", "")
+            key = kwargs.get("key")
+            rendered_value = self.session_state.setdefault(
+                key, kwargs.get("value", "")
+            )
+            self._record("detail_content", rendered_value)
+            return rendered_value
         if label in self.inputs:
             return self.inputs[label]
         if label == "Content":
@@ -76,7 +81,16 @@ class FakeStreamlit:
     def selectbox(self, _label, options, **kwargs):
         formatter = kwargs.get("format_func", str)
         self.selectbox_labels = [formatter(option) for option in options]
-        return self.selected_id if self.selected_id is not None else options[0]
+        key = kwargs.get("key")
+        if self.selected_id is not None:
+            selected = self.selected_id
+        elif key in self.session_state:
+            selected = self.session_state[key]
+        else:
+            selected = options[kwargs.get("index", 0)]
+        self.session_state[key] = selected
+        self.selected_option = formatter(selected)
+        return selected
     def rerun(self): self.rerun_calls += 1
     def text(self): return "\n".join(message for _, message in self.messages)
 
@@ -125,10 +139,17 @@ def test_empty_state(monkeypatch):
     assert "No knowledge drafts yet" in fake_st.text()
 
 
-def test_successful_create_is_visible_in_same_render(monkeypatch):
+def test_successful_create_clears_form_reruns_and_selects_new_item(monkeypatch):
     repo = FakeRepository()
+    state = {
+        "knowledge_create_title_0": "  New note  ",
+        "knowledge_create_content_0": "  Useful content  ",
+    }
     fake_st = FakeStreamlit(
-        submitted=True, title="  New note  ", content="  Useful content  "
+        submitted=True,
+        title="  New note  ",
+        content="  Useful content  ",
+        session_state=state,
     )
     _install(monkeypatch, fake_st, KnowledgeService(repo))
     knowledge_hub.render()
@@ -138,9 +159,55 @@ def test_successful_create_is_visible_in_same_render(monkeypatch):
         "Useful content",
         "draft",
     )
-    assert "Knowledge draft created successfully." in fake_st.text()
+    assert fake_st.rerun_calls == 1
+    assert state[knowledge_hub._KNOWLEDGE_FLASH_KEY] == (
+        "Knowledge draft created successfully."
+    )
+    assert state[knowledge_hub._KNOWLEDGE_SELECTED_VALUE_KEY] == 1
+    assert state[knowledge_hub._KNOWLEDGE_CREATE_GENERATION_KEY] == 1
+    assert "knowledge_create_title_0" not in state
+    assert "knowledge_create_content_0" not in state
     assert "Title: New note" in fake_st.text()
     assert "Useful content" in fake_st.text()
+
+    refreshed = FakeStreamlit(session_state=state)
+    _install(monkeypatch, refreshed, KnowledgeService(repo))
+    knowledge_hub.render()
+    assert "Knowledge draft created successfully." in refreshed.text()
+    assert refreshed.selected_option == "New note (draft)"
+    assert refreshed.rerun_calls == 0
+    assert "knowledge_create_title_1" not in state
+    assert "knowledge_create_content_1" not in state
+
+
+def test_create_captures_identifier_before_database_scope_closes(monkeypatch):
+    class ExpiringCreated:
+        expired = False
+
+        @property
+        def id(self):
+            if self.expired:
+                raise RuntimeError("detached database object")
+            return 42
+
+    created = ExpiringCreated()
+
+    class CreateService:
+        def create_draft(self, _title, _content):
+            return created
+
+    @contextmanager
+    def expiring_scope():
+        try:
+            yield CreateService()
+        finally:
+            created.expired = True
+
+    fake_st = FakeStreamlit()
+    monkeypatch.setattr(knowledge_hub, "st", fake_st)
+    monkeypatch.setattr(knowledge_hub, "_knowledge_service", expiring_scope)
+
+    assert knowledge_hub._create_draft("Title", "Content") == 42
 
 
 @pytest.mark.parametrize(
@@ -206,7 +273,7 @@ def test_successful_edit_reruns_and_refreshed_screen_shows_saved_values(monkeypa
     state = {
         "knowledge_edit_title_1": "  Updated  ",
         "knowledge_edit_content_1": "  New content  ",
-        "knowledge_content_1": "Old",
+        knowledge_hub._content_widget_key(1, "Old"): "Old",
     }
     submitted = FakeStreamlit(
         selected_id=1,
@@ -229,7 +296,6 @@ def test_successful_edit_reruns_and_refreshed_screen_shows_saved_values(monkeypa
     )
     assert "knowledge_edit_title_1" not in state
     assert "knowledge_edit_content_1" not in state
-    assert "knowledge_content_1" not in state
 
     refreshed = FakeStreamlit(selected_id=1, session_state=state)
     _install(monkeypatch, refreshed, KnowledgeService(repo))
@@ -238,6 +304,25 @@ def test_successful_edit_reruns_and_refreshed_screen_shows_saved_values(monkeypa
     assert "Title: Updated" in refreshed.text()
     assert "New content" in refreshed.text()
     assert refreshed.rerun_calls == 0
+    assert knowledge_hub._content_widget_key(1, "Old") not in state
+    assert state[knowledge_hub._content_widget_key(1, "New content")] == (
+        "New content"
+    )
+
+
+def test_saved_content_identity_replaces_stale_detail_widget(monkeypatch):
+    old_key = knowledge_hub._content_widget_key(1, "Old")
+    state = {old_key: "Old"}
+    fake_st = FakeStreamlit(selected_id=1, session_state=state)
+    repo = FakeRepository([_item(1, "Updated", "New content")])
+    _install(monkeypatch, fake_st, KnowledgeService(repo))
+
+    knowledge_hub.render()
+
+    new_key = knowledge_hub._content_widget_key(1, "New content")
+    assert "New content" in fake_st.text()
+    assert old_key not in state
+    assert state[new_key] == "New content"
 
 
 def test_archive_requires_confirmation_then_refreshes_read_only_state(monkeypatch):
@@ -268,7 +353,28 @@ def test_archive_requires_confirmation_then_refreshes_read_only_state(monkeypatc
     assert "Knowledge draft archived successfully." in refreshed.text()
     assert "Archived knowledge draft — read-only." in refreshed.text()
     assert "Original (archived)" in refreshed.selectbox_labels
+    assert refreshed.selected_option == "Original (archived)"
     assert "Knowledge title" not in refreshed.widget_labels
+
+
+def test_selector_label_revision_keeps_selected_item_and_drops_old_widget(monkeypatch):
+    draft = _item(1, "Changing", "Content")
+    old_widget_key = knowledge_hub._selection_widget_key([draft])
+    state = {
+        knowledge_hub._KNOWLEDGE_SELECTED_VALUE_KEY: 1,
+        old_widget_key: 1,
+    }
+    draft.status = "archived"
+    fake_st = FakeStreamlit(session_state=state)
+    _install(monkeypatch, fake_st, KnowledgeService(FakeRepository([draft])))
+
+    knowledge_hub.render()
+
+    new_widget_key = knowledge_hub._selection_widget_key([draft])
+    assert fake_st.selected_option == "Changing (archived)"
+    assert old_widget_key not in state
+    assert state[new_widget_key] == 1
+    assert state[knowledge_hub._KNOWLEDGE_SELECTED_VALUE_KEY] == 1
 
 
 def test_unknown_status_and_unknown_flash_are_never_treated_as_trusted(monkeypatch):
@@ -309,4 +415,4 @@ def test_lifecycle_failures_are_generic_and_do_not_rerun(monkeypatch, operation)
     for secret in ("password", "SQL", "token", "traceback"):
         assert secret not in fake_st.text()
     assert fake_st.rerun_calls == 0
-    assert not fake_st.session_state
+    assert knowledge_hub._KNOWLEDGE_FLASH_KEY not in fake_st.session_state

@@ -35,6 +35,7 @@ class FakeStreamlit:
         self.current_form = None
         self.widget_labels: list[str] = []
         self.selectbox_labels: list[str] = []
+        self.selected_option = None
         self.rerun_calls = 0
 
     def _record(self, kind, value):
@@ -89,7 +90,16 @@ class FakeStreamlit:
     def selectbox(self, _label, options, **kwargs):
         formatter = kwargs.get("format_func", str)
         self.selectbox_labels = [formatter(option) for option in options]
-        return self.selected_id if self.selected_id is not None else options[0]
+        key = kwargs.get("key")
+        if self.selected_id is not None:
+            selected = self.selected_id
+        elif key in self.session_state:
+            selected = self.session_state[key]
+        else:
+            selected = options[kwargs.get("index", 0)]
+        self.session_state[key] = selected
+        self.selected_option = formatter(selected)
+        return selected
 
     def text(self):
         return "\n".join(message for _, message in self.messages)
@@ -154,10 +164,17 @@ def test_empty_project_state(monkeypatch):
     assert "No projects yet" in fake_st.text()
 
 
-def test_valid_creation_shows_success_and_active_project(monkeypatch):
+def test_valid_creation_clears_form_reruns_and_selects_new_project(monkeypatch):
     repo = FakeRepository()
+    state = {
+        "project_create_name_0": "  New project  ",
+        "project_create_description_0": "  Useful  ",
+    }
     fake_st = FakeStreamlit(
-        submitted=True, name="  New project  ", description="  Useful  "
+        submitted=True,
+        name="  New project  ",
+        description="  Useful  ",
+        session_state=state,
     )
     install_fakes(monkeypatch, fake_st, ProjectService(repo))
     projects_page.render()
@@ -166,8 +183,52 @@ def test_valid_creation_shows_success_and_active_project(monkeypatch):
     assert repo.projects[0].name == "New project"
     assert repo.projects[0].description == "Useful"
     assert repo.projects[0].status == "active"
-    assert "Project created successfully." in fake_st.text()
+    assert fake_st.rerun_calls == 1
+    assert state[projects_page._PROJECT_FLASH_KEY] == (
+        "Project created successfully."
+    )
+    assert state[projects_page._PROJECT_CREATE_GENERATION_KEY] == 1
+    assert state[projects_page._PROJECT_SELECTED_VALUE_KEY] == 1
+    assert "project_create_name_0" not in state
+    assert "project_create_description_0" not in state
     assert "Name: New project" in fake_st.text()
+
+    refreshed = FakeStreamlit(session_state=state)
+    install_fakes(monkeypatch, refreshed, ProjectService(repo))
+    projects_page.render()
+    assert "Project created successfully." in refreshed.text()
+    assert refreshed.selected_option == "New project"
+    assert refreshed.rerun_calls == 0
+
+
+def test_create_captures_identifier_before_database_scope_closes(monkeypatch):
+    class ExpiringCreated:
+        expired = False
+
+        @property
+        def id(self):
+            if self.expired:
+                raise RuntimeError("detached database object")
+            return 42
+
+    created = ExpiringCreated()
+
+    class CreateService:
+        def create_project(self, _name, _description):
+            return created
+
+    @contextmanager
+    def expiring_scope():
+        try:
+            yield CreateService()
+        finally:
+            created.expired = True
+
+    fake_st = FakeStreamlit()
+    monkeypatch.setattr(projects_page, "st", fake_st)
+    monkeypatch.setattr(projects_page, "_project_service", expiring_scope)
+
+    assert projects_page._create_project("Name", "Description") == 42
 
 
 @pytest.mark.parametrize(
@@ -300,7 +361,7 @@ def test_edit_validation_has_no_success_or_rerun(monkeypatch, name, expected):
     assert repo.save_calls == 0
     assert expected in fake_st.text()
     assert fake_st.rerun_calls == 0
-    assert not fake_st.session_state
+    assert projects_page._PROJECT_FLASH_KEY not in fake_st.session_state
 
 
 def test_edit_duplicate_has_no_success_or_rerun(monkeypatch):
@@ -349,8 +410,31 @@ def test_archive_requires_confirmation_then_reruns_and_refreshes(monkeypatch):
     assert "Project archived successfully." in refreshed.text()
     assert "Status: archived" in refreshed.text()
     assert "Archived project — read-only." in refreshed.text()
+    assert refreshed.selected_option == "Alpha (archived)"
     assert "Project name" not in refreshed.widget_labels
     assert refreshed.rerun_calls == 0
+
+
+def test_selector_label_revision_keeps_project_and_drops_old_widget(monkeypatch):
+    changing = project(1, "Changing")
+    old_widget_key = projects_page._selection_widget_key([changing])
+    state = {
+        projects_page._PROJECT_SELECTED_VALUE_KEY: 1,
+        old_widget_key: 1,
+    }
+    changing.status = "archived"
+    fake_st = FakeStreamlit(session_state=state)
+    install_fakes(
+        monkeypatch, fake_st, ProjectService(FakeRepository([changing]))
+    )
+
+    projects_page.render()
+
+    new_widget_key = projects_page._selection_widget_key([changing])
+    assert fake_st.selected_option == "Changing (archived)"
+    assert old_widget_key not in state
+    assert state[new_widget_key] == 1
+    assert state[projects_page._PROJECT_SELECTED_VALUE_KEY] == 1
 
 
 def test_archived_project_is_labelled_listed_and_read_only(monkeypatch):
@@ -397,7 +481,7 @@ def test_lifecycle_failures_do_not_expose_details_or_rerun(monkeypatch, operatio
     for secret in ("password", "SQL", "token", "traceback"):
         assert secret not in fake_st.text()
     assert fake_st.rerun_calls == 0
-    assert not fake_st.session_state
+    assert projects_page._PROJECT_FLASH_KEY not in fake_st.session_state
 
 
 @pytest.mark.parametrize(

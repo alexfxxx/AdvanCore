@@ -79,6 +79,12 @@ After the one-time Python environment setup, the same local startup can be run
 with `./scripts/start-advancore.sh`. Use `--check-only` to check readiness
 without starting services.
 
+The launcher also recognises the verified legacy `advancore-postgres` local
+container. It keeps the existing database volume, stops the legacy container
+without deleting it, and starts the canonical loopback-only database service
+against the same saved data. Both the app and database listen on this Mac only.
+An ambiguous same-name container fails closed.
+
 ## Development Principles
 
 1. Build the platform before adding complex modules.
