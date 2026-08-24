@@ -6,7 +6,8 @@ import hashlib
 
 import streamlit as st
 
-from advancore.repositories import ProjectRepository
+from advancore.repositories import ActivityLogRepository, ProjectRepository
+from advancore.services.activity_service import ActivityLogService
 from advancore.services.project_service import (
     DuplicateProjectNameError,
     ProjectAlreadyArchivedError,
@@ -38,7 +39,10 @@ def _project_service() -> Iterator[ProjectService]:
     from advancore.services.database import session_scope
 
     with session_scope() as session:
-        yield ProjectService(ProjectRepository(session))
+        yield ProjectService(
+            ProjectRepository(session),
+            ActivityLogService(ActivityLogRepository(session)),
+        )
 
 
 def _create_project(name: str, description: str) -> int | None:
