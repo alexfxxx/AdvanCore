@@ -38,6 +38,8 @@ remain manual.
 - Granted only repository-content read permission.
 - Kept Codex as a replaceable local PR client rather than an AdvanCore runtime
   dependency.
+- Replaced the initial fixed test password with per-run GitHub context values
+  after the repository secret scanner flagged the static local fixture.
 
 ### Database changes
 

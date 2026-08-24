@@ -16,7 +16,7 @@ jobs:
         image: postgres:16
         env:
           POSTGRES_USER: advancore
-          POSTGRES_PASSWORD: advancore
+          POSTGRES_PASSWORD: ${{ github.run_id }}-${{ github.run_attempt }}
           POSTGRES_DB: advancore
         ports:
           - 5432:5432
@@ -26,7 +26,7 @@ jobs:
           --health-timeout 5s
           --health-retries 10
     env:
-      DATABASE_URL: postgresql+psycopg://advancore:advancore@127.0.0.1:5432/advancore
+      DATABASE_URL: postgresql+psycopg://advancore:${{ github.run_id }}-${{ github.run_attempt }}@127.0.0.1:5432/advancore
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
