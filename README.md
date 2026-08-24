@@ -130,6 +130,12 @@ for existing activity records. Event generation, audit policy, retention,
 search, export, actors, permissions, and record mutation are intentionally
 deferred.
 
+## AI Center
+
+AI Center shows the read-only owner exception inbox for governed automation.
+An all-clear state means no owner decision or controller investigation is
+waiting; the page never applies decisions or exposes raw worker evidence.
+
 ## Running tests
 
 The project uses `pytest`. Run the test suite from the repository root with:
