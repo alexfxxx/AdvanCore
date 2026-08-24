@@ -20,6 +20,36 @@ _ACTION_FILTERS = (
     "knowledge_updated",
     "knowledge_archived",
 )
+_ACTION_LABELS = {
+    "project_created": "Project created",
+    "project_updated": "Project updated",
+    "project_archived": "Project archived",
+    "knowledge_created": "Knowledge created",
+    "knowledge_updated": "Knowledge updated",
+    "knowledge_archived": "Knowledge archived",
+}
+_ENTITY_LABELS = {
+    "project": "Project",
+    "knowledge": "Knowledge",
+}
+
+
+def _readable_code(value: str | None, labels: dict[str, str]) -> str:
+    """Return a safe display label without changing the stored code."""
+    if not value:
+        return "Not provided"
+    if value in labels:
+        return labels[value]
+    readable = " ".join(value.replace("_", " ").split())
+    return readable[:1].upper() + readable[1:] if readable else "Not provided"
+
+
+def _action_label(value: str | None) -> str:
+    return _readable_code(value, _ACTION_LABELS)
+
+
+def _entity_label(value: str | None) -> str:
+    return _readable_code(value, _ENTITY_LABELS)
 
 
 def _filter_activities(activities, entity_filter: str, action_filter: str):
@@ -55,7 +85,7 @@ def render():
                     "Filter by entity type",
                     options=_ENTITY_FILTERS,
                     format_func=lambda value: (
-                        "All entities" if value == "all" else value.title()
+                        "All entities" if value == "all" else _entity_label(value)
                     ),
                     key="activity_entity_filter",
                 )
@@ -63,7 +93,7 @@ def render():
                     "Filter by action",
                     options=_ACTION_FILTERS,
                     format_func=lambda value: (
-                        "All actions" if value == "all" else value.replace("_", " ").title()
+                        "All actions" if value == "all" else _action_label(value)
                     ),
                     key="activity_action_filter",
                 )
@@ -80,7 +110,8 @@ def render():
                     "Select an activity record",
                     options=filtered_ids,
                     format_func=lambda activity_id: (
-                        f"{activity_by_id[activity_id].action} (#{activity_id})"
+                        f"{_action_label(activity_by_id[activity_id].action)} "
+                        f"(record #{activity_id})"
                     ),
                     key=f"activity_selected_id_{entity_filter}_{action_filter}",
                 )
@@ -90,8 +121,8 @@ def render():
                     return
 
                 st.subheader("Activity details")
-                st.write(f"Action: {selected.action}")
-                st.write(f"Entity type: {selected.entity_type or 'Not provided'}")
+                st.write(f"Action: {_action_label(selected.action)}")
+                st.write(f"Entity type: {_entity_label(selected.entity_type)}")
                 st.write(f"Entity ID: {selected.entity_id or 'Not provided'}")
                 st.write(f"Created: {format_utc_timestamp(selected.created_at)}")
                 st.text_area(
