@@ -157,6 +157,26 @@ class TestKnowledgeItemRepository:
 
 
 class TestActivityLogRepository:
+    def test_add_persists_minimal_activity(self, sqlite_session_factory):
+        with session_scope(sqlite_session_factory) as session:
+            repo = ActivityLogRepository(session)
+            saved = repo.add(
+                ActivityLog(
+                    action="project_created",
+                    entity_type="project",
+                    entity_id="17",
+                    details=None,
+                )
+            )
+            saved_id = saved.id
+
+        with session_scope(sqlite_session_factory) as session:
+            loaded = ActivityLogRepository(session).get_by_id(saved_id)
+            assert loaded.action == "project_created"
+            assert loaded.entity_type == "project"
+            assert loaded.entity_id == "17"
+            assert loaded.details is None
+
     def test_get_and_list_newest_first(self, sqlite_session_factory):
         older_time = datetime(2026, 8, 22, 9, 0)
         newer_time = older_time + timedelta(hours=1)
