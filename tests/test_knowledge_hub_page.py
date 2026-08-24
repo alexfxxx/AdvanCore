@@ -235,19 +235,22 @@ def test_populated_list_and_selected_read_only_detail(monkeypatch):
     assert "Status: draft" in fake_st.text()
     assert "Two" in fake_st.text()
     assert "Created: Not available" in fake_st.text()
+    assert "Last updated: Not available" in fake_st.text()
     assert "Knowledge title" in fake_st.widget_labels
     assert "Archive knowledge draft" in fake_st.widget_labels
 
 
-def test_selected_detail_uses_readable_utc_creation_time(monkeypatch):
+def test_selected_detail_uses_readable_utc_lifecycle_times(monkeypatch):
     item = _item(1)
     item.created_at = datetime(2026, 8, 23, 10, 30)
+    item.updated_at = datetime(2026, 8, 24, 11, 45)
     fake_st = FakeStreamlit(selected_id=1)
     _install(monkeypatch, fake_st, KnowledgeService(FakeRepository([item])))
 
     knowledge_hub.render()
 
     assert "Created: 23 Aug 2026, 10:30 UTC" in fake_st.text()
+    assert "Last updated: 24 Aug 2026, 11:45 UTC" in fake_st.text()
 
 
 def test_missing_selected_record_is_safe(monkeypatch):

@@ -1,6 +1,7 @@
 """Isolated tests for the Projects Streamlit presentation."""
 
 from contextlib import contextmanager, nullcontext
+from datetime import datetime
 
 import pytest
 
@@ -155,6 +156,21 @@ def test_populated_list_and_selected_project_detail(monkeypatch):
     assert "Name: Beta" in fake_st.text()
     assert "Description: Not provided" in fake_st.text()
     assert "Status: active" in fake_st.text()
+    assert "Created: Not available" in fake_st.text()
+    assert "Last updated: Not available" in fake_st.text()
+
+
+def test_project_detail_shows_readable_lifecycle_dates(monkeypatch):
+    saved = project(1, "Alpha")
+    saved.created_at = datetime(2026, 8, 22, 9, 15)
+    saved.updated_at = datetime(2026, 8, 23, 16, 45)
+    fake_st = FakeStreamlit(selected_id=1)
+    install_fakes(monkeypatch, fake_st, ProjectService(FakeRepository([saved])))
+
+    projects_page.render()
+
+    assert "Created: 22 Aug 2026, 09:15 UTC" in fake_st.text()
+    assert "Last updated: 23 Aug 2026, 16:45 UTC" in fake_st.text()
 
 
 def test_empty_project_state(monkeypatch):
