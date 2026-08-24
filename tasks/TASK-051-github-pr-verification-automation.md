@@ -47,6 +47,9 @@ None. CI uses a disposable PostgreSQL service.
 
 - Workflow YAML parse and `git diff --check`: passed.
 - Official actions are pinned to verified immutable v4/v5 tag commits.
+- Repaired independent review by selecting the installed Psycopg 3 SQLAlchemy
+  driver and preventing checkout from persisting GitHub's generated token for
+  PR test code to read.
 
 ### Decisions required
 
