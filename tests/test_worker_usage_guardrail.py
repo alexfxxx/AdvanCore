@@ -130,6 +130,32 @@ def test_kimi_automatically_refreshes_missing_usage_then_runs_as_primary(tmp_pat
     assert summary.source == "kimi-cli"
 
 
+def test_invalid_probe_bytes_fail_closed_and_leave_codex_fallback_eligible(tmp_path):
+    usage_dir = _usage_dir(tmp_path)
+    service = WorkerUsageService(tmp_path, usage_dir=usage_dir)
+    probe = service.controller_probe_path("kimi")
+    probe.parent.mkdir(parents=True)
+    probe.write_bytes(b"#!/bin/sh\nprintf '\\0377'\n")
+    probe.chmod(0o700)
+    adapter = KimiWorkerAdapter()
+
+    with patch(
+        "advancore.services.worker_usage_service._default_usage_dir",
+        return_value=usage_dir,
+    ), patch("advancore.agent_runner.worker.shutil.which", return_value="/usr/bin/kimi"), patch(
+        "advancore.agent_runner.worker._kimi_isolation_available", return_value=True
+    ), patch(
+        "advancore.agent_runner.worker.run_bounded_worker_process"
+    ) as bounded:
+        result = adapter.run("instruction", tmp_path)
+
+    assert result.success is False
+    assert result.terminal_reason == "quota_or_capacity"
+    assert classify_provider_failure(result) == ProviderFailure.QUOTA_OR_CAPACITY
+    assert "automatic provider usage refresh is invalid" in result.message
+    bounded.assert_not_called()
+
+
 def test_kimi_blocks_before_reservation_without_os_isolation(tmp_path):
     service = _record(tmp_path)
     adapter = KimiWorkerAdapter()

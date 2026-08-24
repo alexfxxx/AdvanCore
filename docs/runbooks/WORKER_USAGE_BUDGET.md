@@ -28,13 +28,13 @@ On the approved macOS execution path, `agent_runner` launches Kimi and all of it
 
 The installed Kimi CLI does not currently provide a confirmed stable machine-readable quota command. Codex desktop, another approved local controller, or a future reviewed provider adapter supplies a small trusted probe that obtains the authenticated reading without returning credentials to AdvanCore. This local capability supplies evidence only; it does not gain worker, controller, owner, publication, billing, or deployment authority.
 
-The fixed probe path is `~/Library/Application Support/AdvanCore/agent_runner/probes/kimi-usage` on macOS (or the corresponding `~/.local/state/advancore/agent_runner/probes/kimi-usage` path on other supported systems). It must be an owner-executable regular file owned by the current OS user and must not be group- or world-writable. It receives no arguments and runs with a sanitized environment. Its complete standard output must be one JSON object with exactly these fields:
+The fixed probe path is `~/Library/Application Support/AdvanCore/agent_runner/probes/kimi-usage` on macOS (or the corresponding `~/.local/state/advancore/agent_runner/probes/kimi-usage` path on other supported systems). Every directory below the protected controller root must be a real owner-controlled directory rather than a symlink. The probe must be a single-link, owner-executable regular file owned by the current OS user and must not be group- or world-writable. This prevents an implementation worker from changing the trusted executable through a repository alias. It receives no arguments and runs with a sanitized environment. Its complete standard output must be one JSON object with exactly these fields:
 
 ```json
 {"schema_version":1,"provider":"kimi","weekly_used_percent":12,"checked_at":"2026-08-28T03:00:00Z","reset_at":"2026-09-04T02:46:00Z"}
 ```
 
-The reviewed probe owns interaction with the authenticated Kimi client. It must not emit tokens, provider response bodies, browser contents or diagnostics. When evidence is missing, stale or reset-expired, `agent_runner` invokes this probe automatically before Kimi preflight. Missing, unsafe, failed or invalid probe output keeps Kimi paused and allows only the existing approved fallback evaluation.
+The reviewed probe owns interaction with the authenticated Kimi client. It must not emit tokens, provider response bodies, browser contents or diagnostics. Standard output and standard error are each capped at 16 KiB while being collected, the process group is time-bounded, and JSON is decoded only after collection succeeds. When evidence is missing, stale or reset-expired, `agent_runner` invokes this probe automatically before Kimi preflight. Missing, unsafe, failed or invalid probe output keeps Kimi paused and allows only the existing approved fallback evaluation.
 
 Record a fresh reading from the repository root:
 

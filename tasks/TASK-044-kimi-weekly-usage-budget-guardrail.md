@@ -68,6 +68,8 @@ None. Usage status and runtime accounting are local, bounded, Git-ignored JSON a
 - Fingerprint evidence across worker execution and quarantine any unexpected alteration.
 - Require an approved OS write-isolation boundary around controller state for Kimi and all descendants; fail closed before reservation if isolation is unavailable.
 - Prove the OS isolation profile can actually start before refreshing or reserving usage; executable presence alone is insufficient.
+- Reject symlinked, hard-linked, non-owner, or writable aliases anywhere in the controller probe path so a worker cannot substitute the refresh executable.
+- Bound both probe output streams while reading them, terminate oversized or timed-out probe process groups, and reject invalid bytes without escaping the fallback-eligible fail-closed result.
 - Share one provider ledger and lock across all local AdvanCore clones/worktrees.
 - Clamp launches to a guarded pre-reset deadline and carry any unexpectedly cross-reset charge into the next verified provider period.
 - Check usage before process launch; a blocked launch must not run Kimi or mutate the repository.
@@ -123,6 +125,7 @@ None. On 23 August 2026 the owner explicitly selected a 20% Kimi weekly allowanc
 - Repaired the second independent-review findings by moving to one OS-account-wide ledger, placing Kimi and its descendants under macOS write denial for controller state, failing closed without isolation, bounding launches before reset, and carrying delayed cross-reset charges forward.
 - Rechecked the absolute provider-reset deadline immediately before process creation so slow repository verification cannot start Kimi after the fresh-reading boundary.
 - Replaced the sandbox executable-presence check with a real pre-reservation capability probe, so nested-sandbox denial is classified before Kimi is invoked and the approved fallback can run.
+- Repaired the fourth independent-review findings by validating the full probe path against symlink/hard-link aliases and collecting both probe output streams under strict byte, time, decoding and process-lifecycle bounds.
 
 ### Files changed
 
@@ -143,8 +146,8 @@ None.
 
 ### Tests and results
 
-- Third-repair focused usage, worker, Dashboard, fallback and task verification: 99 passed.
-- Full project suite with the documented local PostgreSQL configuration: 787 passed.
+- Fourth-repair focused usage, worker, Dashboard, fallback and task verification: 107 passed.
+- Full project suite with the documented local PostgreSQL configuration: 795 passed.
 - Python compile/import and `git diff --check`: passed.
 - Streamlit Dashboard AppTest smoke: zero exceptions; rendered Kimi usage unavailable, policy limit 20%, and the fail-closed refresh warning expected during secure-schema transition.
 - Exact scope, unstaged/staged/new-file and controller-state checks: passed; authoritative usage evidence is outside Git and shared across checkouts.
@@ -168,4 +171,4 @@ None for implementation. Independent controller review is still required before 
 
 ### Recommended next step
 
-Commit and publish the repaired TASK-044 feature branch, then rerun independent Bugbot review before merge. Install and review the local authenticated Kimi usage probe once the official Kimi Code CLI is available; until then the existing approved Codex fallback remains eligible.
+Commit and publish the repaired TASK-044 feature branch, then rerun independent Bugbot review before merge. Kimi Code is now authenticated locally, but the current live weekly reading is 44%, so the 20% policy continues to require Codex fallback until the provider resets and the reviewed probe records a fresh below-limit reading.

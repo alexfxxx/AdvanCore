@@ -15,10 +15,13 @@ import json
 import math
 import os
 import pwd
+import selectors
+import signal
 import stat
 import subprocess
 import sys
 import tempfile
+import time
 import uuid
 from dataclasses import asdict, dataclass
 from datetime import datetime, timedelta, timezone
@@ -276,20 +279,123 @@ class WorkerUsageService:
         """Validate the fixed probe without accepting worker-controlled commands."""
         path = self.controller_probe_path(provider)
         try:
+            root = self.protected_state_root
+            relative = path.relative_to(root)
+            current = root
+            for component in relative.parts[:-1]:
+                current = current / component
+                parent_metadata = current.lstat()
+                if (
+                    stat.S_ISLNK(parent_metadata.st_mode)
+                    or not stat.S_ISDIR(parent_metadata.st_mode)
+                    or parent_metadata.st_uid != os.getuid()
+                    or parent_metadata.st_mode & (stat.S_IWGRP | stat.S_IWOTH)
+                ):
+                    raise UsageBudgetError(
+                        "automatic provider usage refresh is unsafe"
+                    )
             metadata = path.lstat()
         except OSError as exc:
             raise UsageBudgetError(
                 "automatic provider usage refresh is unavailable"
             ) from exc
+        except ValueError as exc:
+            raise UsageBudgetError(
+                "automatic provider usage refresh is unsafe"
+            ) from exc
         if (
             stat.S_ISLNK(metadata.st_mode)
             or not stat.S_ISREG(metadata.st_mode)
             or metadata.st_uid != os.getuid()
+            or metadata.st_nlink != 1
             or metadata.st_mode & (stat.S_IWGRP | stat.S_IWOTH)
             or not metadata.st_mode & stat.S_IXUSR
         ):
             raise UsageBudgetError("automatic provider usage refresh is unsafe")
+        try:
+            if path.resolve(strict=True) != path:
+                raise UsageBudgetError(
+                    "automatic provider usage refresh is unsafe"
+                )
+        except OSError as exc:
+            raise UsageBudgetError(
+                "automatic provider usage refresh is unavailable"
+            ) from exc
         return path
+
+    @staticmethod
+    def _stop_probe_process(process: subprocess.Popen[bytes]) -> None:
+        """Terminate and reap a failed probe and any descendants."""
+        try:
+            os.killpg(process.pid, signal.SIGTERM)
+        except OSError:
+            pass
+        try:
+            process.wait(timeout=0.5)
+        except subprocess.TimeoutExpired:
+            try:
+                os.killpg(process.pid, signal.SIGKILL)
+            except OSError:
+                pass
+            try:
+                process.wait(timeout=0.5)
+            except subprocess.TimeoutExpired:
+                pass
+
+    def _run_controller_probe(
+        self, probe: Path, environment: dict[str, str]
+    ) -> tuple[int, bytes, bytes]:
+        """Run a probe while bounding both output streams during collection."""
+        process: subprocess.Popen[bytes] | None = None
+        selector = selectors.DefaultSelector()
+        stdout = bytearray()
+        stderr = bytearray()
+        completed = False
+        try:
+            process = subprocess.Popen(
+                [str(probe)],
+                cwd=self.protected_state_root,
+                env=environment,
+                stdin=subprocess.DEVNULL,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                start_new_session=True,
+            )
+            if process.stdout is None or process.stderr is None:
+                raise UsageBudgetError("automatic provider usage refresh failed")
+            selector.register(process.stdout, selectors.EVENT_READ, stdout)
+            selector.register(process.stderr, selectors.EVENT_READ, stderr)
+            deadline = time.monotonic() + USAGE_PROBE_TIMEOUT_SECONDS
+            while selector.get_map():
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    raise UsageBudgetError("automatic provider usage refresh failed")
+                events = selector.select(remaining)
+                if not events:
+                    raise UsageBudgetError("automatic provider usage refresh failed")
+                for key, _ in events:
+                    chunk = os.read(key.fd, 4096)
+                    if not chunk:
+                        selector.unregister(key.fileobj)
+                        continue
+                    output: bytearray = key.data
+                    output.extend(chunk)
+                    if len(output) > MAX_USAGE_PROBE_OUTPUT_BYTES:
+                        raise UsageBudgetError(
+                            "automatic provider usage refresh failed"
+                        )
+            remaining = max(0.01, deadline - time.monotonic())
+            returncode = process.wait(timeout=remaining)
+            completed = True
+            return returncode, bytes(stdout), bytes(stderr)
+        except (OSError, subprocess.SubprocessError) as exc:
+            raise UsageBudgetError(
+                "automatic provider usage refresh failed"
+            ) from exc
+        finally:
+            selector.close()
+            if process is not None and not completed:
+                self._stop_probe_process(process)
 
     def refresh_from_controller_probe(self, provider: str = "kimi") -> UsageSnapshot:
         """Refresh bounded evidence through a fixed, trusted local probe.
@@ -306,28 +412,12 @@ class WorkerUsageService:
             "PATH": "/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin",
             "LANG": "C.UTF-8",
         }
-        try:
-            completed = subprocess.run(
-                [str(probe)],
-                cwd=self.protected_state_root,
-                env=environment,
-                capture_output=True,
-                text=True,
-                check=False,
-                timeout=USAGE_PROBE_TIMEOUT_SECONDS,
-            )
-        except (OSError, subprocess.SubprocessError) as exc:
-            raise UsageBudgetError(
-                "automatic provider usage refresh failed"
-            ) from exc
-        if (
-            completed.returncode != 0
-            or len(completed.stdout.encode("utf-8")) > MAX_USAGE_PROBE_OUTPUT_BYTES
-        ):
+        returncode, stdout, stderr = self._run_controller_probe(probe, environment)
+        if returncode != 0 or stderr:
             raise UsageBudgetError("automatic provider usage refresh failed")
         try:
-            payload = json.loads(completed.stdout)
-        except json.JSONDecodeError as exc:
+            payload = json.loads(stdout.decode("utf-8"))
+        except (UnicodeDecodeError, json.JSONDecodeError) as exc:
             raise UsageBudgetError(
                 "automatic provider usage refresh is invalid"
             ) from exc
@@ -358,6 +448,8 @@ class WorkerUsageService:
         summary = self.get_summary(provider)
         if summary.state != UsageState.UNAVAILABLE:
             return summary
+        if summary.message == "usage accounting is busy":
+            raise UsageBudgetError("automatic provider usage refresh is busy")
         self.refresh_from_controller_probe(provider)
         return self.get_summary(provider)
 
