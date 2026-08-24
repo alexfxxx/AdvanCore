@@ -93,6 +93,7 @@ from advancore.agent_runner.review_bundle import (
     load_review_bundle,
 )
 from advancore.agent_runner.task import Task, TaskError, find_task
+from advancore.agent_runner.standing_authority import StandingAuthorityService
 from advancore.agent_runner.validation import (
     OwnerReworkEvidence,
     REWORK_TERMINAL_HASH_PREFIX,
@@ -111,6 +112,7 @@ from advancore.agent_runner.worker import (
     validate_worker_policy,
     validate_planner_policy,
 )
+from advancore.agent_runner.worker_routing import build_kimi_first_worker_route
 
 
 # ---------------------------------------------------------------------------
@@ -202,6 +204,7 @@ class OrchestrationConfig:
     owner_action: OwnerAction | str | None = None
     owner_note: str | None = None
     resume_overrides: tuple[str, ...] = ()
+    unattended: bool = False
 
     def __post_init__(self):
         """Clamp budgets to approved bounds."""
@@ -221,6 +224,12 @@ class OrchestrationConfig:
             validate_worker_timeout(self.worker_timeout_seconds)
         except Exception as exc:
             raise OrchestrationError(str(exc)) from exc
+        if self.unattended and (
+            self.worker != "kimi-swarm" or self.fallback_worker != "codex"
+        ):
+            raise OrchestrationError(
+                "Unattended mode requires worker kimi-swarm and fallback-worker codex"
+            )
 
         if self.owner_action is not None:
             try:
@@ -270,6 +279,7 @@ class OrchestrationCheckpoint:
     planner_timeout_seconds: int = DEFAULT_PLANNER_TIMEOUT_SECONDS
     worker_timeout_seconds: int = DEFAULT_WORKER_TIMEOUT_SECONDS
     fallback_worker: str | None = None
+    unattended: bool = False
     completed_phases: list[str] = field(default_factory=list)
     status: str = OrchestrationStatus.AWAITING_TASK_APPROVAL.value
     branch: str | None = None
@@ -971,6 +981,7 @@ def _new_checkpoint(config: OrchestrationConfig, repo_root: Path) -> Orchestrati
         planner_timeout_seconds=config.planner_timeout_seconds,
         worker=config.worker,
         fallback_worker=config.fallback_worker,
+        unattended=config.unattended,
         controller=config.controller,
         repair_attempts=config.repair_attempts,
         max_rework=config.max_rework,
@@ -1685,17 +1696,28 @@ def _phase_task_execution(
         )
 
     allowed_scope = parse_task_allowed_scope(task.path) or []
-    worker = build_worker_adapter(
-        config.worker, allowed_scope=allowed_scope,
-        timeout_seconds=config.worker_timeout_seconds,
-    )
-    fallback_worker = (
-        build_worker_adapter(
-            config.fallback_worker, allowed_scope=allowed_scope,
+    if config.unattended:
+        route = build_kimi_first_worker_route(
+            task_id=checkpoint.task_id,
+            branch=checkpoint.branch or "",
+            authority=StandingAuthorityService(repo_root),
+            allowed_scope=allowed_scope,
             timeout_seconds=config.worker_timeout_seconds,
         )
-        if config.fallback_worker else None
-    )
+        worker = route.primary
+        fallback_worker = route.fallback
+    else:
+        worker = build_worker_adapter(
+            config.worker, allowed_scope=allowed_scope,
+            timeout_seconds=config.worker_timeout_seconds,
+        )
+        fallback_worker = (
+            build_worker_adapter(
+                config.fallback_worker, allowed_scope=allowed_scope,
+                timeout_seconds=config.worker_timeout_seconds,
+            )
+            if config.fallback_worker else None
+        )
 
     if not config.apply:
         return _build_result(
@@ -2375,6 +2397,7 @@ def run_orchestration(
             "--repair-attempts": "repair_attempts",
             "--max-rework": "max_rework",
             "--worker-timeout": "worker_timeout_seconds",
+            "--unattended": "unattended",
         }
         conflicting_overrides = tuple(
             flag
@@ -2399,6 +2422,7 @@ def run_orchestration(
             repair_attempts=checkpoint.repair_attempts,
             max_rework=checkpoint.max_rework,
             worker_timeout_seconds=checkpoint.worker_timeout_seconds,
+            unattended=checkpoint.unattended,
             apply=config.apply,
             owner_action=config.owner_action,
             owner_note=config.owner_note,
