@@ -206,6 +206,7 @@ def test_successful_edit_reruns_and_refreshed_screen_shows_saved_values(monkeypa
     state = {
         "knowledge_edit_title_1": "  Updated  ",
         "knowledge_edit_content_1": "  New content  ",
+        "knowledge_content_1": "Old",
     }
     submitted = FakeStreamlit(
         selected_id=1,
@@ -228,6 +229,7 @@ def test_successful_edit_reruns_and_refreshed_screen_shows_saved_values(monkeypa
     )
     assert "knowledge_edit_title_1" not in state
     assert "knowledge_edit_content_1" not in state
+    assert "knowledge_content_1" not in state
 
     refreshed = FakeStreamlit(selected_id=1, session_state=state)
     _install(monkeypatch, refreshed, KnowledgeService(repo))

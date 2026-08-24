@@ -170,6 +170,7 @@ def _render_items() -> None:
                         clear_session_keys=(
                             f"knowledge_edit_title_{selected.id}",
                             f"knowledge_edit_content_{selected.id}",
+                            f"knowledge_content_{selected.id}",
                         ),
                     )
 
