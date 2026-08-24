@@ -3,10 +3,12 @@
 from collections.abc import Sequence
 
 import pytest
+from sqlalchemy import create_engine, select
 from sqlalchemy.exc import IntegrityError
 
-from advancore.models import Project
+from advancore.models import Base, Project
 from advancore.repositories import ProjectRepository
+from advancore.services.database import create_session_factory, session_scope
 from advancore.services.project_service import (
     DuplicateProjectNameError,
     ProjectAlreadyArchivedError,
@@ -51,6 +53,17 @@ class FakeProjectRepository(ProjectRepository):
         if self.save_error:
             raise self.save_error
         return project
+
+
+class FakeActivityService:
+    def __init__(self):
+        self.calls = []
+        self.error = None
+
+    def record_activity(self, action, entity_type, entity_id):
+        self.calls.append((action, entity_type, entity_id))
+        if self.error:
+            raise self.error
 
 
 def test_create_project_normalizes_fields_and_defaults_active():
@@ -241,3 +254,58 @@ def test_archive_failure_restores_active_status():
     with pytest.raises(RuntimeError):
         ProjectService(repo).archive_project(item.id)
     assert item.status == "active"
+
+
+def test_successful_mutations_record_exact_minimal_project_events():
+    repo = FakeProjectRepository()
+    activity = FakeActivityService()
+    service = ProjectService(repo, activity)
+
+    created = service.create_project("Recorded", "Private description")
+    service.edit_project(created.id, "Recorded update", "Changed")
+    service.archive_project(created.id)
+
+    assert activity.calls == [
+        ("project_created", "project", created.id),
+        ("project_updated", "project", created.id),
+        ("project_archived", "project", created.id),
+    ]
+    assert all("Private" not in str(call) for call in activity.calls)
+
+
+@pytest.mark.parametrize("operation", ["edit", "archive"])
+def test_activity_failure_restores_project_mutation_state(operation):
+    repo = FakeProjectRepository()
+    item = ProjectService(repo).create_project("Original", "Details")
+    activity = FakeActivityService()
+    activity.error = RuntimeError("activity unavailable")
+    service = ProjectService(repo, activity)
+
+    with pytest.raises(RuntimeError, match="activity unavailable"):
+        if operation == "edit":
+            service.edit_project(item.id, "Changed", "New")
+        else:
+            service.archive_project(item.id)
+
+    assert (item.name, item.description, item.status) == (
+        "Original",
+        "Details",
+        "active",
+    )
+
+
+def test_activity_failure_rolls_back_database_project_insert():
+    engine = create_engine("sqlite:///:memory:")
+    Base.metadata.create_all(engine)
+    session_factory = create_session_factory(engine)
+    activity = FakeActivityService()
+    activity.error = RuntimeError("activity unavailable")
+
+    with pytest.raises(RuntimeError, match="activity unavailable"):
+        with session_scope(session_factory) as session:
+            ProjectService(ProjectRepository(session), activity).create_project(
+                "Rolled back"
+            )
+
+    with session_scope(session_factory) as session:
+        assert session.scalars(select(Project)).all() == []

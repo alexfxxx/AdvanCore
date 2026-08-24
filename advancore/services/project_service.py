@@ -10,6 +10,7 @@ from sqlalchemy.exc import IntegrityError
 
 from advancore.models import Project
 from advancore.repositories import ProjectRepository
+from advancore.services.activity_service import ActivityLogService
 
 
 class ProjectValidationError(ValueError):
@@ -39,8 +40,17 @@ class ProjectService:
     tested with a fake or in-memory repository without a live database.
     """
 
-    def __init__(self, project_repository: ProjectRepository):
+    def __init__(
+        self,
+        project_repository: ProjectRepository,
+        activity_service: ActivityLogService | None = None,
+    ):
         self._repo = project_repository
+        self._activity_service = activity_service
+
+    def _record_activity(self, action: str, project_id: int) -> None:
+        if self._activity_service is not None:
+            self._activity_service.record_activity(action, "project", project_id)
 
     @staticmethod
     def _normalize_fields(
@@ -80,11 +90,13 @@ class ProjectService:
             status="active",
         )
         try:
-            return self._repo.add(project)
+            saved = self._repo.add(project)
         except IntegrityError as exc:
             raise DuplicateProjectNameError(
                 "A project with this exact name already exists."
             ) from exc
+        self._record_activity("project_created", saved.id)
+        return saved
 
     def edit_project(
         self, project_id: int, name: str, description: str | None = None
@@ -111,12 +123,18 @@ class ProjectService:
         project.name = normalized_name
         project.description = normalized_description
         try:
-            return self._repo.save(project)
+            saved = self._repo.save(project)
         except IntegrityError as exc:
             project.name, project.description = previous
             raise DuplicateProjectNameError(
                 "A project with this exact name already exists."
             ) from exc
+        try:
+            self._record_activity("project_updated", saved.id)
+        except Exception:
+            project.name, project.description = previous
+            raise
+        return saved
 
     def archive_project(self, project_id: int) -> Project:
         """Persist the one-way active-to-archived lifecycle transition."""
@@ -132,10 +150,16 @@ class ProjectService:
 
         project.status = "archived"
         try:
-            return self._repo.save(project)
+            saved = self._repo.save(project)
         except Exception:
             project.status = "active"
             raise
+        try:
+            self._record_activity("project_archived", saved.id)
+        except Exception:
+            project.status = "active"
+            raise
+        return saved
 
     def get_project(self, project_id: int) -> Project | None:
         """Retrieve a project by its primary key."""

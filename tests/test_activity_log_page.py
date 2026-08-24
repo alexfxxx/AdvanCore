@@ -11,10 +11,12 @@ from advancore.services.activity_service import ActivityLogService
 
 
 class FakeStreamlit:
-    def __init__(self, selected_id=None):
+    def __init__(self, selected_id=None, selected_filters=None):
         self.selected_id = selected_id
+        self.selected_filters = dict(selected_filters or {})
         self.messages = []
         self.spinner_labels = []
+        self.selectbox_options = {}
 
     def _record(self, kind, value):
         self.messages.append((kind, str(value)))
@@ -28,8 +30,11 @@ class FakeStreamlit:
     def spinner(self, label):
         self.spinner_labels.append(label)
         return nullcontext()
-    def selectbox(self, _label, options, **_kwargs):
-        return self.selected_id if self.selected_id is not None else options[0]
+    def selectbox(self, label, options, **_kwargs):
+        self.selectbox_options[label] = list(options)
+        if label == "Select an activity record" and self.selected_id is not None:
+            return self.selected_id
+        return self.selected_filters.get(label, options[0])
     def text_area(self, label, **kwargs):
         self._record(label, kwargs.get("value", ""))
         return kwargs.get("value", "")
@@ -126,6 +131,39 @@ def test_missing_selected_record_is_safe(monkeypatch):
     _install(monkeypatch, fake_st, MissingService())
     activity_log.render()
     assert "selected activity record could not be found" in fake_st.text()
+
+
+def test_entity_and_action_filters_bound_the_selectable_records(monkeypatch):
+    records = [
+        _activity(3, "knowledge_archived", entity_type="knowledge"),
+        _activity(2, "project_archived", entity_type="project"),
+        _activity(1, "project_created", entity_type="project"),
+    ]
+    fake_st = FakeStreamlit(
+        selected_filters={
+            "Filter by entity type": "project",
+            "Filter by action": "project_archived",
+        }
+    )
+    _install(monkeypatch, fake_st, ActivityLogService(FakeRepository(records)))
+
+    activity_log.render()
+
+    assert fake_st.selectbox_options["Select an activity record"] == [2]
+    assert "Action: project_archived" in fake_st.text()
+
+
+def test_filters_have_clear_empty_state(monkeypatch):
+    records = [_activity(1, "knowledge_created", entity_type="knowledge")]
+    fake_st = FakeStreamlit(
+        selected_filters={"Filter by entity type": "project"}
+    )
+    _install(monkeypatch, fake_st, ActivityLogService(FakeRepository(records)))
+
+    activity_log.render()
+
+    assert "No activity records match the selected filters." in fake_st.text()
+    assert "Select an activity record" not in fake_st.selectbox_options
 
 
 @pytest.mark.parametrize("operation", ["list", "get"])

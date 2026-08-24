@@ -6,7 +6,8 @@ import hashlib
 
 import streamlit as st
 
-from advancore.repositories import KnowledgeItemRepository
+from advancore.repositories import ActivityLogRepository, KnowledgeItemRepository
+from advancore.services.activity_service import ActivityLogService
 from advancore.services.knowledge_service import (
     KnowledgeAlreadyArchivedError,
     KnowledgeNotFoundError,
@@ -35,7 +36,10 @@ def _knowledge_service() -> Iterator[KnowledgeService]:
     from advancore.services.database import session_scope
 
     with session_scope() as session:
-        yield KnowledgeService(KnowledgeItemRepository(session))
+        yield KnowledgeService(
+            KnowledgeItemRepository(session),
+            ActivityLogService(ActivityLogRepository(session)),
+        )
 
 
 def _create_draft(title: str, content: str) -> int | None:

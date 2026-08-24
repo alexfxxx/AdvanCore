@@ -9,6 +9,28 @@ from advancore.repositories import ActivityLogRepository
 from advancore.services.activity_service import ActivityLogService
 
 
+_ENTITY_FILTERS = ("all", "project", "knowledge")
+_ACTION_FILTERS = (
+    "all",
+    "project_created",
+    "project_updated",
+    "project_archived",
+    "knowledge_created",
+    "knowledge_updated",
+    "knowledge_archived",
+)
+
+
+def _filter_activities(activities, entity_filter: str, action_filter: str):
+    """Apply exact approved filters without changing the underlying records."""
+    return [
+        activity
+        for activity in activities
+        if (entity_filter == "all" or activity.entity_type == entity_filter)
+        and (action_filter == "all" or activity.action == action_filter)
+    ]
+
+
 @contextmanager
 def _activity_service() -> Iterator[ActivityLogService]:
     from advancore.services.database import session_scope
@@ -28,14 +50,38 @@ def render():
                     st.info("No activity records are available.")
                     return
 
+                entity_filter = st.selectbox(
+                    "Filter by entity type",
+                    options=_ENTITY_FILTERS,
+                    format_func=lambda value: (
+                        "All entities" if value == "all" else value.title()
+                    ),
+                    key="activity_entity_filter",
+                )
+                action_filter = st.selectbox(
+                    "Filter by action",
+                    options=_ACTION_FILTERS,
+                    format_func=lambda value: (
+                        "All actions" if value == "all" else value.replace("_", " ").title()
+                    ),
+                    key="activity_action_filter",
+                )
+                filtered_activities = _filter_activities(
+                    activities, entity_filter, action_filter
+                )
+                if not filtered_activities:
+                    st.info("No activity records match the selected filters.")
+                    return
+
                 activity_by_id = {activity.id: activity for activity in activities}
+                filtered_ids = [activity.id for activity in filtered_activities]
                 selected_id = st.selectbox(
                     "Select an activity record",
-                    options=list(activity_by_id),
+                    options=filtered_ids,
                     format_func=lambda activity_id: (
                         f"{activity_by_id[activity_id].action} (#{activity_id})"
                     ),
-                    key="activity_selected_id",
+                    key=f"activity_selected_id_{entity_filter}_{action_filter}",
                 )
                 selected = service.get_activity(selected_id)
                 if selected is None:
