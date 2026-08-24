@@ -1,73 +1,115 @@
 # AdvanCore Current State
 
-Status date: 2026-08-20
+Status date: 2026-08-24
 
-## Repository overview
-AdvanCore is currently a small platform-foundation repository rather than a full ERP implementation.
+## Summary
 
-## Current technology stack
-- Python 3.10.9
-- Streamlit 1.61.1
-- SQLAlchemy 2.0.52
-- python-dotenv 1.2.2
-- psycopg 3.3.4
-- PostgreSQL 16 target database through DATABASE_URL
-- Docker local environment
-- GitHub version control
+FACT: AdvanCore is now a usable local v0.1 platform foundation with bounded
+Projects and Knowledge workflows, lifecycle activity visibility, a customizable
+command center, local readiness support, and an exception-based agent-control
+system.
 
-## Existing application structure
-The root `app.py` provides Streamlit navigation for:
-- Dashboard
-- Knowledge Hub
-- Projects
-- AI Center
-- Activity Log
-- Settings
+FACT: It is not yet a production transport ERP. Customer, route, driver, fleet,
+finance, payroll, invoicing, and profitability functions remain possible future
+modules rather than implemented business capabilities.
 
-## Existing data models
-Current SQLAlchemy models include:
-- Project
-- KnowledgeItem
-- ActivityLog
-- SystemSetting
-- shared Base model
+## Technology and persistence
 
-## Existing service layer
-`advancore/services/database.py`:
-- loads environment variables
-- requires DATABASE_URL
-- creates a SQLAlchemy engine
-- provides a database connectivity check
-- provides `initialize_database()` using `Base.metadata.create_all()`
+- Python 3.10, Streamlit, SQLAlchemy, psycopg, and PostgreSQL 16.
+- PostgreSQL stores operational application data through `DATABASE_URL`.
+- Alembic owns schema migration history and includes a baseline migration.
+- Docker Compose and `scripts/start-advancore.sh` support the consolidated local
+  environment without deleting the saved legacy database volume.
+- GitHub stores approved code, task specifications, architecture decisions,
+  tests, and runbooks.
 
-## Existing repository support
-- Docker compose configuration exists.
-- requirements.txt exists.
-- tests/ exists but contains only an empty `tests/_init_.py` with a non-standard filename; pytest is not installed in `.venv`.
-- docs/ exists but contains only README placeholders in each subdirectory.
-- `.agents/skills/developing-with-streamlit` is a symlink into `.venv` and points to the Streamlit package's bundled skill.
+## Usable local application
 
-## Current maturity assessment
-FACT: This is an early foundation (v0.1 / Gate 0 direction), not yet a transport ERP.
-FACT: The project already has the right broad separation of UI, models and services for incremental expansion.
-FACT: The database layer currently uses direct metadata creation rather than an explicit migration workflow.
-INFERENCE: Introducing controlled migrations should happen before significant production schema growth.
-INFERENCE: Test coverage should be strengthened before agents are allowed to make larger autonomous changes.
+The Streamlit application currently provides:
 
-## Immediate risks
-1. Autonomous agents could over-expand scope if given open-ended requests.
-2. Schema growth without migrations could become difficult to control.
-3. **No real tests exist** (`tests/_init_.py` is empty and misnamed), reducing confidence in automated refactoring.
-4. Business and compliance rules are not yet represented in a structured approved knowledge system.
-5. `docker-compose.yml` contains a hard-coded local password; production deployments must use injected secrets, not this file.
-6. No migration framework is in place; schema changes currently rely on `Base.metadata.create_all()`.
+- Executive Command Center: light responsive layout, real platform counts,
+  Kimi usage-policy visibility, AI worker-role visibility, and persistent
+  show/hide preferences for approved modules and worker cards.
+- Projects: create, list, select, edit, and explicitly archive projects, with
+  archived records retained as read-only.
+- Knowledge Hub: create, list, select, edit, and explicitly archive knowledge
+  drafts, with archived records retained as read-only.
+- Activity Log: read-only lifecycle records with entity and action filters.
+- AI Center: read-only owner exception inbox for governed automation.
+- Settings: read-only local application and database readiness.
 
-## Recommended next sequence
-1. Review and approve the repository audit (TASK-001).
-2. Fix the test package name (`tests/__init__.py`) and install pytest in `.venv`.
-3. Establish migration strategy and baseline tests.
-4. Define core entities and shared conventions.
-5. Implement business modules one bounded task at a time.
+Project and Knowledge mutations immediately refresh their visible saved state
+and record bounded lifecycle activity. The interface uses no placeholder
+financial, route, vehicle, driver, or customer figures.
 
-## Owner decisions not yet required
-No major architecture rewrite is required at this stage. The existing foundation should be preserved until TASK-001 is completed and reviewed.
+## Governed AI development control
+
+The repository contains the governed path from owner goal to bounded task,
+worker execution, verification, repair, controller review, and safe feature-
+branch publication. The permanent boundaries are:
+
+- `agent_runner` remains the execution authority boundary.
+- Kimi/Kimi-Swarm is the primary implementation worker while its authoritative
+  weekly usage reading is fresh and within the approved 20% / 60-minute policy.
+- Codex or another allowlisted worker may be used only through the governed
+  fallback route.
+- Worker inputs use explicit data-access boundaries rather than inheriting the
+  controller's complete environment.
+- GitHub remains source of truth, and critical or ambiguous work fails closed.
+- Owner involvement is intended to be exception-based, not stage-by-stage.
+
+## Verification state
+
+FACT: The full repository test suite passed with 926 tests on 24 August 2026
+after TASK-068.
+
+Coverage includes models, repositories, services, pages, migrations, local
+startup, agent-runner governance, orchestration, worker routing and fallback,
+usage guardrails, activity recording, dashboard preferences, and the local UI
+theme. Pull requests also run GitHub verification and secret scanning.
+
+## Current maturity and boundaries
+
+FACT: The integration branch is `projects-lifecycle-recovery`; it is not
+production and has not been merged into `main`.
+
+FACT: The current application is designed for one local owner. There is no
+real multi-user login, role/permission model, public network exposure, Android
+deployment, or production operations environment.
+
+FACT: Knowledge review/approval, project linking in the user interface,
+search, attachments, source metadata, restore/delete flows, and advanced
+business reporting remain deferred.
+
+INFERENCE: The platform foundation is strong enough for the next bounded
+business slice, but the owner must choose which real workflow delivers the
+most value before its rules or data model are implemented.
+
+## Immediate risks and limitations
+
+1. Public or phone access would be unsafe without a separately designed
+   authentication, authorization, network, and deployment boundary.
+2. Provider quota data is not universally available: AdvanCore must not invent
+   Codex usage and must keep Kimi paused when its authoritative reading is stale.
+3. The existing local example database password must never be reused for a
+   production environment.
+4. Commercial, transport, employment, tax, and compliance rules are not yet
+   approved in enough detail for autonomous implementation.
+5. The growing integration branch still needs an explicit release review before
+   any future merge to `main` or deployment.
+
+## Recommended next choices
+
+No architecture rewrite is required. The next owner discussion should choose
+one of these bounded directions:
+
+1. Define real authentication and safe mobile access before exposing the app
+   beyond this Mac.
+2. Define the Knowledge review/approval workflow so draft information can
+   become governed official knowledge.
+3. Select one real business vertical slice—such as customer/contracts, routes,
+   fleet, or purchase-order monitoring—and supply the minimum confirmed rules
+   and sample fields needed for its task specification.
+
+Until one of those choices is approved, workers can continue safe maintenance,
+documentation, test, and usability repairs without inventing business policy.
