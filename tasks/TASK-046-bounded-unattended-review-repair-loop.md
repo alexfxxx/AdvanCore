@@ -76,6 +76,7 @@ None.
 ### Tests executed and results
 
 - Focused standing-authority plus unattended-review suites: 23 passed.
+- Full project suite: 821 passed.
 - Python compile and `git diff --check`: passed.
 
 ### Decisions required
