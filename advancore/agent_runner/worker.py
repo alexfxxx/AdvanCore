@@ -3,15 +3,25 @@
 from __future__ import annotations
 
 import shutil
+import math
 import os
+import pwd
 import re
 import signal
 import subprocess
+import tempfile
 import time
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import ClassVar
+
+from advancore.services.worker_usage_service import (
+    UsageBudgetError,
+    UsagePreflight,
+    WorkerUsageService,
+)
 
 
 class WorkerError(Exception):
@@ -40,6 +50,212 @@ WORKER_TERMINATION_GRACE_SECONDS = 1
 WORKER_RECOVERY_ACTION = (
     "Explicitly resume or start a separately reviewed worker invocation."
 )
+KIMI_EXECUTABLE = "kimi"
+KIMI_SANDBOX_EXECUTABLE = Path("/usr/bin/sandbox-exec")
+KIMI_SANDBOX_PROBE_TIMEOUT_SECONDS = 5
+KIMI_SANDBOX_PROBE_PROFILE = (
+    '(version 1) (allow default) '
+    '(deny file-write* (require-not (subpath "/private/tmp")))'
+)
+KIMI_RUNTIME_PATH = "/usr/bin:/bin:/usr/sbin:/sbin"
+KIMI_INHERITED_LOCALE_VARIABLES: tuple[str, ...] = (
+    "LANG",
+    "LC_ALL",
+    "LC_CTYPE",
+    "TZ",
+)
+
+
+def _kimi_isolation_available() -> bool:
+    """Prove that the approved local Kimi OS confinement can actually start."""
+    if not KIMI_SANDBOX_EXECUTABLE.is_file():
+        return False
+    try:
+        completed = subprocess.run(
+            [
+                str(KIMI_SANDBOX_EXECUTABLE),
+                "-p",
+                KIMI_SANDBOX_PROBE_PROFILE,
+                "/usr/bin/true",
+            ],
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            check=False,
+            timeout=KIMI_SANDBOX_PROBE_TIMEOUT_SECONDS,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return False
+    return completed.returncode == 0
+
+
+def _sandbox_literal(path: Path) -> str:
+    return str(path).replace("\\", "\\\\").replace('"', '\\"')
+
+
+def _kimi_environment(scratch_dir: Path) -> dict[str, str]:
+    """Return a minimal fixed environment for one governed Kimi launch.
+
+    The controller environment can contain unrelated provider, database, GitHub,
+    proxy, and loader credentials.  A governed implementation worker receives
+    only fixed runtime paths plus non-sensitive locale values; any future
+    task-required credential must cross a separately approved capability
+    boundary instead of being inherited implicitly.
+    """
+    account = pwd.getpwuid(os.getuid())
+    account_home = Path(account.pw_dir).resolve()
+    environment = {
+        "HOME": str(account_home),
+        "USER": account.pw_name,
+        "LOGNAME": account.pw_name,
+        "PATH": KIMI_RUNTIME_PATH,
+        "KIMI_CODE_HOME": str(account_home / ".kimi-code"),
+        "KIMI_DISABLE_TELEMETRY": "1",
+        "TMPDIR": str(scratch_dir),
+        "TMP": str(scratch_dir),
+        "TEMP": str(scratch_dir),
+        "XDG_CACHE_HOME": str(scratch_dir / "cache"),
+    }
+    for name in KIMI_INHERITED_LOCALE_VARIABLES:
+        value = os.environ.get(name)
+        if value:
+            environment[name] = value
+    return environment
+
+
+def _isolate_kimi_command(
+    command: list[str],
+    service: WorkerUsageService | None,
+    working_dir: Path,
+    scratch_dir: Path,
+) -> list[str]:
+    """Confine Kimi writes to the repository and reviewed runtime paths."""
+    if service is None:
+        return command
+    account_home = Path(pwd.getpwuid(os.getuid()).pw_dir).resolve()
+    kimi_home = account_home / ".kimi-code"
+    repo_root = working_dir.resolve(strict=True)
+    writable_subpaths = (
+        repo_root,
+        scratch_dir.resolve(strict=True),
+        kimi_home / "cache",
+        kimi_home / "logs",
+        kimi_home / "sessions",
+        kimi_home / "user-history",
+    )
+    writable_literals = (kimi_home / "session_index.jsonl",)
+    allow_filters = " ".join(
+        [f'(subpath "{_sandbox_literal(path)}")' for path in writable_subpaths]
+        + [f'(literal "{_sandbox_literal(path)}")' for path in writable_literals]
+    )
+    protected_subpaths = (
+        service.protected_state_root,
+        repo_root / ".git",
+        repo_root / ".agent_runner",
+        repo_root / ".venv",
+        repo_root / "venv",
+        repo_root / "env",
+        repo_root / ".tox",
+        repo_root / ".nox",
+        repo_root / ".direnv",
+        repo_root / "node_modules",
+        repo_root / ".aws",
+        repo_root / ".ssh",
+        repo_root / ".kube",
+        repo_root / ".docker",
+        kimi_home / "bin",
+        kimi_home / "credentials",
+        kimi_home / "oauth",
+        kimi_home / "plugins",
+        kimi_home / "skills",
+        kimi_home / "updates",
+        Path("/opt/homebrew"),
+        Path("/usr/local"),
+    )
+    protected_literals = (
+        repo_root / ".env",
+        repo_root / ".netrc",
+        repo_root / ".npmrc",
+        repo_root / ".pypirc",
+        repo_root / ".python-version",
+        repo_root / ".tool-versions",
+    )
+    deny_filters = " ".join(
+        [
+            f'(deny file-write* (require-any '
+            f'(literal "{_sandbox_literal(path)}") '
+            f'(subpath "{_sandbox_literal(path)}")))'
+            for path in protected_subpaths
+        ]
+        + [
+            f'(deny file-write* (literal "{_sandbox_literal(path)}"))'
+            for path in protected_literals
+        ]
+    )
+    profile = (
+        "(version 1) (allow default) "
+        "(deny file-link) "
+        f"(deny file-write* (require-not (require-any {allow_filters}))) "
+        f"{deny_filters}"
+    )
+    return [str(KIMI_SANDBOX_EXECUTABLE), "-p", profile, *command]
+
+
+def _kimi_usage_preflight(
+    executable: str,
+    working_dir: Path,
+    timeout_seconds: int,
+) -> tuple[WorkerUsageService | None, UsagePreflight | None, WorkerResult | None]:
+    """Enforce the production Kimi budget before process launch.
+
+    Custom executable overrides exist only as an injected deterministic test seam;
+    registered production adapters always use the fixed ``kimi`` executable.
+    """
+    if executable != KIMI_EXECUTABLE:
+        return None, None, None
+    if not _kimi_isolation_available():
+        return None, None, WorkerResult(
+            success=False,
+            message="provider quota/capacity paused: Kimi OS isolation is unavailable",
+            terminal_reason="quota_or_capacity",
+            timeout_seconds=timeout_seconds,
+        )
+    service = WorkerUsageService(working_dir)
+    try:
+        service.auto_refresh_if_needed("kimi")
+        preflight = service.preflight("kimi", timeout_seconds)
+    except UsageBudgetError as exc:
+        message = str(exc)
+        if not message.startswith("provider quota/capacity paused:"):
+            message = f"provider quota/capacity paused: {message}"
+        return service, None, WorkerResult(
+            success=False,
+            message=message,
+            terminal_reason="quota_or_capacity",
+            timeout_seconds=timeout_seconds,
+        )
+    return service, preflight, None
+
+
+def _record_kimi_runtime(
+    result: WorkerResult,
+    service: WorkerUsageService | None,
+    preflight: UsagePreflight | None,
+    elapsed_seconds: float,
+) -> WorkerResult:
+    """Record bounded Kimi runtime and fail closed if accounting is ambiguous."""
+    if service is None or preflight is None:
+        return result
+    try:
+        service.record_runtime("kimi", elapsed_seconds, preflight)
+    except UsageBudgetError:
+        result.message = (
+            f"{result.message}; provider quota/capacity runtime accounting failed"
+        )
+        if result.terminal_reason not in {"timeout", "cancelled"}:
+            result.success = False
+            result.terminal_reason = "usage_accounting_failed"
+    return result
 
 
 def validate_worker_timeout(value: int) -> int:
@@ -123,16 +339,44 @@ def _terminate_process_group(process: subprocess.Popen[str]) -> None:
 
 
 def run_bounded_worker_process(
-    command: list[str], working_dir: Path, timeout_seconds: int
+    command: list[str],
+    working_dir: Path,
+    timeout_seconds: int,
+    launch_deadline: datetime | None = None,
+    environment: dict[str, str] | None = None,
 ) -> WorkerResult:
     """Run one local worker in an isolated session with governed termination."""
     timeout_seconds = validate_worker_timeout(timeout_seconds)
     repo_root = working_dir.resolve(strict=True)
     before = _git_evidence(repo_root)
+    if launch_deadline is not None:
+        if launch_deadline.tzinfo is None:
+            return WorkerResult(
+                success=False,
+                command=command,
+                message="provider quota/capacity paused: launch deadline is invalid",
+                terminal_reason="quota_or_capacity",
+                timeout_seconds=timeout_seconds,
+            )
+        deadline_remaining = math.floor(
+            (
+                launch_deadline.astimezone(timezone.utc)
+                - datetime.now(timezone.utc)
+            ).total_seconds()
+        )
+        if deadline_remaining <= 0:
+            return WorkerResult(
+                success=False,
+                command=command,
+                message="provider quota/capacity paused: provider reset reached before launch",
+                terminal_reason="quota_or_capacity",
+                timeout_seconds=timeout_seconds,
+            )
+        timeout_seconds = min(timeout_seconds, deadline_remaining)
     try:
         process = subprocess.Popen(
             command, cwd=repo_root, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-            text=True, start_new_session=True,
+            text=True, start_new_session=True, env=environment,
         )
     except Exception as exc:
         return WorkerResult(
@@ -253,7 +497,7 @@ class KimiWorkerAdapter(WorkerAdapter):
     ``--auto`` or ``--yolo``; those remain gated for explicit future policy.
     """
 
-    DEFAULT_EXECUTABLE: ClassVar[str] = "kimi"
+    DEFAULT_EXECUTABLE: ClassVar[str] = KIMI_EXECUTABLE
 
     def __init__(
         self, executable: str | None = None, allowed_scope: list[str] | None = None,
@@ -273,7 +517,8 @@ class KimiWorkerAdapter(WorkerAdapter):
         return [self.executable, "--prompt", instruction]
 
     def run(self, instruction: str, working_dir: Path) -> WorkerResult:
-        if not shutil.which(self.executable):
+        resolved_executable = shutil.which(self.executable)
+        if not resolved_executable:
             return WorkerResult(
                 success=False,
                 message=f"Worker executable '{self.executable}' not found in PATH",
@@ -281,21 +526,55 @@ class KimiWorkerAdapter(WorkerAdapter):
         command = self.build_command(
             _governed_instruction(instruction, self.allowed_scope), working_dir
         )
-        # Preserve the established injectable subprocess seam used by local
-        # callers/tests; production uses the bounded Popen implementation.
-        if (not self.implementation_worker
-                and getattr(subprocess.run, "__module__", "subprocess") != "subprocess"):
-            completed = subprocess.run(
-                command, cwd=working_dir, capture_output=True, text=True, check=False
+        command[0] = resolved_executable
+        with tempfile.TemporaryDirectory(
+            prefix="advancore-kimi-", dir="/tmp"
+        ) as scratch_name:
+            scratch_dir = Path(scratch_name).resolve(strict=True)
+            usage_service, usage_preflight, blocked = _kimi_usage_preflight(
+                self.executable, working_dir, self.timeout_seconds
             )
-            return WorkerResult(
-                success=completed.returncode == 0, command=command,
-                stdout=completed.stdout, stderr=completed.stderr,
-                returncode=completed.returncode, timeout_seconds=self.timeout_seconds,
-                message="Worker finished successfully" if completed.returncode == 0
-                else "Worker finished with non-zero exit code",
+            if blocked is not None:
+                return blocked
+            command = _isolate_kimi_command(
+                command, usage_service, working_dir, scratch_dir
             )
-        return run_bounded_worker_process(command, working_dir, self.timeout_seconds)
+            environment = (
+                _kimi_environment(scratch_dir) if usage_service is not None else None
+            )
+            effective_timeout = (
+                usage_preflight.allowed_timeout_seconds
+                if usage_preflight is not None else self.timeout_seconds
+            )
+            started_at = time.monotonic()
+            # Preserve the established injectable subprocess seam used by local
+            # callers/tests; production uses the bounded Popen implementation.
+            if (not self.implementation_worker
+                    and getattr(subprocess.run, "__module__", "subprocess") != "subprocess"):
+                completed = subprocess.run(
+                    command, cwd=working_dir, capture_output=True, text=True,
+                    check=False, env=environment,
+                )
+                result = WorkerResult(
+                    success=completed.returncode == 0, command=command,
+                    stdout=completed.stdout, stderr=completed.stderr,
+                    returncode=completed.returncode, timeout_seconds=effective_timeout,
+                    message="Worker finished successfully" if completed.returncode == 0
+                    else "Worker finished with non-zero exit code",
+                )
+                return _record_kimi_runtime(
+                    result, usage_service, usage_preflight, time.monotonic() - started_at
+                )
+            result = run_bounded_worker_process(
+                command,
+                working_dir,
+                effective_timeout,
+                usage_preflight.launch_deadline if usage_preflight is not None else None,
+                environment,
+            )
+            return _record_kimi_runtime(
+                result, usage_service, usage_preflight, time.monotonic() - started_at
+            )
 
 
 KIMI_SWARM_INSTRUCTION_TEMPLATE = """Read AGENTS.md.
@@ -349,7 +628,7 @@ class KimiSwarmWorkerAdapter(WorkerAdapter):
     and it never falls back to unrestricted permission-bypass modes.
     """
 
-    DEFAULT_EXECUTABLE: ClassVar[str] = "kimi"
+    DEFAULT_EXECUTABLE: ClassVar[str] = KIMI_EXECUTABLE
 
     def __init__(
         self,
@@ -379,7 +658,8 @@ class KimiSwarmWorkerAdapter(WorkerAdapter):
         return self.build_command(instruction, working_dir)
 
     def run(self, instruction: str, working_dir: Path) -> WorkerResult:
-        if not shutil.which(self.executable):
+        resolved_executable = shutil.which(self.executable)
+        if not resolved_executable:
             return WorkerResult(
                 success=False,
                 message=f"Worker executable '{self.executable}' not found in PATH",
@@ -387,19 +667,53 @@ class KimiSwarmWorkerAdapter(WorkerAdapter):
         command = self.build_command(
             _governed_instruction(instruction, self.allowed_scope), working_dir
         )
-        if (not self.implementation_worker
-                and getattr(subprocess.run, "__module__", "subprocess") != "subprocess"):
-            completed = subprocess.run(
-                command, cwd=working_dir, capture_output=True, text=True, check=False
+        command[0] = resolved_executable
+        with tempfile.TemporaryDirectory(
+            prefix="advancore-kimi-", dir="/tmp"
+        ) as scratch_name:
+            scratch_dir = Path(scratch_name).resolve(strict=True)
+            usage_service, usage_preflight, blocked = _kimi_usage_preflight(
+                self.executable, working_dir, self.timeout_seconds
             )
-            return WorkerResult(
-                success=completed.returncode == 0, command=command,
-                stdout=completed.stdout, stderr=completed.stderr,
-                returncode=completed.returncode, timeout_seconds=self.timeout_seconds,
-                message="Worker finished successfully" if completed.returncode == 0
-                else "Worker finished with non-zero exit code",
+            if blocked is not None:
+                return blocked
+            command = _isolate_kimi_command(
+                command, usage_service, working_dir, scratch_dir
             )
-        return run_bounded_worker_process(command, working_dir, self.timeout_seconds)
+            environment = (
+                _kimi_environment(scratch_dir) if usage_service is not None else None
+            )
+            effective_timeout = (
+                usage_preflight.allowed_timeout_seconds
+                if usage_preflight is not None else self.timeout_seconds
+            )
+            started_at = time.monotonic()
+            if (not self.implementation_worker
+                    and getattr(subprocess.run, "__module__", "subprocess") != "subprocess"):
+                completed = subprocess.run(
+                    command, cwd=working_dir, capture_output=True, text=True,
+                    check=False, env=environment,
+                )
+                result = WorkerResult(
+                    success=completed.returncode == 0, command=command,
+                    stdout=completed.stdout, stderr=completed.stderr,
+                    returncode=completed.returncode, timeout_seconds=effective_timeout,
+                    message="Worker finished successfully" if completed.returncode == 0
+                    else "Worker finished with non-zero exit code",
+                )
+                return _record_kimi_runtime(
+                    result, usage_service, usage_preflight, time.monotonic() - started_at
+                )
+            result = run_bounded_worker_process(
+                command,
+                working_dir,
+                effective_timeout,
+                usage_preflight.launch_deadline if usage_preflight is not None else None,
+                environment,
+            )
+            return _record_kimi_runtime(
+                result, usage_service, usage_preflight, time.monotonic() - started_at
+            )
 
 
 class DryRunWorkerAdapter(WorkerAdapter):

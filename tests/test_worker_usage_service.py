@@ -1,0 +1,481 @@
+"""Deterministic tests for controller-owned usage evidence and policy."""
+
+import json
+import math
+import os
+from datetime import datetime, timedelta, timezone
+
+import pytest
+
+from advancore.services.worker_usage_service import (
+    KIMI_WEEKLY_RUNTIME_LIMIT_SECONDS,
+    UsageBudgetError,
+    UsageState,
+    WorkerUsageService,
+)
+
+
+NOW = datetime(2026, 8, 23, 12, 0, tzinfo=timezone.utc)
+RESET = NOW + timedelta(days=4)
+
+
+def _service(tmp_path, now=NOW):
+    repo = tmp_path / "repo"
+    repo.mkdir(parents=True, exist_ok=True)
+    return WorkerUsageService(
+        repo,
+        now_provider=lambda: now,
+        usage_dir=tmp_path / "controller-state" / "usage",
+    )
+
+
+def _record(service, used=10.0, checked=NOW, reset=RESET):
+    return service.record_snapshot(
+        "kimi", used, checked, reset, "owner-verified"
+    )
+
+
+def _write_probe(service, payload, mode=0o700):
+    path = service.controller_probe_path("kimi")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    body = json.dumps(payload, sort_keys=True)
+    path.write_text(f"#!/bin/sh\nprintf '%s\\n' '{body}'\n", encoding="utf-8")
+    path.chmod(mode)
+    return path
+
+
+def _write_raw_probe(service, body, mode=0o700):
+    path = service.controller_probe_path("kimi")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_bytes(b"#!/bin/sh\n" + body)
+    path.chmod(mode)
+    return path
+
+
+def _charge(service, seconds):
+    preflight = service.preflight("kimi", math.ceil(seconds))
+    return service.record_runtime("kimi", seconds, preflight)
+
+
+def test_valid_snapshot_is_available_and_outside_worker_workspace(tmp_path):
+    service = _service(tmp_path)
+    _record(service)
+    summary = service.get_summary("kimi")
+    assert summary.state == UsageState.AVAILABLE
+    assert summary.weekly_used_percent == 10
+    assert summary.weekly_percent_limit == 20
+    assert summary.runtime_seconds == 0
+    assert summary.runtime_limit_seconds == 3600
+    assert service.repo_root not in service.snapshot_path("kimi").parents
+    assert not (service.repo_root / ".agent_runner" / "usage").exists()
+    assert set(service.snapshot_path("kimi").read_text().split('"')) >= {
+        "provider", "period_id", "weekly_used_percent", "checked_at", "reset_at", "source"
+    }
+    for prohibited in ("token", "password", "prompt", "transcript"):
+        assert prohibited not in service.snapshot_path("kimi").read_text().lower()
+
+
+def test_unavailable_snapshot_is_automatically_refreshed_by_controller_probe(tmp_path):
+    service = _service(tmp_path)
+    _write_probe(
+        service,
+        {
+            "schema_version": 1,
+            "provider": "kimi",
+            "weekly_used_percent": 12,
+            "checked_at": NOW.isoformat(),
+            "reset_at": RESET.isoformat(),
+        },
+    )
+
+    summary = service.auto_refresh_if_needed("kimi")
+
+    assert summary.state == UsageState.AVAILABLE
+    assert summary.weekly_used_percent == 12
+    assert summary.source == "kimi-cli"
+    evidence = service.snapshot_path("kimi").read_text(encoding="utf-8").lower()
+    for prohibited in ("token", "password", "prompt", "transcript"):
+        assert prohibited not in evidence
+
+
+@pytest.mark.parametrize(
+    ("payload", "mode", "message"),
+    [
+        ({"unexpected": True}, 0o700, "refresh is invalid"),
+        (
+            {
+                "schema_version": 1,
+                "provider": "kimi",
+                "weekly_used_percent": 12,
+                "checked_at": NOW.isoformat(),
+                "reset_at": RESET.isoformat(),
+            },
+            0o722,
+            "refresh is unsafe",
+        ),
+    ],
+)
+def test_automatic_refresh_rejects_invalid_or_worker_writable_probe(
+    tmp_path, payload, mode, message
+):
+    service = _service(tmp_path)
+    _write_probe(service, payload, mode=mode)
+
+    with pytest.raises(UsageBudgetError, match=message):
+        service.auto_refresh_if_needed("kimi")
+
+    assert service.get_summary().state == UsageState.UNAVAILABLE
+
+
+def test_automatic_refresh_rejects_symlinked_probe_parent_into_worker_repo(tmp_path):
+    service = _service(tmp_path)
+    worker_probe_dir = service.repo_root / "worker-probes"
+    worker_probe_dir.mkdir()
+    worker_probe = worker_probe_dir / "kimi-usage"
+    worker_probe.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+    worker_probe.chmod(0o700)
+    service.protected_state_root.mkdir(parents=True)
+    os.symlink(worker_probe_dir, service.protected_state_root / "probes")
+
+    with pytest.raises(UsageBudgetError, match="refresh is unsafe"):
+        service.auto_refresh_if_needed("kimi")
+
+    assert service.get_summary().state == UsageState.UNAVAILABLE
+
+
+def test_automatic_refresh_rejects_hard_link_alias_in_worker_repo(tmp_path):
+    service = _service(tmp_path)
+    worker_probe = service.repo_root / "worker-controlled-probe"
+    worker_probe.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+    worker_probe.chmod(0o700)
+    probe = service.controller_probe_path("kimi")
+    probe.parent.mkdir(parents=True)
+    os.link(worker_probe, probe)
+
+    with pytest.raises(UsageBudgetError, match="refresh is unsafe"):
+        service.auto_refresh_if_needed("kimi")
+
+    assert service.get_summary().state == UsageState.UNAVAILABLE
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        b"/bin/dd if=/dev/zero bs=17000 count=1 2>/dev/null\n",
+        b"/bin/dd if=/dev/zero bs=17000 count=1 >&2 2>/dev/null\n",
+    ],
+)
+def test_automatic_refresh_bounds_stdout_and_stderr_during_collection(tmp_path, body):
+    service = _service(tmp_path)
+    _write_raw_probe(service, body)
+
+    with pytest.raises(UsageBudgetError, match="refresh failed"):
+        service.auto_refresh_if_needed("kimi")
+
+    assert service.get_summary().state == UsageState.UNAVAILABLE
+
+
+def test_automatic_refresh_rejects_non_utf8_output_as_invalid(tmp_path):
+    service = _service(tmp_path)
+    _write_raw_probe(service, b"printf '\\0377'\n")
+
+    with pytest.raises(UsageBudgetError, match="refresh is invalid"):
+        service.auto_refresh_if_needed("kimi")
+
+    assert service.get_summary().state == UsageState.UNAVAILABLE
+
+
+@pytest.mark.parametrize(
+    "probe_output",
+    [
+        b"[" * 1100 + b"]" * 1100,
+        b"{" + b'\"schema_version\":' + b"9" * 5000 + b"}",
+    ],
+)
+def test_automatic_refresh_normalizes_bounded_json_parser_failures(
+    tmp_path, monkeypatch, probe_output
+):
+    service = _service(tmp_path)
+    _write_raw_probe(service, b"exit 0\n")
+    monkeypatch.setattr(
+        service,
+        "_run_controller_probe",
+        lambda _probe, _environment: (0, probe_output, b""),
+    )
+
+    with pytest.raises(UsageBudgetError, match="refresh is invalid"):
+        service.auto_refresh_if_needed("kimi")
+
+    assert service.get_summary().state == UsageState.UNAVAILABLE
+
+
+def test_automatic_refresh_rejects_any_probe_diagnostics(tmp_path):
+    service = _service(tmp_path)
+    payload = json.dumps(
+        {
+            "schema_version": 1,
+            "provider": "kimi",
+            "weekly_used_percent": 12,
+            "checked_at": NOW.isoformat(),
+            "reset_at": RESET.isoformat(),
+        }
+    ).encode()
+    _write_raw_probe(
+        service,
+        b"printf 'unexpected diagnostic' >&2\nprintf '%s\\n' '" + payload + b"'\n",
+    )
+
+    with pytest.raises(UsageBudgetError, match="refresh failed"):
+        service.auto_refresh_if_needed("kimi")
+
+    assert service.get_summary().state == UsageState.UNAVAILABLE
+
+
+def test_usage_directory_inside_worker_workspace_is_rejected(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    with pytest.raises(UsageBudgetError, match="outside the worker workspace"):
+        WorkerUsageService(repo, usage_dir=repo / ".agent_runner" / "usage")
+
+
+def test_default_usage_store_is_shared_across_separate_checkouts(tmp_path):
+    first_repo = tmp_path / "first-checkout"
+    second_repo = tmp_path / "second-checkout"
+    first_repo.mkdir()
+    second_repo.mkdir()
+    first = WorkerUsageService(first_repo)
+    second = WorkerUsageService(second_repo)
+    assert first.usage_dir == second.usage_dir
+    assert first.lock_path("kimi") == second.lock_path("kimi")
+
+
+@pytest.mark.parametrize("used", [20, 44, 100])
+def test_at_or_over_twenty_percent_is_paused(tmp_path, used):
+    service = _service(tmp_path)
+    _record(service, used=used)
+    summary = service.get_summary("kimi")
+    assert summary.state == UsageState.PAUSED
+    with pytest.raises(UsageBudgetError, match="quota/capacity paused"):
+        service.preflight("kimi", 1800)
+
+
+def test_missing_malformed_and_stale_evidence_fail_closed(tmp_path):
+    service = _service(tmp_path)
+    assert service.get_summary().state == UsageState.UNAVAILABLE
+    _record(service)
+    service.snapshot_path("kimi").write_text("{not-json", encoding="utf-8")
+    assert service.get_summary().state == UsageState.UNAVAILABLE
+
+    fresh = _service(tmp_path / "fresh")
+    _record(fresh)
+    stale = WorkerUsageService(
+        fresh.repo_root,
+        now_provider=lambda: NOW + timedelta(minutes=16),
+        usage_dir=fresh.usage_dir,
+    )
+    stale_summary = stale.get_summary()
+    assert stale_summary.state == UsageState.UNAVAILABLE
+    assert stale_summary.weekly_used_percent == 10
+    assert stale_summary.checked_at == NOW
+    with pytest.raises(UsageBudgetError, match="quota/capacity paused"):
+        stale.preflight("kimi", 60)
+
+
+def test_malformed_existing_runtime_cannot_be_reset_by_new_snapshot(tmp_path):
+    service = _service(tmp_path)
+    _record(service)
+    service.runtime_path("kimi").write_text("{not-json", encoding="utf-8")
+    with pytest.raises(UsageBudgetError, match="evidence is invalid"):
+        _record(service, used=11)
+
+
+def test_future_and_reset_expired_snapshots_are_rejected(tmp_path):
+    service = _service(tmp_path)
+    with pytest.raises(UsageBudgetError, match="future-dated"):
+        _record(service, checked=NOW + timedelta(minutes=1))
+    with pytest.raises(UsageBudgetError, match="reset window"):
+        _record(service, reset=NOW)
+
+
+def test_runtime_is_reserved_then_reconciled_and_timeout_is_clamped(tmp_path):
+    service = _service(tmp_path)
+    _record(service)
+    _charge(service, 3499.2)
+    preflight = service.preflight("kimi", 600)
+    assert preflight.allowed_timeout_seconds == 100
+    reserved = json.loads(service.runtime_path("kimi").read_text())
+    assert reserved["runtime_seconds"] == KIMI_WEEKLY_RUNTIME_LIMIT_SECONDS
+    service.record_runtime("kimi", 100, preflight)
+    assert service.get_summary().runtime_seconds == KIMI_WEEKLY_RUNTIME_LIMIT_SECONDS
+    with pytest.raises(UsageBudgetError, match="runtime limit reached"):
+        service.preflight("kimi", 60)
+
+
+def test_concurrent_preflight_is_blocked_while_reservation_is_active(tmp_path):
+    service = _service(tmp_path)
+    _record(service)
+    competing = WorkerUsageService(
+        service.repo_root, now_provider=lambda: NOW, usage_dir=service.usage_dir
+    )
+    preflight = service.preflight("kimi", 1800)
+    with pytest.raises(UsageBudgetError, match="accounting is busy"):
+        competing.preflight("kimi", 1800)
+    assert json.loads(service.runtime_path("kimi").read_text())["runtime_seconds"] == 1800
+    service.record_runtime("kimi", 10, preflight)
+    assert competing.get_summary().runtime_seconds == 10
+
+
+def test_busy_runtime_accounting_does_not_execute_refresh_probe(tmp_path):
+    service = _service(tmp_path)
+    _record(service)
+    competing = WorkerUsageService(
+        service.repo_root, now_provider=lambda: NOW, usage_dir=service.usage_dir
+    )
+    marker = service.protected_state_root / "probe-ran"
+    probe = competing.controller_probe_path("kimi")
+    probe.parent.mkdir(parents=True)
+    probe.write_text(
+        f"#!/bin/sh\ntouch '{marker}'\nexit 0\n", encoding="utf-8"
+    )
+    probe.chmod(0o700)
+    preflight = service.preflight("kimi", 60)
+
+    with pytest.raises(UsageBudgetError, match="refresh is busy"):
+        competing.auto_refresh_if_needed("kimi")
+
+    assert not marker.exists()
+    service.record_runtime("kimi", 1, preflight)
+
+
+def test_abandoned_worker_keeps_full_reservation_fail_closed(tmp_path):
+    service = _service(tmp_path)
+    _record(service)
+    preflight = service.preflight("kimi", 1800)
+    service.abandon_reservation(preflight)
+    assert service.get_summary().runtime_seconds == 1800
+    next_now = RESET + timedelta(minutes=1)
+    next_service = WorkerUsageService(
+        service.repo_root,
+        now_provider=lambda: next_now,
+        usage_dir=service.usage_dir,
+    )
+    next_service.record_snapshot(
+        "kimi", 1, next_now, next_now + timedelta(days=7), "owner-verified"
+    )
+    assert next_service.get_summary().runtime_seconds == 1800
+
+
+def test_valid_long_run_can_settle_after_snapshot_freshness_window(tmp_path):
+    clock = [NOW]
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    service = WorkerUsageService(
+        repo,
+        now_provider=lambda: clock[0],
+        usage_dir=tmp_path / "controller-state" / "usage",
+    )
+    _record(service)
+    preflight = service.preflight("kimi", 1800)
+    clock[0] = NOW + timedelta(minutes=16)
+    ledger = service.record_runtime("kimi", 960, preflight)
+    assert ledger.runtime_seconds == 960
+    assert not service.quarantine_path("kimi").exists()
+
+
+def test_launch_is_clamped_before_reset_and_crossing_charge_carries_forward(tmp_path):
+    clock = [NOW]
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    usage_dir = tmp_path / "controller-state" / "usage"
+    service = WorkerUsageService(
+        repo, now_provider=lambda: clock[0], usage_dir=usage_dir
+    )
+    near_reset = NOW + timedelta(seconds=20)
+    service.record_snapshot("kimi", 1, NOW, near_reset, "owner-verified")
+    preflight = service.preflight("kimi", 1800)
+    assert preflight.allowed_timeout_seconds == 15
+
+    clock[0] = near_reset + timedelta(seconds=1)
+    ledger = service.record_runtime("kimi", 15, preflight)
+    assert ledger.carryover_seconds == 15
+
+    next_now = near_reset + timedelta(minutes=1)
+    next_service = WorkerUsageService(
+        repo, now_provider=lambda: next_now, usage_dir=usage_dir
+    )
+    next_service.record_snapshot(
+        "kimi", 1, next_now, near_reset + timedelta(days=7), "owner-verified"
+    )
+    assert next_service.get_summary().runtime_seconds == 15
+
+
+def test_launch_is_blocked_inside_reset_guard_window(tmp_path):
+    service = _service(tmp_path)
+    reset = NOW + timedelta(seconds=4)
+    service.record_snapshot("kimi", 1, NOW, reset, "owner-verified")
+    with pytest.raises(UsageBudgetError, match="reset is too close"):
+        service.preflight("kimi", 60)
+
+
+def test_small_reset_adjustment_preserves_period_and_runtime(tmp_path):
+    service = _service(tmp_path)
+    first = _record(service)
+    _charge(service, 300)
+    refreshed_service = WorkerUsageService(
+        service.repo_root,
+        now_provider=lambda: NOW + timedelta(minutes=1),
+        usage_dir=service.usage_dir,
+    )
+    refreshed = _record(
+        refreshed_service,
+        used=11,
+        checked=NOW + timedelta(minutes=1),
+        reset=RESET + timedelta(seconds=1),
+    )
+    assert refreshed.period_id == first.period_id
+    assert refreshed_service.get_summary().runtime_seconds == 300
+
+
+def test_usage_cannot_decrease_inside_same_provider_period(tmp_path):
+    service = _service(tmp_path)
+    _record(service, used=12)
+    refreshed_service = WorkerUsageService(
+        service.repo_root,
+        now_provider=lambda: NOW + timedelta(minutes=1),
+        usage_dir=service.usage_dir,
+    )
+    with pytest.raises(UsageBudgetError, match="cannot decrease"):
+        _record(refreshed_service, used=11, checked=NOW + timedelta(minutes=1))
+
+
+def test_verified_new_provider_period_resets_local_runtime(tmp_path):
+    service = _service(tmp_path)
+    first = _record(service)
+    _charge(service, 300)
+    next_now = RESET + timedelta(minutes=1)
+    next_reset = next_now + timedelta(days=7)
+    next_service = WorkerUsageService(
+        service.repo_root,
+        now_provider=lambda: next_now,
+        usage_dir=service.usage_dir,
+    )
+    second = next_service.record_snapshot(
+        "kimi", 1, next_now, next_reset, "kimi-cli"
+    )
+    assert second.period_id != first.period_id
+    assert next_service.get_summary().runtime_seconds == 0
+
+
+def test_evidence_change_during_worker_run_quarantines_future_launches(tmp_path):
+    service = _service(tmp_path)
+    _record(service)
+    preflight = service.preflight("kimi", 60)
+    payload = json.loads(service.snapshot_path("kimi").read_text())
+    payload["weekly_used_percent"] = 0
+    service.snapshot_path("kimi").write_text(json.dumps(payload), encoding="utf-8")
+    with pytest.raises(UsageBudgetError, match="changed during worker"):
+        service.record_runtime("kimi", 1, preflight)
+    assert service.quarantine_path("kimi").exists()
+    assert service.get_summary().state == UsageState.UNAVAILABLE
+    with pytest.raises(UsageBudgetError, match="quarantined"):
+        service.preflight("kimi", 60)

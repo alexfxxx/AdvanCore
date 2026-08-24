@@ -9,8 +9,10 @@ from __future__ import annotations
 
 import json
 import os
+import shlex
 import shutil
 import subprocess
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from unittest.mock import patch
 
@@ -28,6 +30,7 @@ from advancore.agent_runner import (
 from advancore.agent_runner.__main__ import main
 from advancore.agent_runner.auto_pipeline import DiffCheckResult, PytestResult
 from advancore.agent_runner.git_info import GitInfo
+from advancore.services.worker_usage_service import WorkerUsageService
 
 
 RAW_PRIMARY = "PRIMARY_RAW_TRANSCRIPT credential=primary-secret"
@@ -67,17 +70,23 @@ def _repo(tmp_path: Path) -> tuple[Path, Path, Path]:
     return repo, tasks, fake_bin
 
 
-def _install_workers(fake_bin: Path) -> Path:
+def _install_workers(
+    fake_bin: Path, primary_mode: str = "availability", fallback_mode: str = "success"
+) -> Path:
     real_git = Path(shutil.which("git") or "")
     assert real_git.is_file()
     os.symlink(real_git, fake_bin / "git")
     log = fake_bin.parent / "worker-invocations.log"
     git = str(real_git)
+    quoted_log = shlex.quote(str(log))
+    quoted_primary_mode = shlex.quote(primary_mode)
+    quoted_fallback_mode = shlex.quote(fallback_mode)
     _write_executable(
         fake_bin / "kimi",
-        f'''printf 'kimi\\n' >> "$WORKER_LOG"
+        f'''WORKER_LOG={quoted_log}
+printf 'kimi\\n' >> "$WORKER_LOG"
 printf '%s\\n' "$*" > "$WORKER_LOG.kimi-argv"
-case "${{PRIMARY_MODE:-availability}}" in
+case {quoted_primary_mode} in
   availability) printf '%s\\n' '{RAW_PRIMARY} quota exhausted' >&2 ;;
   unknown) printf '%s\\n' 'unexpected worker crash {RAW_PRIMARY}' >&2 ;;
   worktree) printf 'changed\\n' > only.py ;;
@@ -91,10 +100,11 @@ exit 75
     )
     _write_executable(
         fake_bin / "codex",
-        f'''printf 'codex\\n' >> "$WORKER_LOG"
+        f'''WORKER_LOG={quoted_log}
+printf 'codex\\n' >> "$WORKER_LOG"
 printf '%s\\n' "$*" > "$WORKER_LOG.codex-argv"
 printf '%s\\n' '{RAW_FALLBACK}'
-if [ "${{FALLBACK_MODE:-success}}" = failure ]; then
+if [ {quoted_fallback_mode} = failure ]; then
   printf '%s\\n' 'fallback quota exhausted' >&2
   exit 76
 fi
@@ -118,13 +128,31 @@ def _run_pipeline(
     *,
     primary_mode: str = "availability",
     fallback_mode: str = "success",
+    isolation_available: bool = True,
 ):
     repo, tasks, fake_bin = _repo(tmp_path)
-    log = _install_workers(fake_bin)
+    now = datetime.now(timezone.utc)
+    usage_dir = tmp_path / "controller-state" / "usage"
+    WorkerUsageService(repo, usage_dir=usage_dir).record_snapshot(
+        "kimi", 1, now, now + timedelta(days=4), "owner-verified"
+    )
+    log = _install_workers(fake_bin, primary_mode, fallback_mode)
     monkeypatch.setenv("PATH", str(fake_bin))
-    monkeypatch.setenv("WORKER_LOG", str(log))
-    monkeypatch.setenv("PRIMARY_MODE", primary_mode)
-    monkeypatch.setenv("FALLBACK_MODE", fallback_mode)
+    monkeypatch.setattr(
+        "advancore.services.worker_usage_service._default_usage_dir",
+        lambda _repo: usage_dir,
+    )
+    monkeypatch.setattr(
+        "advancore.agent_runner.worker._kimi_isolation_available",
+        lambda: isolation_available,
+    )
+    # The test runner itself is already sandboxed and macOS forbids applying a
+    # nested sandbox profile. Unit coverage verifies the production wrapper;
+    # this integration fixture exercises the governed worker/fallback flow.
+    monkeypatch.setattr(
+        "advancore.agent_runner.worker._isolate_kimi_command",
+        lambda command, _service, _working_dir, _scratch_dir: command,
+    )
     result = run_auto_pipeline(
         tasks,
         "TASK-023",
@@ -157,6 +185,23 @@ def test_clean_availability_failure_uses_codex_once_then_verifies(
     assert result.fallback_attempt.integrity_ok
     assert result.primary_worker == "kimi-swarm"
     assert result.fallback_worker == result.terminal_worker == "codex"
+
+
+def test_nested_sandbox_unavailable_uses_codex_without_launching_or_reserving_kimi(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    repo, result, invocations = _run_pipeline(
+        tmp_path, monkeypatch, isolation_available=False
+    )
+
+    assert invocations == ["codex"]
+    assert result.status == AutoPipelineStatus.READY_FOR_APPROVAL
+    assert result.fallback_attempt
+    assert result.fallback_attempt.failure == ProviderFailure.QUOTA_OR_CAPACITY
+    assert result.fallback_attempt.integrity_ok
+    assert result.terminal_worker == "codex"
+    usage_dir = tmp_path / "controller-state" / "usage"
+    assert WorkerUsageService(repo, usage_dir=usage_dir).get_summary().runtime_seconds == 0
 
 
 @pytest.mark.parametrize("primary_mode", ["unknown", "worktree", "index", "branch", "head", "remote"])
