@@ -37,6 +37,9 @@ None. This uses the existing documented local-development configuration.
 - Added one command for prerequisite checks, local environment preparation,
   PostgreSQL startup, migrations and Streamlit launch.
 - Added a no-change check-only mode and plain shutdown guidance.
+- Repaired independent review by parsing rather than sourcing settings,
+  rejecting symlinks/ambiguity/non-loopback database targets, and waiting up to
+  30 seconds for PostgreSQL health before migrations.
 
 ### Database changes
 
@@ -46,6 +49,7 @@ development database.
 ### Tests executed and results
 
 - POSIX shell syntax validation: passed.
+- No-change check-only readiness validation: passed.
 - Invalid-argument fail-closed check: passed with no mutation.
 - `git diff --check`: passed.
 
