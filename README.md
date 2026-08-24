@@ -74,6 +74,10 @@ Open the local address printed by Streamlit. The Settings page shows whether
 the database is configured and reachable without displaying its connection
 details. When finished, stop the local database with `docker compose down`.
 
+After the one-time Python environment setup, the same local startup can be run
+with `./scripts/start-advancore.sh`. Use `--check-only` to check readiness
+without starting services.
+
 ## Development Principles
 
 1. Build the platform before adding complex modules.
