@@ -134,8 +134,9 @@ def _isolate_kimi_command(
         return command
     account_home = Path(pwd.getpwuid(os.getuid()).pw_dir).resolve()
     kimi_home = account_home / ".kimi-code"
+    repo_root = working_dir.resolve(strict=True)
     writable_subpaths = (
-        working_dir.resolve(strict=True),
+        repo_root,
         scratch_dir.resolve(strict=True),
         kimi_home / "cache",
         kimi_home / "logs",
@@ -149,6 +150,19 @@ def _isolate_kimi_command(
     )
     protected_subpaths = (
         service.protected_state_root,
+        repo_root / ".git",
+        repo_root / ".agent_runner",
+        repo_root / ".venv",
+        repo_root / "venv",
+        repo_root / "env",
+        repo_root / ".tox",
+        repo_root / ".nox",
+        repo_root / ".direnv",
+        repo_root / "node_modules",
+        repo_root / ".aws",
+        repo_root / ".ssh",
+        repo_root / ".kube",
+        repo_root / ".docker",
         kimi_home / "bin",
         kimi_home / "credentials",
         kimi_home / "oauth",
@@ -158,12 +172,29 @@ def _isolate_kimi_command(
         Path("/opt/homebrew"),
         Path("/usr/local"),
     )
+    protected_literals = (
+        repo_root / ".env",
+        repo_root / ".netrc",
+        repo_root / ".npmrc",
+        repo_root / ".pypirc",
+        repo_root / ".python-version",
+        repo_root / ".tool-versions",
+    )
     deny_filters = " ".join(
-        f'(deny file-write* (subpath "{_sandbox_literal(path)}"))'
-        for path in protected_subpaths
+        [
+            f'(deny file-write* (require-any '
+            f'(literal "{_sandbox_literal(path)}") '
+            f'(subpath "{_sandbox_literal(path)}")))'
+            for path in protected_subpaths
+        ]
+        + [
+            f'(deny file-write* (literal "{_sandbox_literal(path)}"))'
+            for path in protected_literals
+        ]
     )
     profile = (
         "(version 1) (allow default) "
+        "(deny file-link) "
         f"(deny file-write* (require-not (require-any {allow_filters}))) "
         f"{deny_filters}"
     )

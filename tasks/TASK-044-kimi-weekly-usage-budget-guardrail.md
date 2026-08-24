@@ -131,6 +131,7 @@ None. On 23 August 2026 the owner explicitly selected a 20% Kimi weekly allowanc
 - Repaired the fifth independent-review finding by replacing broad filesystem write permission with a repository-and-reviewed-runtime allowlist, explicit executable/credential denials, per-launch scratch isolation, absolute worker executable resolution, and an immutable usage-probe command search path.
 - Repaired the sixth independent-review finding by replacing controller-environment inheritance with a minimal fixed Kimi runtime environment. Unrelated provider, GitHub, database, proxy and loader variables no longer cross the worker boundary; future task-required credentials require a separately approved capability boundary.
 - Repaired the seventh independent-review finding by normalizing bounded JSON parser depth and integer-limit failures at both probe and stored-evidence boundaries into the existing fail-closed usage result, preserving approved fallback eligibility.
+- Repaired the eighth independent-review finding by denying Kimi writes to Git/controller metadata, local verification toolchains, repository credential/configuration locations and hard-link creation while preserving the task repository source workspace. The repository `.venv` used by verification is no longer worker-writable or hard-link aliasable during governed Kimi execution.
 
 ### Files changed
 
@@ -151,6 +152,9 @@ None.
 
 ### Tests and results
 
+- Eighth-repair focused worker isolation/fallback verification: 22 passed.
+- Eighth-repair full project suite with the documented local PostgreSQL configuration: 798 passed.
+- The production macOS sandbox profile started `/usr/bin/true` successfully outside the nested test sandbox.
 - Seventh-repair focused usage, guardrail and fallback verification: 53 passed.
 - Seventh-repair full project suite with the documented local PostgreSQL configuration: 798 passed.
 - Sixth-repair focused usage, worker, fallback and task verification: 75 passed.

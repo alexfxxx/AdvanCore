@@ -115,13 +115,39 @@ def test_kimi_sandbox_write_allowlist_excludes_executables_and_credentials(
     profile = command[2]
 
     assert "(require-not (require-any" in profile
+    assert "(deny file-link)" in profile
     assert f'(subpath "{tmp_path.resolve()}")' in profile
     assert f'(subpath "{scratch.resolve()}")' in profile
-    assert '(deny file-write* (subpath "/opt/homebrew"))' in profile
-    assert '(deny file-write* (subpath "/usr/local"))' in profile
-    assert '/.kimi-code/bin"))' in profile
-    assert '/.kimi-code/credentials"))' in profile
+    assert '(subpath "/opt/homebrew")' in profile
+    assert '(subpath "/usr/local")' in profile
+    assert '/.kimi-code/bin")' in profile
+    assert '/.kimi-code/credentials")' in profile
     assert str(service.protected_state_root) in profile
+    for protected in (
+        ".git",
+        ".agent_runner",
+        ".venv",
+        "venv",
+        "env",
+        "node_modules",
+        ".aws",
+        ".ssh",
+        ".kube",
+        ".docker",
+    ):
+        assert str(tmp_path.resolve() / protected) in profile
+    for protected_file in (
+        ".env",
+        ".netrc",
+        ".npmrc",
+        ".pypirc",
+        ".python-version",
+        ".tool-versions",
+    ):
+        assert (
+            f'(deny file-write* (literal "{tmp_path.resolve() / protected_file}"))'
+            in profile
+        )
 
     monkeypatch.setenv("GITHUB_TOKEN", "must-not-reach-worker")
     monkeypatch.setenv("OPENAI_API_KEY", "must-not-reach-worker")
