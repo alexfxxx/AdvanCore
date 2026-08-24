@@ -16,7 +16,11 @@ To check readiness without starting or changing anything:
 ./scripts/start-advancore.sh --check-only
 ```
 
-Stop the app with Control-C. Stop the local database later with
-`docker compose down`. Production deployment and production secrets are not
-part of this command.
+Stop the app with Control-C. Stop the matching local database later, without
+deleting its saved data, with:
 
+```bash
+./scripts/start-advancore.sh --stop
+```
+
+Production deployment and production secrets are not part of these commands.

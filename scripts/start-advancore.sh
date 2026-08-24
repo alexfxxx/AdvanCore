@@ -3,11 +3,14 @@ set -eu
 
 PROJECT_ROOT=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 CHECK_ONLY=false
+STOP_ONLY=false
 
 if [ "${1:-}" = "--check-only" ]; then
     CHECK_ONLY=true
+elif [ "${1:-}" = "--stop" ]; then
+    STOP_ONLY=true
 elif [ "$#" -ne 0 ]; then
-    echo "Usage: ./scripts/start-advancore.sh [--check-only]" >&2
+    echo "Usage: ./scripts/start-advancore.sh [--check-only|--stop]" >&2
     exit 2
 fi
 
@@ -24,6 +27,19 @@ fi
 if [ -L "$PROJECT_ROOT/docker-compose.yml" ] || [ ! -f "$PROJECT_ROOT/docker-compose.yml" ]; then
     echo "The local Docker Compose configuration is unsafe or missing." >&2
     exit 1
+fi
+compose() {
+    docker --context default compose \
+        --project-name advancore-local \
+        --project-directory "$PROJECT_ROOT" \
+        --env-file /dev/null \
+        --file "$PROJECT_ROOT/docker-compose.yml" \
+        "$@"
+}
+if [ "$STOP_ONLY" = true ]; then
+    compose down
+    echo "AdvanCore local database stopped. Local data was kept."
+    exit 0
 fi
 if [ ! -x "$PROJECT_ROOT/.venv/bin/python" ] || \
    [ ! -x "$PROJECT_ROOT/.venv/bin/streamlit" ] || \
@@ -78,14 +94,6 @@ if [ ! -f "$ENV_TARGET" ]; then
 fi
 
 cd "$PROJECT_ROOT"
-compose() {
-    docker --context default compose \
-        --project-name advancore-local \
-        --project-directory "$PROJECT_ROOT" \
-        --env-file /dev/null \
-        --file "$PROJECT_ROOT/docker-compose.yml" \
-        "$@"
-}
 compose up -d postgres
 attempt=0
 until compose exec -T postgres pg_isready -U advancore -d advancore >/dev/null 2>&1; do

@@ -44,6 +44,8 @@ None. This uses the existing documented local-development configuration.
   creating missing settings with no-clobber semantics, clearing Compose/Docker
   routing variables, and fixing Compose to the repository file, local project,
   empty interpolation environment and default local Docker context.
+- Added a bounded `--stop` mode that targets that exact same local Compose
+  project and keeps the local database volume.
 
 ### Database changes
 
