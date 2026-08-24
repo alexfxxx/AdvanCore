@@ -28,7 +28,12 @@ worker route, or authorize an AI provider.
 
 ## In scope
 
-- Add a responsive dark command-center theme using local CSS only.
+- Add a responsive command-center theme using local CSS only.
+- Rework the approved theme to a light, high-contrast business interface when
+  the owner rejects the initial dark background.
+- Use a cohesive set of locally stored CC0 SVG Repo navigation icons.
+- Add restrained hover, focus, entrance, and edge-glow micro-interactions with
+  reduced-motion support.
 - Replace fake revenue, route, vehicle, driver, and customer values with the
   existing Platform, AI workforce, Projects, Knowledge, and Activity modules.
 - Let the owner show/hide approved modules and the Kimi-Swarm/Codex worker cards.
@@ -56,6 +61,8 @@ worker route, or authorize an AI provider.
 - `app.py`
 - `advancore/ui/__init__.py`
 - `advancore/ui/theme.py`
+- `advancore/assets/icons/*.svg`
+- `advancore/assets/icons/README.md`
 - `advancore/repositories/__init__.py`
 - `advancore/repositories/setting.py`
 - `advancore/services/dashboard_preference_service.py`
@@ -69,6 +76,11 @@ worker route, or authorize an AI provider.
 
 The owner supplied the Gemini design and authorized adaptation for AdvanCore,
 including add/remove functions, on 24 August 2026.
+
+The owner then rejected the dark background, requested readable sidebar text,
+specified SVG Repo icons, supplied animation/login interaction references, and
+approved merge into `projects-lifecycle-recovery` after rework on
+24 August 2026.
 
 ## Assumptions
 
@@ -92,8 +104,12 @@ including add/remove functions, on 24 August 2026.
 
 ### Implemented
 
-- Added a local dark command-center theme with responsive laptop, tablet, and
-  phone layout rules.
+- Reworked the initial design into a light, high-contrast command-center theme
+  with readable sidebar labels and responsive laptop, tablet, and phone rules.
+- Added six cohesive, locally served CC0 SVG Repo navigation icons and recorded
+  their source pages.
+- Added restrained entrance, hover, focus, lift, and edge-glow motion with a
+  reduced-motion fallback.
 - Replaced the prototype's fake business figures with existing Platform, AI
   workforce, Projects, Knowledge, and Activity data.
 - Added allowlisted show/hide controls for every dashboard module and for the
@@ -108,6 +124,8 @@ including add/remove functions, on 24 August 2026.
 - `app.py`
 - `advancore/ui/__init__.py`
 - `advancore/ui/theme.py`
+- `advancore/assets/icons/*.svg`
+- `advancore/assets/icons/README.md`
 - `advancore/repositories/__init__.py`
 - `advancore/repositories/setting.py`
 - `advancore/services/dashboard_preference_service.py`
@@ -127,13 +145,18 @@ including add/remove functions, on 24 August 2026.
 ### Tests executed and results
 
 - Initial focused preference/page/theme/repository tests: 38 passed.
-- Full repository suite: 924 passed.
+- Full repository suite after the light-theme rework: 926 passed.
 - Final validation-boundary focused tests passed after hardening non-string
   input handling.
 - `git diff --check`: passed.
 - Live remove/save/reload proved Knowledge and Kimi cards stayed hidden.
 - Live restore proved all five modules and both worker cards returned.
 - Phone-width visual inspection proved metric cards stack vertically.
+- Live light-theme inspection proved the white sidebar, readable navigation,
+  active-state highlight, and SVG icons render correctly.
+- The supplied Facebook references were inspected as a CSS rendering sequence,
+  a glowing-button treatment, and an animated login form; only restrained,
+  accessible motion appropriate to the existing authenticated state was used.
 
 ### Assumptions
 
@@ -146,6 +169,8 @@ including add/remove functions, on 24 August 2026.
 
 - Android access still requires a separately approved hosting/network and
   authentication design; responsiveness alone does not expose the loopback app.
+- A visual login screen was not added because AdvanCore has no authentication
+  backend yet; presenting one would falsely imply an access-control boundary.
 - Streamlit does not provide the prototype's drag-and-drop grid without a custom
   component; this task intentionally uses safer add/remove controls.
 - Codex quota cannot be read authoritatively inside AdvanCore, so the UI labels
@@ -153,12 +178,11 @@ including add/remove functions, on 24 August 2026.
 
 ### Decisions required
 
-- Independent review and owner approval are required before integration into
-  `projects-lifecycle-recovery`. `main` remains out of scope.
+- None if the updated independent checks pass. The owner explicitly approved
+  merge into `projects-lifecycle-recovery`, not `main`, after this rework.
 
 ### Recommended next step
 
-- Publish the feature branch and run GitHub verification. If approved and clean,
-  integrate into `projects-lifecycle-recovery`, then decide whether TASK-068
-  should address mobile authentication/hosting or additional real business
-  modules.
+- Update PR #8 and rerun GitHub verification. If clean, integrate into
+  `projects-lifecycle-recovery`, then decide whether TASK-068 should address
+  real authentication/mobile hosting or additional business modules.

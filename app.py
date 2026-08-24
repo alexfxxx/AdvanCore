@@ -14,7 +14,6 @@ from advancore.ui.theme import apply_command_center_theme
 
 st.set_page_config(
     page_title=APP_TITLE,
-    page_icon="🧠",
     layout="wide",
 )
 
