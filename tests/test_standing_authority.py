@@ -122,6 +122,29 @@ def test_unsafe_or_malformed_authority_fails_closed(tmp_path):
         service.consume("TASK-045", "unattended-controller-orchestration", RoutineAction.RUN_TESTS)
 
 
+def test_authority_state_must_be_outside_repo_without_symlink_components(tmp_path):
+    service = _service(tmp_path)
+    inside = StandingAuthorityService(
+        service.repo_root,
+        service.repo_root / ".controller-authority",
+        lambda: NOW,
+    )
+    with pytest.raises(StandingAuthorityError, match="path is unsafe"):
+        _record(inside)
+
+    target = tmp_path / "real-controller-root"
+    target.mkdir()
+    alias = tmp_path / "controller-alias"
+    os.symlink(target, alias)
+    symlinked = StandingAuthorityService(
+        service.repo_root,
+        alias / "standing-authority",
+        lambda: NOW,
+    )
+    with pytest.raises(StandingAuthorityError, match="path is unsafe"):
+        _record(symlinked)
+
+
 def test_same_names_and_remote_in_another_clone_cannot_consume_grant(tmp_path):
     first = _service(tmp_path / "first")
     _record(first)

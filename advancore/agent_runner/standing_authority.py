@@ -105,7 +105,10 @@ class StandingAuthorityService:
         now_provider: Callable[[], datetime] = _utc_now,
     ):
         self.repo_root = repo_root.resolve(strict=True)
-        self.state_dir = (state_dir or default_standing_authority_dir()).resolve()
+        candidate = (state_dir or default_standing_authority_dir()).expanduser()
+        if not candidate.is_absolute():
+            candidate = Path.cwd() / candidate
+        self.state_dir = candidate
         self.now_provider = now_provider
 
     def _git(self, *args: str) -> str:
@@ -175,18 +178,49 @@ class StandingAuthorityService:
         return self.state_dir / "authority.lock"
 
     def _ensure_dir(self) -> None:
-        self.state_dir.mkdir(parents=True, mode=0o700, exist_ok=True)
-        if self.state_dir.is_symlink():
+        self._reject_symlink_components(self.state_dir)
+        candidate = self.state_dir.resolve(strict=False)
+        if candidate == self.repo_root or self.repo_root in candidate.parents:
             raise StandingAuthorityError("standing authority path is unsafe")
-        info = self.state_dir.stat()
+        self.state_dir.mkdir(parents=True, mode=0o700, exist_ok=True)
+        self._reject_symlink_components(self.state_dir)
+        resolved = self.state_dir.resolve(strict=True)
+        if resolved == self.repo_root or self.repo_root in resolved.parents:
+            raise StandingAuthorityError("standing authority path is unsafe")
+        info = resolved.stat()
         if info.st_uid != os.getuid() or info.st_mode & (stat.S_IWGRP | stat.S_IWOTH):
             raise StandingAuthorityError("standing authority path is unsafe")
-        os.chmod(self.state_dir, 0o700)
+        os.chmod(resolved, 0o700)
+
+    @staticmethod
+    def _reject_symlink_components(path: Path) -> None:
+        """Reject every existing symlink component without resolving through it."""
+        current = Path(path.anchor)
+        for part in path.parts[1:]:
+            current /= part
+            try:
+                info = current.lstat()
+            except FileNotFoundError:
+                continue
+            except OSError as exc:
+                raise StandingAuthorityError("standing authority path is unsafe") from exc
+            if stat.S_ISLNK(info.st_mode):
+                raise StandingAuthorityError("standing authority path is unsafe")
 
     def _lock(self):
         self._ensure_dir()
-        handle = self.lock_path.open("a+", encoding="utf-8")
-        os.chmod(self.lock_path, 0o600)
+        flags = os.O_CREAT | os.O_RDWR | getattr(os, "O_CLOEXEC", 0) | getattr(
+            os, "O_NOFOLLOW", 0
+        )
+        try:
+            descriptor = os.open(self.lock_path, flags, 0o600)
+            info = os.fstat(descriptor)
+            if info.st_uid != os.getuid() or info.st_nlink != 1 or info.st_mode & 0o077:
+                os.close(descriptor)
+                raise StandingAuthorityError("standing authority lock is unsafe")
+            handle = os.fdopen(descriptor, "a+", encoding="utf-8")
+        except OSError as exc:
+            raise StandingAuthorityError("standing authority lock is unsafe") from exc
         fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
         return handle
 

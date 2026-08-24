@@ -96,6 +96,10 @@ inheritance. Manual approval gates must remain for the owner's return.
 - Repaired the follow-up review finding by recomputing the repository identity
   and checked-out non-`main` branch under the consumption lock rather than
   trusting a cached identity or caller-supplied branch label.
+- Repaired the state-location review finding by preserving and checking the
+  unresolved path, rejecting every symlinked component and every location
+  inside the worker repository, and opening the controller lock with no-follow,
+  owner-only validation.
 
 ### Files changed
 
@@ -111,7 +115,7 @@ None.
 
 ### Tests executed and results
 
-- Focused standing-authority suite after independent-review repairs: 16 passed.
+- Focused standing-authority suite after independent-review repairs: 17 passed.
 - Full project suite after independent-review repairs: 813 passed.
 - Python compile and `git diff --check`: passed.
 
