@@ -64,6 +64,62 @@ KIMI_INHERITED_LOCALE_VARIABLES: tuple[str, ...] = (
     "LC_CTYPE",
     "TZ",
 )
+WORKER_TASK_REFERENCE_RE = re.compile(
+    r"(?<![A-Za-z0-9_.-])(tasks/TASK-[0-9]+-[A-Za-z0-9_.-]+\.md)"
+)
+WORKER_CREDENTIAL_PATTERNS: tuple[re.Pattern[str], ...] = (
+    re.compile(r"-----BEGIN (?:RSA |EC |OPENSSH )?PRIVATE KEY-----"),
+    re.compile(r"\bgithub_pat_[A-Za-z0-9_]{20,}\b"),
+    re.compile(r"\bgh[pousr]_[A-Za-z0-9]{20,}\b"),
+    re.compile(r"\bsk-[A-Za-z0-9_-]{20,}\b"),
+    re.compile(r"\bxox[baprs]-[A-Za-z0-9-]{20,}\b"),
+    re.compile(r"\bAKIA[A-Z0-9]{16}\b"),
+)
+MAX_WORKER_INPUT_BYTES = 256 * 1024
+
+
+def _contains_credential_material(value: str) -> bool:
+    return any(pattern.search(value) for pattern in WORKER_CREDENTIAL_PATTERNS)
+
+
+def _worker_input_blocked(instruction: str, working_dir: Path) -> bool:
+    """Fail closed before a worker can receive likely credential material.
+
+    The instruction and every directly referenced governed task are checked.
+    This is deliberately a high-confidence guard, not a general secret scanner;
+    explicit credential capabilities remain an owner-controlled future boundary.
+    """
+    if _contains_credential_material(instruction):
+        return True
+    try:
+        repo_root = working_dir.resolve(strict=True)
+    except OSError:
+        return True
+    for reference in set(WORKER_TASK_REFERENCE_RE.findall(instruction)):
+        candidate = repo_root / reference
+        try:
+            resolved = candidate.resolve(strict=True)
+            resolved.relative_to(repo_root)
+            if candidate.is_symlink() or resolved.stat().st_size > MAX_WORKER_INPUT_BYTES:
+                return True
+            text = resolved.read_text(encoding="utf-8")
+        except (OSError, UnicodeError, ValueError):
+            return True
+        if _contains_credential_material(text):
+            return True
+    return False
+
+
+def _credential_block_result(timeout_seconds: int) -> WorkerResult:
+    return WorkerResult(
+        success=False,
+        message=(
+            "Worker input blocked: possible credential material requires "
+            "explicit owner review"
+        ),
+        terminal_reason="credential_access_required",
+        timeout_seconds=timeout_seconds,
+    )
 
 
 def _kimi_isolation_available() -> bool:
@@ -201,6 +257,24 @@ def _isolate_kimi_command(
         repo_root / ".python-version",
         repo_root / ".tool-versions",
     )
+    protected_read_subpaths = (
+        repo_root / ".aws",
+        repo_root / ".ssh",
+        repo_root / ".kube",
+        repo_root / ".docker",
+        account_home / ".aws",
+        account_home / ".ssh",
+        account_home / ".kube",
+        account_home / ".docker",
+        account_home / ".gnupg",
+        account_home / ".config" / "gh",
+    )
+    protected_read_literals = (
+        *protected_literals,
+        account_home / ".netrc",
+        account_home / ".npmrc",
+        account_home / ".pypirc",
+    )
     deny_filters = " ".join(
         [
             f'(deny file-write* (require-any '
@@ -213,11 +287,23 @@ def _isolate_kimi_command(
             for path in protected_literals
         ]
     )
+    read_deny_filters = " ".join(
+        [
+            f'(deny file-read* (require-any '
+            f'(literal "{_sandbox_literal(path)}") '
+            f'(subpath "{_sandbox_literal(path)}")))'
+            for path in protected_read_subpaths
+        ]
+        + [
+            f'(deny file-read* (literal "{_sandbox_literal(path)}"))'
+            for path in protected_read_literals
+        ]
+    )
     profile = (
         "(version 1) (allow default) "
         "(deny file-link) "
         f"(deny file-write* (require-not (require-any {allow_filters}))) "
-        f"{deny_filters}"
+        f"{deny_filters} {read_deny_filters}"
     )
     return [str(KIMI_SANDBOX_EXECUTABLE), "-p", profile, *command]
 
@@ -538,6 +624,8 @@ class KimiWorkerAdapter(WorkerAdapter):
         return [self.executable, "--prompt", instruction]
 
     def run(self, instruction: str, working_dir: Path) -> WorkerResult:
+        if _worker_input_blocked(instruction, working_dir):
+            return _credential_block_result(self.timeout_seconds)
         resolved_executable = shutil.which(self.executable)
         if not resolved_executable:
             return WorkerResult(
@@ -679,6 +767,8 @@ class KimiSwarmWorkerAdapter(WorkerAdapter):
         return self.build_command(instruction, working_dir)
 
     def run(self, instruction: str, working_dir: Path) -> WorkerResult:
+        if _worker_input_blocked(instruction, working_dir):
+            return _credential_block_result(self.timeout_seconds)
         resolved_executable = shutil.which(self.executable)
         if not resolved_executable:
             return WorkerResult(
@@ -793,6 +883,8 @@ class CodexWorkerAdapter(WorkerAdapter):
         ]
 
     def run(self, instruction: str, working_dir: Path) -> WorkerResult:
+        if _worker_input_blocked(instruction, working_dir):
+            return _credential_block_result(self.timeout_seconds)
         resolved_executable = shutil.which(self.executable)
         if not resolved_executable:
             return WorkerResult(
@@ -841,6 +933,8 @@ class CodexPlannerAdapter(WorkerAdapter):
         ]
 
     def run(self, instruction: str, working_dir: Path) -> WorkerResult:
+        if _worker_input_blocked(instruction, working_dir):
+            return _credential_block_result(self.timeout_seconds)
         if not shutil.which(self.executable):
             return WorkerResult(
                 success=False,
