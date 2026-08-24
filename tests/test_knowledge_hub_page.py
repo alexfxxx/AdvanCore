@@ -139,10 +139,17 @@ def test_empty_state(monkeypatch):
     assert "No knowledge drafts yet" in fake_st.text()
 
 
-def test_successful_create_is_visible_in_same_render(monkeypatch):
+def test_successful_create_clears_form_reruns_and_selects_new_item(monkeypatch):
     repo = FakeRepository()
+    state = {
+        "knowledge_create_title_0": "  New note  ",
+        "knowledge_create_content_0": "  Useful content  ",
+    }
     fake_st = FakeStreamlit(
-        submitted=True, title="  New note  ", content="  Useful content  "
+        submitted=True,
+        title="  New note  ",
+        content="  Useful content  ",
+        session_state=state,
     )
     _install(monkeypatch, fake_st, KnowledgeService(repo))
     knowledge_hub.render()
@@ -152,9 +159,55 @@ def test_successful_create_is_visible_in_same_render(monkeypatch):
         "Useful content",
         "draft",
     )
-    assert "Knowledge draft created successfully." in fake_st.text()
+    assert fake_st.rerun_calls == 1
+    assert state[knowledge_hub._KNOWLEDGE_FLASH_KEY] == (
+        "Knowledge draft created successfully."
+    )
+    assert state[knowledge_hub._KNOWLEDGE_SELECTED_VALUE_KEY] == 1
+    assert state[knowledge_hub._KNOWLEDGE_CREATE_GENERATION_KEY] == 1
+    assert "knowledge_create_title_0" not in state
+    assert "knowledge_create_content_0" not in state
     assert "Title: New note" in fake_st.text()
     assert "Useful content" in fake_st.text()
+
+    refreshed = FakeStreamlit(session_state=state)
+    _install(monkeypatch, refreshed, KnowledgeService(repo))
+    knowledge_hub.render()
+    assert "Knowledge draft created successfully." in refreshed.text()
+    assert refreshed.selected_option == "New note (draft)"
+    assert refreshed.rerun_calls == 0
+    assert "knowledge_create_title_1" not in state
+    assert "knowledge_create_content_1" not in state
+
+
+def test_create_captures_identifier_before_database_scope_closes(monkeypatch):
+    class ExpiringCreated:
+        expired = False
+
+        @property
+        def id(self):
+            if self.expired:
+                raise RuntimeError("detached database object")
+            return 42
+
+    created = ExpiringCreated()
+
+    class CreateService:
+        def create_draft(self, _title, _content):
+            return created
+
+    @contextmanager
+    def expiring_scope():
+        try:
+            yield CreateService()
+        finally:
+            created.expired = True
+
+    fake_st = FakeStreamlit()
+    monkeypatch.setattr(knowledge_hub, "st", fake_st)
+    monkeypatch.setattr(knowledge_hub, "_knowledge_service", expiring_scope)
+
+    assert knowledge_hub._create_draft("Title", "Content") == 42
 
 
 @pytest.mark.parametrize(

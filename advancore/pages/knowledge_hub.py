@@ -19,8 +19,13 @@ from advancore.services.knowledge_service import (
 _KNOWLEDGE_FLASH_KEY = "knowledge_success_notice"
 _KNOWLEDGE_SELECTED_VALUE_KEY = "knowledge_selected_value"
 _KNOWLEDGE_SELECTBOX_PREFIX = "knowledge_selected_id_"
+_KNOWLEDGE_CREATE_GENERATION_KEY = "knowledge_create_generation"
 _KNOWLEDGE_SUCCESS_MESSAGES = frozenset(
-    {"Knowledge draft updated successfully.", "Knowledge draft archived successfully."}
+    {
+        "Knowledge draft created successfully.",
+        "Knowledge draft updated successfully.",
+        "Knowledge draft archived successfully.",
+    }
 )
 
 
@@ -33,19 +38,19 @@ def _knowledge_service() -> Iterator[KnowledgeService]:
         yield KnowledgeService(KnowledgeItemRepository(session))
 
 
-def _create_draft(title: str, content: str) -> bool:
+def _create_draft(title: str, content: str) -> int | None:
     """Create one draft and render a presentation-safe outcome."""
     try:
         with _knowledge_service() as service:
-            service.create_draft(title, content)
+            created = service.create_draft(title, content)
+            created_id = created.id
     except KnowledgeValidationError as exc:
         st.error(str(exc))
-        return False
+        return None
     except Exception:
         st.error("Knowledge draft creation failed. Please try again.")
-        return False
-    st.success("Knowledge draft created successfully.")
-    return True
+        return None
+    return created_id
 
 
 def _edit_draft(item_id: int, title: str, content: str) -> bool:
@@ -248,11 +253,32 @@ def render():
     _render_success_notice()
 
     st.subheader("Create knowledge draft")
+    create_generation = int(
+        st.session_state.get(_KNOWLEDGE_CREATE_GENERATION_KEY, 0)
+    )
+    create_title_key = f"knowledge_create_title_{create_generation}"
+    create_content_key = f"knowledge_create_content_{create_generation}"
     with st.form("create_knowledge_draft"):
-        title = st.text_input("Title", max_chars=300)
-        content = st.text_area("Content", height=180)
+        title = st.text_input(
+            "Title", max_chars=300, key=create_title_key
+        )
+        content = st.text_area(
+            "Content", height=180, key=create_content_key
+        )
         submitted = st.form_submit_button("Create draft", type="primary")
     if submitted:
-        _create_draft(title, content)
+        created_id = _create_draft(title, content)
+        if created_id is not None:
+            st.session_state[_KNOWLEDGE_SELECTED_VALUE_KEY] = created_id
+            st.session_state[_KNOWLEDGE_CREATE_GENERATION_KEY] = (
+                create_generation + 1
+            )
+            _refresh_with_success(
+                "Knowledge draft created successfully.",
+                clear_session_keys=(
+                    create_title_key,
+                    create_content_key,
+                ),
+            )
 
     _render_items()
