@@ -25,6 +25,7 @@ merge, `main`, deployment, or weakening repository integrity checks.
 
 - `tasks/TASK-047-kimi-first-authorized-worker-routing.md`
 - `advancore/agent_runner/worker_routing.py`
+- `advancore/agent_runner/worker.py`
 - `advancore/agent_runner/__init__.py`
 - `tests/test_worker_routing.py`
 - `docs/runbooks/WORKER_ROUTING.md`
@@ -43,6 +44,8 @@ worker as fallback, subject to the 20%/one-hour Kimi policy.
 - Consumed worker authority only at launch and fallback authority only when the
   existing integrity-gated pipeline actually invokes fallback.
 - Preserved TASK-044 limits and passed no new credentials.
+- Repaired independent review by giving governed Codex fallback a minimal fixed
+  runtime environment rather than the controller's complete environment.
 
 ### Files changed
 
@@ -58,7 +61,8 @@ None.
 
 ### Tests executed and results
 
-- Focused routing, unattended-review and standing-authority suites: 27 passed.
+- Focused routing, worker-isolation/fallback, unattended-review and
+  standing-authority suites after repair: 50 passed.
 - Python compile and `git diff --check`: passed.
 
 ### Decisions required

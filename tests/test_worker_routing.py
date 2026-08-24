@@ -3,7 +3,9 @@
 from pathlib import Path
 
 from advancore.agent_runner.standing_authority import RoutineAction, StandingAuthorityError
-from advancore.agent_runner.worker import WorkerAdapter, WorkerResult
+from unittest.mock import patch
+
+from advancore.agent_runner.worker import CodexWorkerAdapter, WorkerAdapter, WorkerResult
 from advancore.agent_runner.worker_routing import AuthorizedWorkerAdapter
 
 
@@ -89,3 +91,39 @@ def test_scope_updates_are_forwarded_to_registered_delegate():
     assert worker.allowed_scope == ["one.py"]
     assert adapter.allowed_scope == ["one.py"]
 
+
+def test_codex_fallback_receives_minimal_environment(tmp_path, monkeypatch):
+    for name in (
+        "GITHUB_TOKEN",
+        "OPENAI_API_KEY",
+        "DATABASE_URL",
+        "HTTPS_PROXY",
+        "PYTHONPATH",
+        "NODE_OPTIONS",
+        "DYLD_INSERT_LIBRARIES",
+    ):
+        monkeypatch.setenv(name, "controller-secret")
+    expected = WorkerResult(True, message="ok")
+    adapter = CodexWorkerAdapter()
+    with patch(
+        "advancore.agent_runner.worker.shutil.which", return_value="/usr/bin/codex"
+    ), patch(
+        "advancore.agent_runner.worker.run_bounded_worker_process", return_value=expected
+    ) as bounded:
+        result = adapter.run("work", tmp_path)
+
+    assert result is expected
+    assert bounded.call_args.args[0][0] == "/usr/bin/codex"
+    environment = bounded.call_args.kwargs["environment"]
+    assert environment["PATH"] == "/usr/bin:/bin:/usr/sbin:/sbin"
+    assert "advancore-codex-" in environment["TMPDIR"]
+    for name in (
+        "GITHUB_TOKEN",
+        "OPENAI_API_KEY",
+        "DATABASE_URL",
+        "HTTPS_PROXY",
+        "PYTHONPATH",
+        "NODE_OPTIONS",
+        "DYLD_INSERT_LIBRARIES",
+    ):
+        assert name not in environment

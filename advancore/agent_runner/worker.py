@@ -123,6 +123,27 @@ def _kimi_environment(scratch_dir: Path) -> dict[str, str]:
     return environment
 
 
+def _codex_environment(scratch_dir: Path) -> dict[str, str]:
+    """Return a minimal fixed environment for one governed Codex launch."""
+    account = pwd.getpwuid(os.getuid())
+    account_home = Path(account.pw_dir).resolve()
+    environment = {
+        "HOME": str(account_home),
+        "USER": account.pw_name,
+        "LOGNAME": account.pw_name,
+        "PATH": KIMI_RUNTIME_PATH,
+        "TMPDIR": str(scratch_dir),
+        "TMP": str(scratch_dir),
+        "TEMP": str(scratch_dir),
+        "XDG_CACHE_HOME": str(scratch_dir / "cache"),
+    }
+    for name in KIMI_INHERITED_LOCALE_VARIABLES:
+        value = os.environ.get(name)
+        if value:
+            environment[name] = value
+    return environment
+
+
 def _isolate_kimi_command(
     command: list[str],
     service: WorkerUsageService | None,
@@ -772,20 +793,31 @@ class CodexWorkerAdapter(WorkerAdapter):
         ]
 
     def run(self, instruction: str, working_dir: Path) -> WorkerResult:
-        if not shutil.which(self.executable):
+        resolved_executable = shutil.which(self.executable)
+        if not resolved_executable:
             return WorkerResult(
                 success=False,
                 message=f"Worker executable '{self.executable}' not found in PATH",
             )
         bounded_instruction = _governed_instruction(instruction, self.allowed_scope)
-        try:
-            command = self.build_command(bounded_instruction, working_dir)
-            return run_bounded_worker_process(command, working_dir, self.timeout_seconds)
-        except Exception as exc:  # pragma: no cover - defensive
-            return WorkerResult(
-                success=False,
-                message=f"Worker launch failed: {type(exc).__name__}",
-            )
+        with tempfile.TemporaryDirectory(
+            prefix="advancore-codex-", dir="/tmp"
+        ) as scratch_name:
+            try:
+                command = self.build_command(bounded_instruction, working_dir)
+                command[0] = resolved_executable
+                environment = _codex_environment(Path(scratch_name).resolve(strict=True))
+                return run_bounded_worker_process(
+                    command,
+                    working_dir,
+                    self.timeout_seconds,
+                    environment=environment,
+                )
+            except Exception as exc:  # pragma: no cover - defensive
+                return WorkerResult(
+                    success=False,
+                    message=f"Worker launch failed: {type(exc).__name__}",
+                )
 
 
 class CodexPlannerAdapter(WorkerAdapter):
