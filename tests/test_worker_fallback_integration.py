@@ -146,7 +146,7 @@ def _run_pipeline(
     # this integration fixture exercises the governed worker/fallback flow.
     monkeypatch.setattr(
         "advancore.agent_runner.worker._isolate_kimi_command",
-        lambda command, _service: command,
+        lambda command, _service, _working_dir, _scratch_dir: command,
     )
     result = run_auto_pipeline(
         tasks,

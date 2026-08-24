@@ -70,6 +70,8 @@ None. Usage status and runtime accounting are local, bounded, Git-ignored JSON a
 - Prove the OS isolation profile can actually start before refreshing or reserving usage; executable presence alone is insufficient.
 - Reject symlinked, hard-linked, non-owner, or writable aliases anywhere in the controller probe path so a worker cannot substitute the refresh executable.
 - Bound both probe output streams while reading them, terminate oversized or timed-out probe process groups, and reject invalid bytes without escaping the fallback-eligible fail-closed result.
+- Restrict Kimi and descendants to writes inside the governed repository, a per-launch temporary directory, and documented non-executable Kimi session/cache/log/history paths; explicitly deny controller state, Kimi executables, credentials, plugins, skills, updates, Homebrew and `/usr/local`.
+- Resolve the Kimi executable before sandbox launch, fix Kimi's data-home and temporary paths from controller-owned values, disable telemetry for governed runs, and give the usage probe only the immutable `/usr/bin:/bin` search path.
 - Share one provider ledger and lock across all local AdvanCore clones/worktrees.
 - Clamp launches to a guarded pre-reset deadline and carry any unexpectedly cross-reset charge into the next verified provider period.
 - Check usage before process launch; a blocked launch must not run Kimi or mutate the repository.
@@ -126,6 +128,7 @@ None. On 23 August 2026 the owner explicitly selected a 20% Kimi weekly allowanc
 - Rechecked the absolute provider-reset deadline immediately before process creation so slow repository verification cannot start Kimi after the fresh-reading boundary.
 - Replaced the sandbox executable-presence check with a real pre-reservation capability probe, so nested-sandbox denial is classified before Kimi is invoked and the approved fallback can run.
 - Repaired the fourth independent-review findings by validating the full probe path against symlink/hard-link aliases and collecting both probe output streams under strict byte, time, decoding and process-lifecycle bounds.
+- Repaired the fifth independent-review finding by replacing broad filesystem write permission with a repository-and-reviewed-runtime allowlist, explicit executable/credential denials, per-launch scratch isolation, absolute worker executable resolution, and an immutable usage-probe command search path.
 
 ### Files changed
 
@@ -146,8 +149,8 @@ None.
 
 ### Tests and results
 
-- Fourth-repair focused usage, worker, Dashboard, fallback and task verification: 107 passed.
-- Full project suite with the documented local PostgreSQL configuration: 795 passed.
+- Fifth-repair focused usage, worker, Dashboard, fallback, timeout and task verification: 115 passed.
+- Full project suite with the documented local PostgreSQL configuration: 796 passed.
 - Python compile/import and `git diff --check`: passed.
 - Streamlit Dashboard AppTest smoke: zero exceptions; rendered Kimi usage unavailable, policy limit 20%, and the fail-closed refresh warning expected during secure-schema transition.
 - Exact scope, unstaged/staged/new-file and controller-state checks: passed; authoritative usage evidence is outside Git and shared across checkouts.

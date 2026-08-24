@@ -22,7 +22,7 @@ Authoritative artifacts use one OS-account-wide location shared by every AdvanCo
 
 Neither artifact may contain credentials, tokens, browser content, provider responses, prompts, transcripts, environment dumps, customer data, or arbitrary command output.
 
-On the approved macOS execution path, `agent_runner` launches Kimi and all of its descendants inside an OS sandbox that denies writes to the complete controller-state root. Path placement and file modes are not treated as sufficient isolation. Before refreshing or reserving usage, `agent_runner` runs a fixed harmless sandbox capability probe. If the profile cannot actually start—for example, because Codex Desktop is already inside a sandbox—Kimi fails closed before reservation or launch; an approved Codex fallback may still be considered through the unchanged fallback gates.
+On the approved macOS execution path, `agent_runner` launches Kimi and all of its descendants inside an OS sandbox that allows writes only to the governed repository, one controller-created per-launch temporary directory, and the documented non-executable Kimi cache/log/session/history locations. Controller state, Kimi binaries, credentials, OAuth state, plugins, skills, updates, Homebrew and `/usr/local` remain explicitly non-writable. Kimi receives fixed controller-resolved `HOME`, `KIMI_CODE_HOME` and temporary paths, telemetry is disabled, and the executable is resolved before sandbox entry. Path placement and file modes are not treated as sufficient isolation. Before refreshing or reserving usage, `agent_runner` runs a fixed harmless sandbox capability probe. If the profile cannot actually start—for example, because Codex Desktop is already inside a sandbox—Kimi fails closed before reservation or launch; an approved Codex fallback may still be considered through the unchanged fallback gates.
 
 ## Local controller responsibility
 
@@ -34,7 +34,7 @@ The fixed probe path is `~/Library/Application Support/AdvanCore/agent_runner/pr
 {"schema_version":1,"provider":"kimi","weekly_used_percent":12,"checked_at":"2026-08-28T03:00:00Z","reset_at":"2026-09-04T02:46:00Z"}
 ```
 
-The reviewed probe owns interaction with the authenticated Kimi client. It must not emit tokens, provider response bodies, browser contents or diagnostics. Standard output and standard error are each capped at 16 KiB while being collected, the process group is time-bounded, and JSON is decoded only after collection succeeds. When evidence is missing, stale or reset-expired, `agent_runner` invokes this probe automatically before Kimi preflight. Missing, unsafe, failed or invalid probe output keeps Kimi paused and allows only the existing approved fallback evaluation.
+The reviewed probe owns interaction with the authenticated Kimi client. It must not emit tokens, provider response bodies, browser contents or diagnostics, and its command search path is restricted to the OS-owned `/usr/bin:/bin`. Standard output and standard error are each capped at 16 KiB while being collected, the process group is time-bounded, and JSON is decoded only after collection succeeds. When evidence is missing, stale or reset-expired, `agent_runner` invokes this probe automatically before Kimi preflight. Missing, unsafe, failed or invalid probe output keeps Kimi paused and allows only the existing approved fallback evaluation.
 
 Record a fresh reading from the repository root:
 

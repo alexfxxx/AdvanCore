@@ -14,6 +14,8 @@ from advancore.agent_runner.worker import (
     KimiSwarmWorkerAdapter,
     KimiWorkerAdapter,
     WorkerResult,
+    _isolate_kimi_command,
+    _kimi_environment,
     run_bounded_worker_process,
 )
 from advancore.services.worker_usage_service import WorkerUsageService
@@ -89,7 +91,39 @@ def test_available_kimi_run_uses_remaining_timeout_and_records_runtime(tmp_path)
     assert bounded.call_args.args[2] == 100
     assert bounded.call_args.args[0][0] == "/usr/bin/sandbox-exec"
     assert str(service.protected_state_root) in bounded.call_args.args[0][2]
+    assert bounded.call_args.args[0][3] == "/usr/bin/kimi"
+    environment = bounded.call_args.args[4]
+    assert environment["KIMI_CODE_HOME"].endswith("/.kimi-code")
+    assert environment["KIMI_DISABLE_TELEMETRY"] == "1"
+    assert "advancore-kimi-" in environment["TMPDIR"]
     assert service.get_summary().runtime_seconds == 3501
+
+
+def test_kimi_sandbox_write_allowlist_excludes_executables_and_credentials(tmp_path):
+    service = _record(tmp_path)
+    scratch = tmp_path.parent / "reviewed-kimi-scratch"
+    scratch.mkdir()
+
+    command = _isolate_kimi_command(
+        ["/Users/alex/.kimi-code/bin/kimi", "--prompt", "instruction"],
+        service,
+        tmp_path,
+        scratch,
+    )
+    profile = command[2]
+
+    assert "(require-not (require-any" in profile
+    assert f'(subpath "{tmp_path.resolve()}")' in profile
+    assert f'(subpath "{scratch.resolve()}")' in profile
+    assert '(deny file-write* (subpath "/opt/homebrew"))' in profile
+    assert '(deny file-write* (subpath "/usr/local"))' in profile
+    assert '/.kimi-code/bin"))' in profile
+    assert '/.kimi-code/credentials"))' in profile
+    assert str(service.protected_state_root) in profile
+
+    environment = _kimi_environment(scratch)
+    assert environment["TMPDIR"] == str(scratch)
+    assert environment["XDG_CACHE_HOME"] == str(scratch / "cache")
 
 
 def test_kimi_automatically_refreshes_missing_usage_then_runs_as_primary(tmp_path):

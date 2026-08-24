@@ -409,7 +409,7 @@ class WorkerUsageService:
         account_home = pwd.getpwuid(os.getuid()).pw_dir
         environment = {
             "HOME": account_home,
-            "PATH": "/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin",
+            "PATH": "/usr/bin:/bin",
             "LANG": "C.UTF-8",
         }
         returncode, stdout, stderr = self._run_controller_probe(probe, environment)
