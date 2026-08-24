@@ -55,8 +55,12 @@ class FakeStreamlit:
     def text_area(self, label, **kwargs):
         self.widget_labels.append(label)
         if kwargs.get("disabled"):
-            self._record("detail_content", kwargs.get("value", ""))
-            return kwargs.get("value", "")
+            key = kwargs.get("key")
+            rendered_value = self.session_state.setdefault(
+                key, kwargs.get("value", "")
+            )
+            self._record("detail_content", rendered_value)
+            return rendered_value
         if label in self.inputs:
             return self.inputs[label]
         if label == "Content":
@@ -206,7 +210,7 @@ def test_successful_edit_reruns_and_refreshed_screen_shows_saved_values(monkeypa
     state = {
         "knowledge_edit_title_1": "  Updated  ",
         "knowledge_edit_content_1": "  New content  ",
-        "knowledge_content_1": "Old",
+        knowledge_hub._content_widget_key(1, "Old"): "Old",
     }
     submitted = FakeStreamlit(
         selected_id=1,
@@ -229,7 +233,6 @@ def test_successful_edit_reruns_and_refreshed_screen_shows_saved_values(monkeypa
     )
     assert "knowledge_edit_title_1" not in state
     assert "knowledge_edit_content_1" not in state
-    assert "knowledge_content_1" not in state
 
     refreshed = FakeStreamlit(selected_id=1, session_state=state)
     _install(monkeypatch, refreshed, KnowledgeService(repo))
@@ -238,6 +241,25 @@ def test_successful_edit_reruns_and_refreshed_screen_shows_saved_values(monkeypa
     assert "Title: Updated" in refreshed.text()
     assert "New content" in refreshed.text()
     assert refreshed.rerun_calls == 0
+    assert knowledge_hub._content_widget_key(1, "Old") not in state
+    assert state[knowledge_hub._content_widget_key(1, "New content")] == (
+        "New content"
+    )
+
+
+def test_saved_content_identity_replaces_stale_detail_widget(monkeypatch):
+    old_key = knowledge_hub._content_widget_key(1, "Old")
+    state = {old_key: "Old"}
+    fake_st = FakeStreamlit(selected_id=1, session_state=state)
+    repo = FakeRepository([_item(1, "Updated", "New content")])
+    _install(monkeypatch, fake_st, KnowledgeService(repo))
+
+    knowledge_hub.render()
+
+    new_key = knowledge_hub._content_widget_key(1, "New content")
+    assert "New content" in fake_st.text()
+    assert old_key not in state
+    assert state[new_key] == "New content"
 
 
 def test_archive_requires_confirmation_then_refreshes_read_only_state(monkeypatch):
@@ -309,4 +331,4 @@ def test_lifecycle_failures_are_generic_and_do_not_rerun(monkeypatch, operation)
     for secret in ("password", "SQL", "token", "traceback"):
         assert secret not in fake_st.text()
     assert fake_st.rerun_calls == 0
-    assert not fake_st.session_state
+    assert knowledge_hub._KNOWLEDGE_FLASH_KEY not in fake_st.session_state

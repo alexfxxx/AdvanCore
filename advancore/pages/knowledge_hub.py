@@ -2,6 +2,7 @@
 
 from collections.abc import Iterator
 from contextlib import contextmanager
+import hashlib
 
 import streamlit as st
 
@@ -95,6 +96,20 @@ def _render_success_notice() -> None:
         st.success(message)
 
 
+def _content_widget_key(item_id: int, content: str) -> str:
+    """Return a stable, non-plaintext identity for the saved content value."""
+    content_digest = hashlib.sha256(content.encode("utf-8")).hexdigest()[:12]
+    return f"knowledge_content_{item_id}_{content_digest}"
+
+
+def _clear_superseded_content_state(item_id: int, current_key: str) -> None:
+    """Discard old detail widgets before rendering the current saved value."""
+    prefix = f"knowledge_content_{item_id}_"
+    for key in tuple(st.session_state):
+        if key.startswith(prefix) and key != current_key:
+            st.session_state.pop(key, None)
+
+
 def _render_items() -> None:
     """Load and render the deterministic knowledge list and selected detail."""
     try:
@@ -128,12 +143,18 @@ def _render_items() -> None:
                     if selected.created_at is not None
                     else "Created: Not available"
                 )
+                content_widget_key = _content_widget_key(
+                    selected.id, selected.content
+                )
+                _clear_superseded_content_state(
+                    selected.id, content_widget_key
+                )
                 st.text_area(
                     "Content",
                     value=selected.content,
                     height=240,
                     disabled=True,
-                    key=f"knowledge_content_{selected.id}",
+                    key=content_widget_key,
                 )
 
                 if selected.status == "archived":
@@ -170,7 +191,6 @@ def _render_items() -> None:
                         clear_session_keys=(
                             f"knowledge_edit_title_{selected.id}",
                             f"knowledge_edit_content_{selected.id}",
-                            f"knowledge_content_{selected.id}",
                         ),
                     )
 
