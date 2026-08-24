@@ -5,7 +5,10 @@ PROJECT_ROOT=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 CHECK_ONLY=false
 STOP_ONLY=false
 
-if [ "${1:-}" = "--check-only" ]; then
+if [ "$#" -gt 1 ]; then
+    echo "Usage: ./scripts/start-advancore.sh [--check-only|--stop]" >&2
+    exit 2
+elif [ "${1:-}" = "--check-only" ]; then
     CHECK_ONLY=true
 elif [ "${1:-}" = "--stop" ]; then
     STOP_ONLY=true
@@ -54,6 +57,10 @@ fi
 
 ENV_TARGET="$PROJECT_ROOT/.env"
 if [ -L "$ENV_TARGET" ]; then
+    echo "The local development settings path is unsafe." >&2
+    exit 1
+fi
+if [ -e "$ENV_TARGET" ] && [ ! -f "$ENV_TARGET" ]; then
     echo "The local development settings path is unsafe." >&2
     exit 1
 fi

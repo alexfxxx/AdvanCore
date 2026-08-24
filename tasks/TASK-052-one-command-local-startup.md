@@ -46,6 +46,8 @@ None. This uses the existing documented local-development configuration.
   empty interpolation environment and default local Docker context.
 - Added a bounded `--stop` mode that targets that exact same local Compose
   project and keeps the local database volume.
+- Rejected extra command arguments and every existing non-regular `.env`
+  target before checking or starting local services.
 
 ### Database changes
 
