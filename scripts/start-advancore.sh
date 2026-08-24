@@ -39,8 +39,68 @@ compose() {
         --file "$PROJECT_ROOT/docker-compose.yml" \
         "$@"
 }
+
+LEGACY_CONTAINER=advancore-postgres
+LEGACY_PROJECT=advancore
+LEGACY_SERVICE=postgres
+LEGACY_IMAGE=postgres:16
+LEGACY_VOLUME=advancore_advancore_postgres_data
+LEGACY_WAS_RUNNING=false
+
+legacy_exists() {
+    docker --context default inspect "$LEGACY_CONTAINER" >/dev/null 2>&1
+}
+
+legacy_value() {
+    docker --context default inspect --format "$1" "$LEGACY_CONTAINER"
+}
+
+validate_legacy_container() {
+    legacy_project=$(legacy_value '{{ index .Config.Labels "com.docker.compose.project" }}')
+    legacy_service=$(legacy_value '{{ index .Config.Labels "com.docker.compose.service" }}')
+    legacy_image=$(legacy_value '{{ .Config.Image }}')
+    legacy_volume=$(legacy_value '{{ range .Mounts }}{{ if eq .Destination "/var/lib/postgresql/data" }}{{ .Name }}{{ end }}{{ end }}')
+
+    if [ "$legacy_project" != "$LEGACY_PROJECT" ] || \
+       [ "$legacy_service" != "$LEGACY_SERVICE" ] || \
+       [ "$legacy_image" != "$LEGACY_IMAGE" ] || \
+       [ "$legacy_volume" != "$LEGACY_VOLUME" ]; then
+        echo "A same-name Docker container exists but is not the approved legacy AdvanCore database. No container was changed." >&2
+        exit 1
+    fi
+}
+
+legacy_is_running() {
+    [ "$(legacy_value '{{ .State.Running }}')" = true ]
+}
+
+ensure_canonical_volume() {
+    if docker --context default volume inspect "$LEGACY_VOLUME" >/dev/null 2>&1; then
+        return
+    fi
+    created_volume=$(docker --context default volume create "$LEGACY_VOLUME")
+    if [ "$created_volume" != "$LEGACY_VOLUME" ]; then
+        echo "The canonical local database volume could not be prepared safely." >&2
+        exit 1
+    fi
+}
+
+rollback_canonical_start() {
+    compose down >/dev/null 2>&1 || true
+    if [ "$LEGACY_WAS_RUNNING" = true ]; then
+        docker --context default start "$LEGACY_CONTAINER" >/dev/null 2>&1 || true
+    fi
+}
+
+if legacy_exists; then
+    validate_legacy_container
+fi
+
 if [ "$STOP_ONLY" = true ]; then
     compose down
+    if legacy_exists && legacy_is_running; then
+        docker --context default stop "$LEGACY_CONTAINER" >/dev/null
+    fi
     echo "AdvanCore local database stopped. Local data was kept."
     exit 0
 fi
@@ -101,17 +161,33 @@ if [ ! -f "$ENV_TARGET" ]; then
 fi
 
 cd "$PROJECT_ROOT"
-compose up -d postgres
+ensure_canonical_volume
+if legacy_exists && legacy_is_running; then
+    docker --context default stop "$LEGACY_CONTAINER" >/dev/null
+    LEGACY_WAS_RUNNING=true
+    echo "Stopped the verified legacy database container. Its saved data was kept."
+fi
+if ! compose up -d postgres; then
+    rollback_canonical_start
+    echo "The canonical local database could not start. The saved database volume was not changed." >&2
+    exit 1
+fi
 attempt=0
 until compose exec -T postgres pg_isready -U advancore -d advancore >/dev/null 2>&1; do
     attempt=$((attempt + 1))
     if [ "$attempt" -ge 30 ]; then
+        rollback_canonical_start
         echo "PostgreSQL did not become ready within 30 seconds. No migration was run." >&2
         exit 1
     fi
     sleep 1
 done
 export DATABASE_URL
-"$PROJECT_ROOT/.venv/bin/alembic" upgrade head
+if ! "$PROJECT_ROOT/.venv/bin/alembic" upgrade head; then
+    rollback_canonical_start
+    echo "Approved database migrations could not be applied. The saved database volume was kept." >&2
+    exit 1
+fi
 echo "AdvanCore is starting. Keep this window open while using the app."
-exec "$PROJECT_ROOT/.venv/bin/streamlit" run "$PROJECT_ROOT/app.py"
+exec "$PROJECT_ROOT/.venv/bin/streamlit" run "$PROJECT_ROOT/app.py" \
+    --server.address 127.0.0.1
