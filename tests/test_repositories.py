@@ -5,11 +5,12 @@ from datetime import datetime, timedelta
 import pytest
 from sqlalchemy import create_engine
 
-from advancore.models import ActivityLog, Base, KnowledgeItem, Project
+from advancore.models import ActivityLog, Base, KnowledgeItem, Project, SystemSetting
 from advancore.repositories import (
     ActivityLogRepository,
     KnowledgeItemRepository,
     ProjectRepository,
+    SystemSettingRepository,
 )
 from advancore.services.database import create_session_factory, session_scope
 
@@ -194,3 +195,31 @@ class TestActivityLogRepository:
             assert repo.get_by_id(older_id).action == "older"
             assert repo.get_by_id(999_999) is None
             assert [record.id for record in repo.list()] == [newer_id, older_id]
+
+
+class TestSystemSettingRepository:
+    def test_add_get_and_update_setting(self, sqlite_session_factory):
+        with session_scope(sqlite_session_factory) as session:
+            repo = SystemSettingRepository(session)
+            saved = repo.add(
+                SystemSetting(
+                    key="dashboard.command_center.v1",
+                    value='{"version":1}',
+                    description="Dashboard preference",
+                )
+            )
+            saved_id = saved.id
+
+        with session_scope(sqlite_session_factory) as session:
+            repo = SystemSettingRepository(session)
+            setting = repo.get_by_key("dashboard.command_center.v1")
+            assert setting.id == saved_id
+            setting.value = '{"version":2}'
+            repo.save(setting)
+
+        with session_scope(sqlite_session_factory) as session:
+            repo = SystemSettingRepository(session)
+            assert repo.get_by_key("dashboard.command_center.v1").value == (
+                '{"version":2}'
+            )
+            assert repo.get_by_key("missing") is None
