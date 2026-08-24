@@ -17,6 +17,7 @@ class FakeStreamlit:
         self.messages = []
         self.spinner_labels = []
         self.selectbox_options = {}
+        self.selectbox_labels = {}
 
     def _record(self, kind, value):
         self.messages.append((kind, str(value)))
@@ -30,8 +31,10 @@ class FakeStreamlit:
     def spinner(self, label):
         self.spinner_labels.append(label)
         return nullcontext()
-    def selectbox(self, label, options, **_kwargs):
+    def selectbox(self, label, options, **kwargs):
         self.selectbox_options[label] = list(options)
+        formatter = kwargs.get("format_func", str)
+        self.selectbox_labels[label] = [formatter(option) for option in options]
         if label == "Select an activity record" and self.selected_id is not None:
             return self.selected_id
         return self.selected_filters.get(label, options[0])
@@ -109,8 +112,8 @@ def test_selected_record_shows_read_only_details_and_fallbacks(monkeypatch):
 
     rendered = fake_st.text()
     assert "Loading activity..." in fake_st.spinner_labels
-    assert "Action: project_created" in rendered
-    assert "Entity type: project" in rendered
+    assert "Action: Project created" in rendered
+    assert "Entity type: Project" in rendered
     assert "Entity ID: 17" in rendered
     assert "Created: 23 Aug 2026, 10:30 UTC" in rendered
     assert "Created project Alpha" in rendered
@@ -150,7 +153,27 @@ def test_entity_and_action_filters_bound_the_selectable_records(monkeypatch):
     activity_log.render()
 
     assert fake_st.selectbox_options["Select an activity record"] == [2]
-    assert "Action: project_archived" in fake_st.text()
+    assert fake_st.selectbox_labels["Filter by action"] == [
+        "All actions",
+        "Project created",
+        "Project updated",
+        "Project archived",
+        "Knowledge created",
+        "Knowledge updated",
+        "Knowledge archived",
+    ]
+    assert fake_st.selectbox_labels["Select an activity record"] == [
+        "Project archived (record #2)"
+    ]
+    assert "Action: Project archived" in fake_st.text()
+
+
+def test_unknown_activity_codes_have_readable_non_destructive_fallback():
+    assert activity_log._action_label("route_exception_opened") == (
+        "Route exception opened"
+    )
+    assert activity_log._entity_label("service_route") == "Service route"
+    assert activity_log._action_label("") == "Not provided"
 
 
 def test_filters_have_clear_empty_state(monkeypatch):
