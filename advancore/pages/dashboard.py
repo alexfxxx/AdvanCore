@@ -195,6 +195,12 @@ def _render_ai_workforce(workers: tuple[str, ...]) -> None:
 def render():
     st.header("Executive Command Center")
     st.caption("Real AdvanCore status only — no placeholder business figures.")
+    if st.button(
+        "Refresh dashboard",
+        key="dashboard_refresh",
+        help="Reload the latest available dashboard data and local status.",
+    ):
+        st.success("Dashboard refreshed with the latest available data.")
     preferences = _load_preferences()
     _render_customizer(preferences)
     visible = set(preferences.modules)
