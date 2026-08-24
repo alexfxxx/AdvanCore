@@ -28,6 +28,7 @@ class FakeStreamlit:
         self.rerun_calls = 0
         self._form_key = None
         self.selectbox_labels = []
+        self.selected_option = None
 
     def _record(self, kind, value): self.messages.append((kind, str(value)))
     def header(self, value): self._record("header", value)
@@ -80,7 +81,16 @@ class FakeStreamlit:
     def selectbox(self, _label, options, **kwargs):
         formatter = kwargs.get("format_func", str)
         self.selectbox_labels = [formatter(option) for option in options]
-        return self.selected_id if self.selected_id is not None else options[0]
+        key = kwargs.get("key")
+        if self.selected_id is not None:
+            selected = self.selected_id
+        elif key in self.session_state:
+            selected = self.session_state[key]
+        else:
+            selected = options[kwargs.get("index", 0)]
+        self.session_state[key] = selected
+        self.selected_option = formatter(selected)
+        return selected
     def rerun(self): self.rerun_calls += 1
     def text(self): return "\n".join(message for _, message in self.messages)
 
@@ -290,7 +300,28 @@ def test_archive_requires_confirmation_then_refreshes_read_only_state(monkeypatc
     assert "Knowledge draft archived successfully." in refreshed.text()
     assert "Archived knowledge draft — read-only." in refreshed.text()
     assert "Original (archived)" in refreshed.selectbox_labels
+    assert refreshed.selected_option == "Original (archived)"
     assert "Knowledge title" not in refreshed.widget_labels
+
+
+def test_selector_label_revision_keeps_selected_item_and_drops_old_widget(monkeypatch):
+    draft = _item(1, "Changing", "Content")
+    old_widget_key = knowledge_hub._selection_widget_key([draft])
+    state = {
+        knowledge_hub._KNOWLEDGE_SELECTED_VALUE_KEY: 1,
+        old_widget_key: 1,
+    }
+    draft.status = "archived"
+    fake_st = FakeStreamlit(session_state=state)
+    _install(monkeypatch, fake_st, KnowledgeService(FakeRepository([draft])))
+
+    knowledge_hub.render()
+
+    new_widget_key = knowledge_hub._selection_widget_key([draft])
+    assert fake_st.selected_option == "Changing (archived)"
+    assert old_widget_key not in state
+    assert state[new_widget_key] == 1
+    assert state[knowledge_hub._KNOWLEDGE_SELECTED_VALUE_KEY] == 1
 
 
 def test_unknown_status_and_unknown_flash_are_never_treated_as_trusted(monkeypatch):

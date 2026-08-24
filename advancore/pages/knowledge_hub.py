@@ -17,6 +17,8 @@ from advancore.services.knowledge_service import (
 
 
 _KNOWLEDGE_FLASH_KEY = "knowledge_success_notice"
+_KNOWLEDGE_SELECTED_VALUE_KEY = "knowledge_selected_value"
+_KNOWLEDGE_SELECTBOX_PREFIX = "knowledge_selected_id_"
 _KNOWLEDGE_SUCCESS_MESSAGES = frozenset(
     {"Knowledge draft updated successfully.", "Knowledge draft archived successfully."}
 )
@@ -110,6 +112,24 @@ def _clear_superseded_content_state(item_id: int, current_key: str) -> None:
             st.session_state.pop(key, None)
 
 
+def _selection_widget_key(items: list) -> str:
+    """Version the selector from its current saved user-facing labels."""
+    label_material = "\n".join(
+        f"{item.id}\0{item.title}\0{item.status}" for item in items
+    )
+    label_digest = hashlib.sha256(label_material.encode("utf-8")).hexdigest()[:12]
+    return f"{_KNOWLEDGE_SELECTBOX_PREFIX}{label_digest}"
+
+
+def _clear_superseded_selection_state(current_key: str) -> None:
+    """Discard stale selector widgets while retaining the selected value."""
+    for key in tuple(st.session_state):
+        if key == "knowledge_selected_id" or (
+            key.startswith(_KNOWLEDGE_SELECTBOX_PREFIX) and key != current_key
+        ):
+            st.session_state.pop(key, None)
+
+
 def _render_items() -> None:
     """Load and render the deterministic knowledge list and selected detail."""
     try:
@@ -122,14 +142,23 @@ def _render_items() -> None:
 
                 st.subheader("Knowledge list")
                 item_by_id = {item.id: item for item in items}
+                item_ids = list(item_by_id)
+                selection_widget_key = _selection_widget_key(items)
+                _clear_superseded_selection_state(selection_widget_key)
+                preferred_id = st.session_state.get(_KNOWLEDGE_SELECTED_VALUE_KEY)
+                selected_index = (
+                    item_ids.index(preferred_id) if preferred_id in item_by_id else 0
+                )
                 selected_id = st.selectbox(
                     "Select a knowledge item",
-                    options=list(item_by_id),
+                    options=item_ids,
+                    index=selected_index,
                     format_func=lambda item_id: (
                         f"{item_by_id[item_id].title} ({item_by_id[item_id].status})"
                     ),
-                    key="knowledge_selected_id",
+                    key=selection_widget_key,
                 )
+                st.session_state[_KNOWLEDGE_SELECTED_VALUE_KEY] = selected_id
                 selected = service.get_item(selected_id)
                 if selected is None:
                     st.warning("The selected knowledge item could not be found.")
