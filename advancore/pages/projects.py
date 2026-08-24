@@ -17,8 +17,13 @@ from advancore.services.project_service import (
 
 
 _PROJECT_FLASH_KEY = "projects_success_notice"
+_PROJECT_CREATE_GENERATION_KEY = "project_create_generation"
 _PROJECT_SUCCESS_MESSAGES = frozenset(
-    {"Project updated successfully.", "Project archived successfully."}
+    {
+        "Project created successfully.",
+        "Project updated successfully.",
+        "Project archived successfully.",
+    }
 )
 
 
@@ -33,23 +38,23 @@ def _project_service() -> Iterator[ProjectService]:
         yield ProjectService(ProjectRepository(session))
 
 
-def _create_project(name: str, description: str) -> bool:
+def _create_project(name: str, description: str) -> int | None:
     """Create one project and render a presentation-safe outcome."""
     try:
         with _project_service() as service:
-            service.create_project(name, description)
+            created = service.create_project(name, description)
+            created_id = created.id
     except ProjectValidationError as exc:
         st.error(str(exc))
-        return False
+        return None
     except DuplicateProjectNameError as exc:
         st.error(str(exc))
-        return False
+        return None
     except Exception:
         st.error("Project creation failed. Please try again.")
-        return False
+        return None
 
-    st.success("Project created successfully.")
-    return True
+    return created_id
 
 
 def _edit_project(project_id: int, name: str, description: str) -> bool:
@@ -201,12 +206,26 @@ def render():
     _render_success_notice()
 
     st.subheader("Create project")
+    create_generation = int(st.session_state.get(_PROJECT_CREATE_GENERATION_KEY, 0))
+    create_name_key = f"project_create_name_{create_generation}"
+    create_description_key = f"project_create_description_{create_generation}"
     with st.form("create_project"):
-        name = st.text_input("Name", max_chars=200)
-        description = st.text_area("Description (optional)")
+        name = st.text_input("Name", max_chars=200, key=create_name_key)
+        description = st.text_area(
+            "Description (optional)", key=create_description_key
+        )
         submitted = st.form_submit_button("Create project", type="primary")
 
     if submitted:
-        _create_project(name, description)
+        created_id = _create_project(name, description)
+        if created_id is not None:
+            st.session_state["projects_selected_id"] = created_id
+            st.session_state[_PROJECT_CREATE_GENERATION_KEY] = (
+                create_generation + 1
+            )
+            _refresh_with_success(
+                "Project created successfully.",
+                clear_session_keys=(create_name_key, create_description_key),
+            )
 
     _render_projects()
