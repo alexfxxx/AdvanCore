@@ -108,6 +108,13 @@ from advancore.agent_runner.orchestration_inbox import (
     format_orchestration_inbox,
     serialize_orchestration_inbox,
 )
+from advancore.agent_runner.standing_authority import (
+    RoutineAction,
+    StandingAuthority,
+    StandingAuthorityError,
+    StandingAuthorityService,
+    default_standing_authority_dir,
+)
 from advancore.agent_runner.review_bundle import (
     ControllerAction,
     ReviewBundle,
@@ -233,6 +240,11 @@ __all__ = [
     "build_orchestration_inbox",
     "format_orchestration_inbox",
     "serialize_orchestration_inbox",
+    "RoutineAction",
+    "StandingAuthority",
+    "StandingAuthorityError",
+    "StandingAuthorityService",
+    "default_standing_authority_dir",
     "default_orchestration_dir",
     "load_checkpoint",
     "run_orchestration",
