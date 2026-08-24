@@ -19,6 +19,7 @@ class FakeStreamlit:
         self.spinner_labels = []
         self.selections = dict(selections or {})
         self.buttons = dict(buttons or {})
+        self.button_labels = []
         self.rerun_calls = 0
         self.session_state = {}
 
@@ -40,7 +41,9 @@ class FakeStreamlit:
     def columns(self, count): return [self for _ in range(count)]
     def multiselect(self, label, _options=None, default=None, **_kwargs):
         return self.selections.get(label, list(default or []))
-    def button(self, label, **_kwargs): return self.buttons.get(label, False)
+    def button(self, label, **_kwargs):
+        self.button_labels.append(label)
+        return self.buttons.get(label, False)
     def rerun(self): self.rerun_calls += 1
     def text(self): return "\n".join(message for _, message in self.messages)
 
@@ -162,6 +165,18 @@ def test_dashboard_renders_real_bounded_default_modules(monkeypatch):
     assert "Core application shell operational." in fake_st.text()
     assert "Database connected." in fake_st.text()
     assert "no placeholder business figures" in fake_st.text()
+    assert "Refresh dashboard" in fake_st.button_labels
+
+
+def test_refresh_control_confirms_fresh_page_run_and_renders_summary(monkeypatch):
+    fake_st = FakeStreamlit(buttons={"Refresh dashboard": True})
+    _install(monkeypatch, fake_st, FakeService(_summary()))
+
+    dashboard.render()
+
+    assert "Dashboard refreshed with the latest available data." in fake_st.text()
+    assert ("Total projects", 4) in fake_st.metrics
+    assert ("Kimi role", "Primary worker") in fake_st.metrics
 
 
 def test_hidden_modules_and_workers_are_not_rendered(monkeypatch):
