@@ -178,6 +178,9 @@ def _render_items() -> None:
                 st.write(f"Title: {selected.title}")
                 st.write(f"Status: {selected.status}")
                 st.write(f"Created: {format_utc_timestamp(selected.created_at)}")
+                st.write(
+                    f"Last updated: {format_utc_timestamp(selected.updated_at)}"
+                )
                 content_widget_key = _content_widget_key(
                     selected.id, selected.content
                 )

@@ -16,6 +16,7 @@ from advancore.services.project_service import (
     ProjectService,
     ProjectValidationError,
 )
+from advancore.ui.formatting import format_utc_timestamp
 
 
 _PROJECT_FLASH_KEY = "projects_success_notice"
@@ -184,6 +185,10 @@ def _render_projects() -> None:
                     else "Description: Not provided"
                 )
                 st.write(f"Status: {selected.status}")
+                st.write(f"Created: {format_utc_timestamp(selected.created_at)}")
+                st.write(
+                    f"Last updated: {format_utc_timestamp(selected.updated_at)}"
+                )
 
                 if selected.status == "archived":
                     st.info("Archived project — read-only.")
