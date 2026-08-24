@@ -99,7 +99,9 @@ def test_available_kimi_run_uses_remaining_timeout_and_records_runtime(tmp_path)
     assert service.get_summary().runtime_seconds == 3501
 
 
-def test_kimi_sandbox_write_allowlist_excludes_executables_and_credentials(tmp_path):
+def test_kimi_sandbox_write_allowlist_excludes_executables_and_credentials(
+    tmp_path, monkeypatch
+):
     service = _record(tmp_path)
     scratch = tmp_path.parent / "reviewed-kimi-scratch"
     scratch.mkdir()
@@ -121,9 +123,26 @@ def test_kimi_sandbox_write_allowlist_excludes_executables_and_credentials(tmp_p
     assert '/.kimi-code/credentials"))' in profile
     assert str(service.protected_state_root) in profile
 
+    monkeypatch.setenv("GITHUB_TOKEN", "must-not-reach-worker")
+    monkeypatch.setenv("OPENAI_API_KEY", "must-not-reach-worker")
+    monkeypatch.setenv("DATABASE_URL", "must-not-reach-worker")
+    monkeypatch.setenv("HTTPS_PROXY", "https://secret@example.invalid")
+    monkeypatch.setenv("PYTHONPATH", "/controller/code")
+    monkeypatch.setenv("NODE_OPTIONS", "--require=/controller/hook.js")
+    monkeypatch.setenv("DYLD_INSERT_LIBRARIES", "/controller/inject.dylib")
+    monkeypatch.setenv("LANG", "en_US.UTF-8")
     environment = _kimi_environment(scratch)
     assert environment["TMPDIR"] == str(scratch)
     assert environment["XDG_CACHE_HOME"] == str(scratch / "cache")
+    assert environment["PATH"] == "/usr/bin:/bin:/usr/sbin:/sbin"
+    assert environment["LANG"] == "en_US.UTF-8"
+    assert "GITHUB_TOKEN" not in environment
+    assert "OPENAI_API_KEY" not in environment
+    assert "DATABASE_URL" not in environment
+    assert "HTTPS_PROXY" not in environment
+    assert "PYTHONPATH" not in environment
+    assert "NODE_OPTIONS" not in environment
+    assert "DYLD_INSERT_LIBRARIES" not in environment
 
 
 def test_kimi_automatically_refreshes_missing_usage_then_runs_as_primary(tmp_path):

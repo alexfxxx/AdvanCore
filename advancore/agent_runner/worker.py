@@ -57,6 +57,13 @@ KIMI_SANDBOX_PROBE_PROFILE = (
     '(version 1) (allow default) '
     '(deny file-write* (require-not (subpath "/private/tmp")))'
 )
+KIMI_RUNTIME_PATH = "/usr/bin:/bin:/usr/sbin:/sbin"
+KIMI_INHERITED_LOCALE_VARIABLES: tuple[str, ...] = (
+    "LANG",
+    "LC_ALL",
+    "LC_CTYPE",
+    "TZ",
+)
 
 
 def _kimi_isolation_available() -> bool:
@@ -87,20 +94,32 @@ def _sandbox_literal(path: Path) -> str:
 
 
 def _kimi_environment(scratch_dir: Path) -> dict[str, str]:
-    """Return the fixed Kimi runtime environment for one governed launch."""
-    account_home = Path(pwd.getpwuid(os.getuid()).pw_dir).resolve()
-    environment = os.environ.copy()
-    environment.update(
-        {
-            "HOME": str(account_home),
-            "KIMI_CODE_HOME": str(account_home / ".kimi-code"),
-            "KIMI_DISABLE_TELEMETRY": "1",
-            "TMPDIR": str(scratch_dir),
-            "TMP": str(scratch_dir),
-            "TEMP": str(scratch_dir),
-            "XDG_CACHE_HOME": str(scratch_dir / "cache"),
-        }
-    )
+    """Return a minimal fixed environment for one governed Kimi launch.
+
+    The controller environment can contain unrelated provider, database, GitHub,
+    proxy, and loader credentials.  A governed implementation worker receives
+    only fixed runtime paths plus non-sensitive locale values; any future
+    task-required credential must cross a separately approved capability
+    boundary instead of being inherited implicitly.
+    """
+    account = pwd.getpwuid(os.getuid())
+    account_home = Path(account.pw_dir).resolve()
+    environment = {
+        "HOME": str(account_home),
+        "USER": account.pw_name,
+        "LOGNAME": account.pw_name,
+        "PATH": KIMI_RUNTIME_PATH,
+        "KIMI_CODE_HOME": str(account_home / ".kimi-code"),
+        "KIMI_DISABLE_TELEMETRY": "1",
+        "TMPDIR": str(scratch_dir),
+        "TMP": str(scratch_dir),
+        "TEMP": str(scratch_dir),
+        "XDG_CACHE_HOME": str(scratch_dir / "cache"),
+    }
+    for name in KIMI_INHERITED_LOCALE_VARIABLES:
+        value = os.environ.get(name)
+        if value:
+            environment[name] = value
     return environment
 
 

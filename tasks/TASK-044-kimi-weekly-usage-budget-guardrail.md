@@ -129,6 +129,7 @@ None. On 23 August 2026 the owner explicitly selected a 20% Kimi weekly allowanc
 - Replaced the sandbox executable-presence check with a real pre-reservation capability probe, so nested-sandbox denial is classified before Kimi is invoked and the approved fallback can run.
 - Repaired the fourth independent-review findings by validating the full probe path against symlink/hard-link aliases and collecting both probe output streams under strict byte, time, decoding and process-lifecycle bounds.
 - Repaired the fifth independent-review finding by replacing broad filesystem write permission with a repository-and-reviewed-runtime allowlist, explicit executable/credential denials, per-launch scratch isolation, absolute worker executable resolution, and an immutable usage-probe command search path.
+- Repaired the sixth independent-review finding by replacing controller-environment inheritance with a minimal fixed Kimi runtime environment. Unrelated provider, GitHub, database, proxy and loader variables no longer cross the worker boundary; future task-required credentials require a separately approved capability boundary.
 
 ### Files changed
 
@@ -149,6 +150,9 @@ None.
 
 ### Tests and results
 
+- Sixth-repair focused usage, worker, fallback and task verification: 75 passed.
+- Sixth-repair full project suite with the documented local PostgreSQL configuration: 796 passed.
+- Sixth-repair Python compile and `git diff --check`: passed.
 - Fifth-repair focused usage, worker, Dashboard, fallback, timeout and task verification: 115 passed.
 - Full project suite with the documented local PostgreSQL configuration: 796 passed.
 - Python compile/import and `git diff --check`: passed.
