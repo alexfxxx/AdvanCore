@@ -185,6 +185,30 @@ def test_automatic_refresh_rejects_non_utf8_output_as_invalid(tmp_path):
     assert service.get_summary().state == UsageState.UNAVAILABLE
 
 
+@pytest.mark.parametrize(
+    "probe_output",
+    [
+        b"[" * 1100 + b"]" * 1100,
+        b"{" + b'\"schema_version\":' + b"9" * 5000 + b"}",
+    ],
+)
+def test_automatic_refresh_normalizes_bounded_json_parser_failures(
+    tmp_path, monkeypatch, probe_output
+):
+    service = _service(tmp_path)
+    _write_raw_probe(service, b"exit 0\n")
+    monkeypatch.setattr(
+        service,
+        "_run_controller_probe",
+        lambda _probe, _environment: (0, probe_output, b""),
+    )
+
+    with pytest.raises(UsageBudgetError, match="refresh is invalid"):
+        service.auto_refresh_if_needed("kimi")
+
+    assert service.get_summary().state == UsageState.UNAVAILABLE
+
+
 def test_automatic_refresh_rejects_any_probe_diagnostics(tmp_path):
     service = _service(tmp_path)
     payload = json.dumps(

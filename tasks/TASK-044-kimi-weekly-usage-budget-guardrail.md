@@ -130,6 +130,7 @@ None. On 23 August 2026 the owner explicitly selected a 20% Kimi weekly allowanc
 - Repaired the fourth independent-review findings by validating the full probe path against symlink/hard-link aliases and collecting both probe output streams under strict byte, time, decoding and process-lifecycle bounds.
 - Repaired the fifth independent-review finding by replacing broad filesystem write permission with a repository-and-reviewed-runtime allowlist, explicit executable/credential denials, per-launch scratch isolation, absolute worker executable resolution, and an immutable usage-probe command search path.
 - Repaired the sixth independent-review finding by replacing controller-environment inheritance with a minimal fixed Kimi runtime environment. Unrelated provider, GitHub, database, proxy and loader variables no longer cross the worker boundary; future task-required credentials require a separately approved capability boundary.
+- Repaired the seventh independent-review finding by normalizing bounded JSON parser depth and integer-limit failures at both probe and stored-evidence boundaries into the existing fail-closed usage result, preserving approved fallback eligibility.
 
 ### Files changed
 
@@ -150,6 +151,8 @@ None.
 
 ### Tests and results
 
+- Seventh-repair focused usage, guardrail and fallback verification: 53 passed.
+- Seventh-repair full project suite with the documented local PostgreSQL configuration: 798 passed.
 - Sixth-repair focused usage, worker, fallback and task verification: 75 passed.
 - Sixth-repair full project suite with the documented local PostgreSQL configuration: 796 passed.
 - Sixth-repair Python compile and `git diff --check`: passed.

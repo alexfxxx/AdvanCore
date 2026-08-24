@@ -173,7 +173,7 @@ def _read_json(path: Path) -> dict[str, Any]:
         if path.stat().st_size > MAX_EVIDENCE_BYTES:
             raise UsageBudgetError("usage evidence is invalid")
         payload = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, UnicodeError, json.JSONDecodeError) as exc:
+    except (OSError, UnicodeError, ValueError, RecursionError) as exc:
         raise UsageBudgetError("usage evidence is invalid") from exc
     if not isinstance(payload, dict):
         raise UsageBudgetError("usage evidence is invalid")
@@ -417,7 +417,7 @@ class WorkerUsageService:
             raise UsageBudgetError("automatic provider usage refresh failed")
         try:
             payload = json.loads(stdout.decode("utf-8"))
-        except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        except (UnicodeError, ValueError, RecursionError) as exc:
             raise UsageBudgetError(
                 "automatic provider usage refresh is invalid"
             ) from exc
