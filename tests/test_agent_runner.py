@@ -354,6 +354,23 @@ class TestTaskDiscoveryAndSelection:
 
         assert task.task_id == "TASK-001"
 
+    def test_find_task_path_rejects_traversal_and_symlink_escape(self, tmp_path: Path):
+        outside = tmp_path.parent / "TASK-001-outside.md"
+        _write_task(
+            tmp_path.parent,
+            "TASK-001",
+            "Outside",
+            "READY",
+            filename=outside.name,
+        )
+        link = tmp_path / "TASK-001-link.md"
+        link.symlink_to(outside)
+
+        with pytest.raises(TaskError, match="not found"):
+            find_task(tmp_path, "../TASK-001-outside.md")
+        with pytest.raises(TaskError, match="not found"):
+            find_task(tmp_path, link.name)
+
     def test_find_task_unknown_raises(self, tmp_path: Path):
         with pytest.raises(TaskError, match="not found"):
             find_task(tmp_path, "TASK-999")

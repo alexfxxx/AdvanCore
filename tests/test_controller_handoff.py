@@ -294,6 +294,7 @@ class TestHandoffSerialization:
         handoff2 = build_controller_handoff(tmp_path / "b2.json", _make_bundle())
         path2 = write_controller_handoff(handoff2, handoff_dir)
 
+        assert path1 != path2
         latest = find_latest_handoff(handoff_dir)
         assert latest == path2
 

@@ -233,10 +233,11 @@ def write_controller_handoff(
             f"Failed to create handoff directory {handoff_dir}: {exc}"
         ) from exc
 
-    ts = datetime.fromisoformat(handoff.timestamp).strftime("%Y%m%dT%H%M%S")
+    ts = datetime.fromisoformat(handoff.timestamp).strftime("%Y%m%dT%H%M%S%f")
     task_part = _sanitize_filename(handoff.task_id)
     state_part = _sanitize_filename(handoff.state)
-    filename = f"{ts}_{task_part}_{state_part}.json"
+    request_part = _sanitize_filename(handoff.request_id)
+    filename = f"{ts}_{task_part}_{state_part}_{request_part}.json"
     path = handoff_dir / filename
 
     payload = serialize_controller_handoff(handoff)

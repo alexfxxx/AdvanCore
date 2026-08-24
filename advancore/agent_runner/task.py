@@ -99,24 +99,44 @@ def parse_task(path: Path) -> Task:
 
 def _candidate_paths(tasks_dir: Path, task_id: str) -> list[Path]:
     """Return all possible file paths for *task_id* under *tasks_dir*."""
-    normalized = task_id.upper().strip()
+    raw = task_id.strip()
+    normalized = raw.upper()
+    try:
+        tasks_root = tasks_dir.resolve(strict=True)
+    except OSError:
+        return []
+
+    def safe_candidate(candidate: Path) -> Path | None:
+        """Resolve one real, direct, exactly named task file inside the root."""
+        try:
+            resolved = candidate.resolve(strict=True)
+            if candidate.is_symlink() or resolved.parent != tasks_root:
+                return None
+            if candidate.name not in {entry.name for entry in tasks_root.iterdir()}:
+                return None
+        except OSError:
+            return None
+        return resolved if resolved.suffix.lower() == ".md" else None
 
     # Already a path to a task file.
     if normalized.endswith(".MD") or "/" in normalized or "\\" in normalized:
-        candidate = tasks_dir / normalized
-        if candidate.exists():
-            return [candidate.resolve()]
-        return []
+        supplied = Path(raw)
+        candidate = supplied if supplied.is_absolute() else tasks_root / supplied
+        resolved = safe_candidate(candidate)
+        return [resolved] if resolved is not None else []
 
     candidates: list[Path] = []
 
     # Exact filename match (e.g. TASK-005-name.md passed as the identifier).
-    exact = tasks_dir / normalized
-    if exact.exists() and exact.suffix.lower() == ".md":
-        candidates.append(exact.resolve())
+    exact = safe_candidate(tasks_root / raw)
+    if exact is not None:
+        candidates.append(exact)
 
     # Standard glob pattern for the short ID.
-    candidates.extend(sorted(tasks_dir.glob(f"{normalized}-*.md")))
+    for candidate in sorted(tasks_root.glob(f"{normalized}-*.md")):
+        resolved = safe_candidate(candidate)
+        if resolved is not None:
+            candidates.append(resolved)
 
     return candidates
 
