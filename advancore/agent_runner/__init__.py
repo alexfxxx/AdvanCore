@@ -122,6 +122,11 @@ from advancore.agent_runner.unattended_review import (
     UnattendedReviewStatus,
     run_unattended_review_loop,
 )
+from advancore.agent_runner.worker_routing import (
+    AuthorizedWorkerAdapter,
+    KimiFirstWorkerRoute,
+    build_kimi_first_worker_route,
+)
 from advancore.agent_runner.review_bundle import (
     ControllerAction,
     ReviewBundle,
@@ -257,6 +262,9 @@ __all__ = [
     "UnattendedReviewResult",
     "UnattendedReviewStatus",
     "run_unattended_review_loop",
+    "AuthorizedWorkerAdapter",
+    "KimiFirstWorkerRoute",
+    "build_kimi_first_worker_route",
     "default_orchestration_dir",
     "load_checkpoint",
     "run_orchestration",
