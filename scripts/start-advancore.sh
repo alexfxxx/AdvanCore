@@ -15,8 +15,14 @@ if ! command -v docker >/dev/null 2>&1; then
     echo "Docker is not available. Install or start Docker Desktop, then try again." >&2
     exit 1
 fi
-if ! docker compose version >/dev/null 2>&1; then
+unset COMPOSE_FILE COMPOSE_PROJECT_NAME COMPOSE_PROFILES DOCKER_HOST DOCKER_CONTEXT
+unset DOCKER_TLS_VERIFY DOCKER_CERT_PATH DOCKER_CONFIG
+if ! docker --context default compose version >/dev/null 2>&1; then
     echo "Docker Compose is not available. Start or update Docker Desktop, then try again." >&2
+    exit 1
+fi
+if [ -L "$PROJECT_ROOT/docker-compose.yml" ] || [ ! -f "$PROJECT_ROOT/docker-compose.yml" ]; then
+    echo "The local Docker Compose configuration is unsafe or missing." >&2
     exit 1
 fi
 if [ ! -x "$PROJECT_ROOT/.venv/bin/python" ] || \
@@ -30,8 +36,13 @@ if [ ! -f "$PROJECT_ROOT/.env.example" ]; then
     exit 1
 fi
 
-ENV_FILE="$PROJECT_ROOT/.env"
-if [ ! -e "$ENV_FILE" ]; then
+ENV_TARGET="$PROJECT_ROOT/.env"
+if [ -L "$ENV_TARGET" ]; then
+    echo "The local development settings path is unsafe." >&2
+    exit 1
+fi
+ENV_FILE="$ENV_TARGET"
+if [ ! -f "$ENV_FILE" ]; then
     ENV_FILE="$PROJECT_ROOT/.env.example"
 fi
 if [ -L "$ENV_FILE" ] || [ ! -f "$ENV_FILE" ]; then
@@ -55,16 +66,29 @@ if [ "$CHECK_ONLY" = true ]; then
     exit 0
 fi
 
-if [ ! -f "$PROJECT_ROOT/.env" ]; then
-    cp "$PROJECT_ROOT/.env.example" "$PROJECT_ROOT/.env"
-    chmod 600 "$PROJECT_ROOT/.env"
+if [ ! -f "$ENV_TARGET" ]; then
+    umask 077
+    if ! (set -C; : > "$ENV_TARGET") 2>/dev/null; then
+        echo "The local development settings file could not be created safely." >&2
+        exit 1
+    fi
+    cp "$PROJECT_ROOT/.env.example" "$ENV_TARGET"
+    chmod 600 "$ENV_TARGET"
     echo "Created the local development settings file."
 fi
 
 cd "$PROJECT_ROOT"
-docker compose up -d postgres
+compose() {
+    docker --context default compose \
+        --project-name advancore-local \
+        --project-directory "$PROJECT_ROOT" \
+        --env-file /dev/null \
+        --file "$PROJECT_ROOT/docker-compose.yml" \
+        "$@"
+}
+compose up -d postgres
 attempt=0
-until docker compose exec -T postgres pg_isready -U advancore -d advancore >/dev/null 2>&1; do
+until compose exec -T postgres pg_isready -U advancore -d advancore >/dev/null 2>&1; do
     attempt=$((attempt + 1))
     if [ "$attempt" -ge 30 ]; then
         echo "PostgreSQL did not become ready within 30 seconds. No migration was run." >&2

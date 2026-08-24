@@ -40,6 +40,10 @@ None. This uses the existing documented local-development configuration.
 - Repaired independent review by parsing rather than sourcing settings,
   rejecting symlinks/ambiguity/non-loopback database targets, and waiting up to
   30 seconds for PostgreSQL health before migrations.
+- Repaired follow-up review by rejecting `.env` symlinks before fallback,
+  creating missing settings with no-clobber semantics, clearing Compose/Docker
+  routing variables, and fixing Compose to the repository file, local project,
+  empty interpolation environment and default local Docker context.
 
 ### Database changes
 
