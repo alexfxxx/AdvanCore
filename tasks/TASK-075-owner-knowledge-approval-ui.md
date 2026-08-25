@@ -128,6 +128,7 @@ None.
 - Focused Knowledge, approval, and audit tests: 74 passed.
 - Full repository suite: 954 passed, 1 intentionally skipped.
 - `git diff --check` passed.
+- GitHub PR #16 CI and GitGuardian security checks passed.
 
 ### Assumptions
 
@@ -148,5 +149,5 @@ None for this approved scope.
 
 ### Recommended next step
 
-Publish the TASK-075 pull request to `projects-lifecycle-recovery`, require all
-GitHub checks to pass, then proceed to TASK-076 replacement-draft history.
+Merge green PR #16 into `projects-lifecycle-recovery` (never `main`), then
+proceed to TASK-076 replacement-draft history.
