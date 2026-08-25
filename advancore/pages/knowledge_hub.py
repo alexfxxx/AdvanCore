@@ -1,4 +1,4 @@
-"""Streamlit presentation for bounded draft knowledge capture and viewing."""
+"""Streamlit presentation for bounded Knowledge capture and owner approval."""
 
 from collections.abc import Iterator
 from contextlib import contextmanager
@@ -9,6 +9,7 @@ import streamlit as st
 from advancore.repositories import ActivityLogRepository, KnowledgeItemRepository
 from advancore.services.activity_service import ActivityLogService
 from advancore.services.knowledge_service import (
+    KnowledgeAlreadyApprovedError,
     KnowledgeAlreadyArchivedError,
     KnowledgeNotFoundError,
     KnowledgeReadOnlyError,
@@ -26,7 +27,9 @@ _KNOWLEDGE_SUCCESS_MESSAGES = frozenset(
     {
         "Knowledge draft created successfully.",
         "Knowledge draft updated successfully.",
+        "Knowledge approved as official and is now read-only.",
         "Knowledge draft archived successfully.",
+        "Approved knowledge archived successfully.",
     }
 )
 
@@ -91,6 +94,24 @@ def _archive_draft(item_id: int) -> bool:
     return True
 
 
+def _approve_draft(item_id: int) -> bool:
+    """Approve one saved draft through the fixed-owner service boundary."""
+    try:
+        with _knowledge_service() as service:
+            service.approve_draft(item_id)
+    except (
+        KnowledgeNotFoundError,
+        KnowledgeReadOnlyError,
+        KnowledgeAlreadyApprovedError,
+    ) as exc:
+        st.warning(str(exc))
+        return False
+    except Exception:
+        st.error("Knowledge approval failed. Please try again.")
+        return False
+    return True
+
+
 def _refresh_with_success(
     message: str, *, clear_session_keys: tuple[str, ...] = ()
 ) -> None:
@@ -140,6 +161,31 @@ def _clear_superseded_selection_state(current_key: str) -> None:
             st.session_state.pop(key, None)
 
 
+def _render_archive_form(item) -> None:
+    """Render the confirmed archive action for a draft or approved item."""
+    is_approved = item.status == "approved"
+    subject = "approved knowledge" if is_approved else "knowledge draft"
+    st.subheader(
+        "Archive approved knowledge" if is_approved else "Archive knowledge draft"
+    )
+    with st.form(f"archive_knowledge_{item.id}"):
+        archive_confirmed = st.checkbox(
+            f"I confirm that this {subject} should be archived."
+        )
+        archive_submitted = st.form_submit_button(
+            "Archive approved knowledge" if is_approved else "Archive knowledge draft"
+        )
+    if archive_submitted:
+        if not archive_confirmed:
+            st.warning("Confirm archiving before submitting.")
+        elif _archive_draft(item.id):
+            _refresh_with_success(
+                "Approved knowledge archived successfully."
+                if is_approved
+                else "Knowledge draft archived successfully."
+            )
+
+
 def _render_items() -> None:
     """Load and render the deterministic knowledge list and selected detail."""
     try:
@@ -181,6 +227,19 @@ def _render_items() -> None:
                 st.write(
                     f"Last updated: {format_utc_timestamp(selected.updated_at)}"
                 )
+                if selected.approved_at is not None:
+                    st.write(
+                        "Approved: "
+                        f"{format_utc_timestamp(selected.approved_at)}"
+                    )
+                    st.write(
+                        "Approved by: "
+                        + (
+                            "Owner"
+                            if selected.approved_by == "owner"
+                            else "Not available"
+                        )
+                    )
                 content_widget_key = _content_widget_key(
                     selected.id, selected.content
                 )
@@ -196,7 +255,17 @@ def _render_items() -> None:
                 )
 
                 if selected.status == "archived":
-                    st.info("Archived knowledge draft — read-only.")
+                    if (
+                        selected.approved_at is not None
+                        and selected.approved_by == "owner"
+                    ):
+                        st.info("Archived approved Knowledge — read-only.")
+                    else:
+                        st.info("Archived knowledge draft — read-only.")
+                    return
+                if selected.status == "approved":
+                    st.info("Official Knowledge — approved and read-only.")
+                    _render_archive_form(selected)
                     return
                 if selected.status != "draft":
                     st.warning(
@@ -232,21 +301,28 @@ def _render_items() -> None:
                         ),
                     )
 
-                st.subheader("Archive knowledge draft")
-                with st.form(f"archive_knowledge_{selected.id}"):
-                    archive_confirmed = st.checkbox(
-                        "I confirm that this knowledge draft should be archived."
+                st.subheader("Approve as official Knowledge")
+                st.write(
+                    "Approval uses the saved title and content shown above. "
+                    "Save any changes first."
+                )
+                with st.form(f"approve_knowledge_{selected.id}"):
+                    approval_confirmed = st.checkbox(
+                        "I have reviewed the saved title and content and approve "
+                        "this as official Knowledge."
                     )
-                    archive_submitted = st.form_submit_button(
-                        "Archive knowledge draft"
+                    approval_submitted = st.form_submit_button(
+                        "Approve as official Knowledge", type="primary"
                     )
-                if archive_submitted:
-                    if not archive_confirmed:
-                        st.warning("Confirm archiving before submitting.")
-                    elif _archive_draft(selected.id):
+                if approval_submitted:
+                    if not approval_confirmed:
+                        st.warning("Confirm approval before submitting.")
+                    elif _approve_draft(selected.id):
                         _refresh_with_success(
-                            "Knowledge draft archived successfully."
+                            "Knowledge approved as official and is now read-only."
                         )
+
+                _render_archive_form(selected)
     except Exception:
         st.error("Knowledge items could not be loaded. Please try again.")
 

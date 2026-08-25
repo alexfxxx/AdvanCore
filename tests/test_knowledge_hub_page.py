@@ -1,13 +1,16 @@
-"""Isolated tests for the first usable Knowledge Hub page."""
+"""Isolated tests for the usable owner-governed Knowledge Hub page."""
 
 from contextlib import contextmanager, nullcontext
-from datetime import datetime
+from datetime import datetime, timezone
 
 import pytest
 
 from advancore.models import KnowledgeItem
 from advancore.pages import knowledge_hub
-from advancore.services.knowledge_service import KnowledgeService
+from advancore.services.knowledge_service import (
+    KnowledgeReadOnlyError,
+    KnowledgeService,
+)
 
 
 class FakeStreamlit:
@@ -237,6 +240,7 @@ def test_populated_list_and_selected_read_only_detail(monkeypatch):
     assert "Created: Not available" in fake_st.text()
     assert "Last updated: Not available" in fake_st.text()
     assert "Knowledge title" in fake_st.widget_labels
+    assert "Approve as official Knowledge" in fake_st.widget_labels
     assert "Archive knowledge draft" in fake_st.widget_labels
 
 
@@ -370,6 +374,115 @@ def test_archive_requires_confirmation_then_refreshes_read_only_state(monkeypatc
     assert "Original (archived)" in refreshed.selectbox_labels
     assert refreshed.selected_option == "Original (archived)"
     assert "Knowledge title" not in refreshed.widget_labels
+    assert "Approve as official Knowledge" not in refreshed.widget_labels
+
+
+def test_owner_approval_requires_confirmation_then_refreshes_official_state(
+    monkeypatch,
+):
+    approved_at = datetime(2026, 8, 25, 14, 30, tzinfo=timezone.utc)
+    untouched = _item(1, "Other draft", "Other content")
+    reviewed = _item(7, "Reviewed rule", "Saved content")
+    repo = FakeRepository([untouched, reviewed])
+    service = KnowledgeService(repo, clock=lambda: approved_at)
+
+    unconfirmed = FakeStreamlit(
+        selected_id=7, submissions={"approve_knowledge_7": True}
+    )
+    _install(monkeypatch, unconfirmed, service)
+    knowledge_hub.render()
+    assert repo.save_calls == 0
+    assert reviewed.status == "draft"
+    assert "Confirm approval before submitting." in unconfirmed.text()
+    assert "Approval uses the saved title and content" in unconfirmed.text()
+
+    state = {}
+    confirmed = FakeStreamlit(
+        selected_id=7,
+        submissions={"approve_knowledge_7": True},
+        inputs={
+            "Knowledge title": "Unsaved title",
+            "Knowledge content": "Unsaved content",
+        },
+        confirmed=True,
+        session_state=state,
+    )
+    _install(monkeypatch, confirmed, service)
+    knowledge_hub.render()
+    assert repo.save_calls == 1
+    assert untouched.status == "draft"
+    assert reviewed.status == "approved"
+    assert (reviewed.title, reviewed.content) == ("Reviewed rule", "Saved content")
+    assert reviewed.approved_at == approved_at
+    assert reviewed.approved_by == "owner"
+    assert confirmed.rerun_calls == 1
+    assert state[knowledge_hub._KNOWLEDGE_FLASH_KEY] == (
+        "Knowledge approved as official and is now read-only."
+    )
+
+    refreshed = FakeStreamlit(selected_id=7, session_state=state)
+    _install(monkeypatch, refreshed, service)
+    knowledge_hub.render()
+    assert "Knowledge approved as official and is now read-only." in refreshed.text()
+    assert "Status: approved" in refreshed.text()
+    assert "Approved: 25 Aug 2026, 14:30 UTC" in refreshed.text()
+    assert "Approved by: Owner" in refreshed.text()
+    assert "Official Knowledge — approved and read-only." in refreshed.text()
+    assert refreshed.selected_option == "Reviewed rule (approved)"
+    assert "Knowledge title" not in refreshed.widget_labels
+    assert "Approve as official Knowledge" not in refreshed.widget_labels
+    assert "Archive approved knowledge" in refreshed.widget_labels
+
+
+def test_approved_knowledge_can_be_archived_without_losing_approval_evidence(
+    monkeypatch,
+):
+    approved_at = datetime(2026, 8, 25, 14, 30, tzinfo=timezone.utc)
+    item = _item(1, "Official rule", "Approved content", status="approved")
+    item.approved_at = approved_at
+    item.approved_by = "owner"
+    repo = FakeRepository([item])
+    state = {}
+    submitted = FakeStreamlit(
+        selected_id=1,
+        submissions={"archive_knowledge_1": True},
+        confirmed=True,
+        session_state=state,
+    )
+    _install(monkeypatch, submitted, KnowledgeService(repo))
+
+    knowledge_hub.render()
+
+    assert item.status == "archived"
+    assert item.approved_at == approved_at
+    assert item.approved_by == "owner"
+    assert submitted.rerun_calls == 1
+    assert state[knowledge_hub._KNOWLEDGE_FLASH_KEY] == (
+        "Approved knowledge archived successfully."
+    )
+
+    refreshed = FakeStreamlit(selected_id=1, session_state=state)
+    _install(monkeypatch, refreshed, KnowledgeService(repo))
+    knowledge_hub.render()
+    assert "Approved knowledge archived successfully." in refreshed.text()
+    assert "Archived approved Knowledge — read-only." in refreshed.text()
+    assert "Approved: 25 Aug 2026, 14:30 UTC" in refreshed.text()
+    assert "Approved by: Owner" in refreshed.text()
+    assert "Approve as official Knowledge" not in refreshed.widget_labels
+    assert "Archive approved knowledge" not in refreshed.widget_labels
+
+
+def test_known_approval_failure_is_readable_and_does_not_rerun(monkeypatch):
+    class RejectedApprovalService:
+        def approve_draft(self, _item_id):
+            raise KnowledgeReadOnlyError("This item is no longer a draft.")
+
+    fake_st = FakeStreamlit()
+    _install(monkeypatch, fake_st, RejectedApprovalService())
+
+    assert knowledge_hub._approve_draft(1) is False
+    assert "This item is no longer a draft." in fake_st.text()
+    assert fake_st.rerun_calls == 0
 
 
 def test_selector_label_revision_keeps_selected_item_and_drops_old_widget(monkeypatch):
@@ -401,14 +514,17 @@ def test_unknown_status_and_unknown_flash_are_never_treated_as_trusted(monkeypat
     assert "unsupported status" in fake_st.text()
     assert "untrusted content" not in fake_st.text()
     assert "Knowledge title" not in fake_st.widget_labels
+    assert "Approve as official Knowledge" not in fake_st.widget_labels
 
 
-@pytest.mark.parametrize("operation", ["edit", "archive"])
+@pytest.mark.parametrize("operation", ["edit", "approve", "archive"])
 def test_lifecycle_failures_are_generic_and_do_not_rerun(monkeypatch, operation):
     class FailingService:
         def list_items(self): return [_item(1)]
         def get_item(self, _item_id): return _item(1)
         def edit_draft(self, *_args):
+            raise RuntimeError("password SQL token traceback")
+        def approve_draft(self, *_args):
             raise RuntimeError("password SQL token traceback")
         def archive_draft(self, *_args):
             raise RuntimeError("password SQL token traceback")
@@ -424,7 +540,11 @@ def test_lifecycle_failures_are_generic_and_do_not_rerun(monkeypatch, operation)
     expected = (
         "Knowledge draft update failed"
         if operation == "edit"
-        else "Knowledge draft archive failed"
+        else (
+            "Knowledge approval failed"
+            if operation == "approve"
+            else "Knowledge draft archive failed"
+        )
     )
     assert expected in fake_st.text()
     for secret in ("password", "SQL", "token", "traceback"):
