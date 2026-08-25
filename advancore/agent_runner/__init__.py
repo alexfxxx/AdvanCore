@@ -125,7 +125,12 @@ from advancore.agent_runner.unattended_review import (
 from advancore.agent_runner.worker_routing import (
     AuthorizedWorkerAdapter,
     KimiFirstWorkerRoute,
+    WorkerAvailability,
+    WorkerAvailabilityEvidence,
+    WorkerSelection,
+    WorkerSelectionError,
     build_kimi_first_worker_route,
+    select_governed_worker,
 )
 from advancore.agent_runner.owner_notifications import (
     OwnerNotification,
@@ -284,7 +289,12 @@ __all__ = [
     "run_unattended_review_loop",
     "AuthorizedWorkerAdapter",
     "KimiFirstWorkerRoute",
+    "WorkerAvailability",
+    "WorkerAvailabilityEvidence",
+    "WorkerSelection",
+    "WorkerSelectionError",
     "build_kimi_first_worker_route",
+    "select_governed_worker",
     "OwnerNotification",
     "OwnerNotificationFeed",
     "build_owner_notification_feed",

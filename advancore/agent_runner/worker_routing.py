@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from enum import Enum
 from pathlib import Path
 
 from advancore.agent_runner.standing_authority import (
@@ -16,6 +17,7 @@ from advancore.agent_runner.worker import (
     WorkerResult,
     build_worker_adapter,
 )
+from advancore.agent_runner.worker_registry import WorkerRole, get_worker_profile
 
 
 class AuthorizedWorkerAdapter(WorkerAdapter):
@@ -70,6 +72,84 @@ class KimiFirstWorkerRoute:
     fallback: AuthorizedWorkerAdapter
 
 
+class WorkerSelectionError(RuntimeError):
+    """Raised when controller evidence cannot produce one safe worker."""
+
+
+class WorkerAvailability(str, Enum):
+    AVAILABLE = "AVAILABLE"
+    PAUSED = "PAUSED"
+    STALE = "STALE"
+    UNAVAILABLE = "UNAVAILABLE"
+    SETUP_REQUIRED = "SETUP_REQUIRED"
+
+
+@dataclass(frozen=True)
+class WorkerAvailabilityEvidence:
+    worker: str
+    state: WorkerAvailability
+
+    def __post_init__(self) -> None:
+        get_worker_profile(self.worker)
+        if not isinstance(self.state, WorkerAvailability):
+            raise WorkerSelectionError("Worker availability state is invalid")
+
+
+@dataclass(frozen=True)
+class WorkerSelection:
+    role: WorkerRole
+    selected_worker: str
+    considered: tuple[tuple[str, str], ...]
+
+
+_ROLE_PREFERENCES: dict[WorkerRole, tuple[str, ...]] = {
+    WorkerRole.IMPLEMENTATION: ("kimi-swarm", "codex"),
+    WorkerRole.PLANNING: ("kimi", "codex"),
+    WorkerRole.REVIEW: ("kimi-swarm",),
+    WorkerRole.FALLBACK: ("codex",),
+}
+
+
+def select_governed_worker(
+    role: WorkerRole | str,
+    evidence: tuple[WorkerAvailabilityEvidence, ...],
+) -> WorkerSelection:
+    """Select from fixed preferences using explicit controller evidence only."""
+    try:
+        resolved_role = role if isinstance(role, WorkerRole) else WorkerRole(role)
+    except (TypeError, ValueError) as exc:
+        raise WorkerSelectionError("Worker role is not routable") from exc
+    if resolved_role not in _ROLE_PREFERENCES:
+        raise WorkerSelectionError("Worker role is not routable")
+    if not isinstance(evidence, tuple):
+        raise WorkerSelectionError("Worker availability evidence is invalid")
+    by_worker: dict[str, WorkerAvailability] = {}
+    for item in evidence:
+        if not isinstance(item, WorkerAvailabilityEvidence):
+            raise WorkerSelectionError("Worker availability evidence is invalid")
+        if item.worker in by_worker:
+            raise WorkerSelectionError("Duplicate worker availability evidence")
+        by_worker[item.worker] = item.state
+
+    considered: list[tuple[str, str]] = []
+    for name in _ROLE_PREFERENCES[resolved_role]:
+        profile = get_worker_profile(name)
+        state = by_worker.get(name, WorkerAvailability.UNAVAILABLE)
+        if not profile.is_eligible(resolved_role):
+            considered.append((name, "NOT_AUTHORISED"))
+            continue
+        if state != WorkerAvailability.AVAILABLE:
+            considered.append((name, state.value))
+            continue
+        considered.append((name, "SELECTED"))
+        return WorkerSelection(
+            role=resolved_role,
+            selected_worker=name,
+            considered=tuple(considered),
+        )
+    raise WorkerSelectionError("No approved worker is currently available")
+
+
 def build_kimi_first_worker_route(
     *,
     task_id: str,
@@ -95,4 +175,3 @@ def build_kimi_first_worker_route(
         (RoutineAction.APPROVED_FALLBACK, RoutineAction.RUN_WORKER),
     )
     return KimiFirstWorkerRoute(primary, fallback)
-
