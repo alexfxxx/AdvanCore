@@ -79,6 +79,24 @@ After the one-time Python environment setup, the same local startup can be run
 with `./scripts/start-advancore.sh`. Use `--check-only` to check readiness
 without starting services.
 
+## Local database backups
+
+The Settings page can create and verify an owner-only local PostgreSQL backup.
+Backups use PostgreSQL's custom archive format, a strict non-secret manifest,
+and SHA-256 verification. They default to ignored `data/backups/` and never go
+to GitHub. The same safe actions remain available if the UI is unavailable:
+
+```bash
+.venv/bin/python scripts/backup-advancore.py create
+.venv/bin/python scripts/backup-advancore.py verify-latest
+.venv/bin/python scripts/backup-advancore.py status
+```
+
+TASK-077 does not expose restore or deletion. Never restore over the configured
+saved database. See
+[`docs/runbooks/LOCAL_BACKUP_RECOVERY.md`](docs/runbooks/LOCAL_BACKUP_RECOVERY.md)
+for the fail-closed recovery boundary and the disposable-rehearsal next step.
+
 The launcher also recognises the verified legacy `advancore-postgres` local
 container. It keeps the existing database volume, stops the legacy container
 without deleting it, and starts the canonical loopback-only database service
