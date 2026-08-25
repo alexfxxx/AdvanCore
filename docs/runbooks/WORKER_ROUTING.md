@@ -8,3 +8,12 @@ an eligible one-hop provider failure after repository integrity is unchanged.
 Standing authority is consumed at actual launch. Fallback consumes a separate
 approved-fallback action. Neither route receives new credentials or approval,
 merge, `main`, deployment, business or compliance authority.
+
+## Disabled Gemini candidate
+
+Gemini is represented as a candidate only. The candidate has no executable,
+command arguments, API endpoint, credentials, usage claim, or production route.
+It returns an owner-action-required result and remains outside both approved
+worker and planner allowlists. It cannot become active until the owner later
+completes Google authentication, selects an approved provider surface, reviews
+any billing/data terms, and authorises a real bounded evaluation.
