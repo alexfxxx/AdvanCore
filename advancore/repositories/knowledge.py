@@ -28,6 +28,16 @@ class KnowledgeItemRepository:
         statement = select(KnowledgeItem).order_by(KnowledgeItem.created_at)
         return self._session.scalars(statement).all()
 
+    def get_active_replacement_for(
+        self, source_item_id: int
+    ) -> KnowledgeItem | None:
+        """Return the source's one non-archived direct replacement, if any."""
+        statement = select(KnowledgeItem).where(
+            KnowledgeItem.replaces_knowledge_item_id == source_item_id,
+            KnowledgeItem.status != "archived",
+        )
+        return self._session.scalars(statement).one_or_none()
+
     def add(self, item: KnowledgeItem) -> KnowledgeItem:
         """Persist a new or updated knowledge item and return it."""
         self._session.add(item)

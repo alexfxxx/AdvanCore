@@ -17,6 +17,8 @@ _APPROVED_ACTION_ENTITIES = {
     "knowledge_created": "knowledge",
     "knowledge_updated": "knowledge",
     "knowledge_approved": "knowledge",
+    "knowledge_replacement_created": "knowledge",
+    "knowledge_superseded": "knowledge",
     "knowledge_archived": "knowledge",
 }
 

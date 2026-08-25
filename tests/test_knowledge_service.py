@@ -15,6 +15,9 @@ from advancore.services.knowledge_service import (
     KnowledgeAlreadyArchivedError,
     KnowledgeNotFoundError,
     KnowledgeReadOnlyError,
+    KnowledgeReplacementConflictError,
+    KnowledgeReplacementPendingError,
+    KnowledgeReplacementSourceError,
     KnowledgeService,
     KnowledgeValidationError,
 )
@@ -26,6 +29,7 @@ class FakeKnowledgeRepository:
         self.add_calls = 0
         self.save_calls = 0
         self.save_error = None
+        self.save_error_on_call = None
 
     def add(self, item):
         self.add_calls += 1
@@ -35,13 +39,26 @@ class FakeKnowledgeRepository:
 
     def get_by_id(self, item_id):
         return next((item for item in self.items if item.id == item_id), None)
+    def get_active_replacement_for(self, source_item_id):
+        return next(
+            (
+                item
+                for item in self.items
+                if item.replaces_knowledge_item_id == source_item_id
+                and item.status != "archived"
+            ),
+            None,
+        )
 
     def list(self):
         return list(self.items)
 
     def save(self, item):
         self.save_calls += 1
-        if self.save_error:
+        if self.save_error and (
+            self.save_error_on_call is None
+            or self.save_calls == self.save_error_on_call
+        ):
             raise self.save_error
         return item
 
@@ -68,6 +85,7 @@ def test_create_draft_normalizes_and_sets_bounded_defaults():
     assert item.project_id is None
     assert item.source_type is None
     assert item.source_reference is None
+    assert item.replaces_knowledge_item_id is None
     assert item.approved_at is None
     assert item.approved_by is None
     assert repo.add_calls == 1
@@ -248,6 +266,175 @@ def test_approval_rejects_naive_internal_clock_without_mutation():
     assert repo.save_calls == 0
 
 
+def test_replacement_draft_copies_saved_fields_without_mutating_source():
+    repo = FakeKnowledgeRepository()
+    activity = FakeActivityService()
+    approved_at = datetime(2026, 8, 25, 10, 30, tzinfo=timezone.utc)
+    service = KnowledgeService(repo, activity, clock=lambda: approved_at)
+    source = service.create_draft("Official", "Saved content")
+    source.project_id = 12
+    source.source_type = "manual"
+    source.source_reference = "record-7"
+    service.approve_draft(source.id)
+    source_before = (
+        source.title,
+        source.content,
+        source.status,
+        source.approved_at,
+        source.approved_by,
+    )
+
+    replacement = service.create_replacement_draft(source.id)
+
+    assert (
+        replacement.title,
+        replacement.content,
+        replacement.project_id,
+        replacement.source_type,
+        replacement.source_reference,
+    ) == ("Official", "Saved content", 12, "manual", "record-7")
+    assert replacement.status == "draft"
+    assert replacement.approved_at is None
+    assert replacement.approved_by is None
+    assert replacement.replaces_knowledge_item_id == source.id
+    assert (
+        source.title,
+        source.content,
+        source.status,
+        source.approved_at,
+        source.approved_by,
+    ) == source_before
+    assert activity.calls[-1] == (
+        "knowledge_replacement_created",
+        "knowledge",
+        replacement.id,
+    )
+
+
+def test_replacement_creation_fails_closed_for_invalid_source_and_conflict():
+    repo = FakeKnowledgeRepository()
+    service = KnowledgeService(repo)
+    with pytest.raises(KnowledgeNotFoundError):
+        service.create_replacement_draft(404)
+
+    draft = service.create_draft("Draft", "Content")
+    with pytest.raises(KnowledgeReplacementSourceError, match="Only approved"):
+        service.create_replacement_draft(draft.id)
+
+    service.approve_draft(draft.id)
+    first = service.create_replacement_draft(draft.id)
+    with pytest.raises(KnowledgeReplacementConflictError, match="active"):
+        service.create_replacement_draft(draft.id)
+
+    service.archive_draft(first.id)
+    second = service.create_replacement_draft(draft.id)
+    assert second.id != first.id
+    assert second.replaces_knowledge_item_id == draft.id
+
+
+def test_replacement_approval_supersedes_source_and_records_minimal_events():
+    repo = FakeKnowledgeRepository()
+    activity = FakeActivityService()
+    first_time = datetime(2026, 8, 25, 10, 30, tzinfo=timezone.utc)
+    second_time = datetime(2026, 8, 26, 11, 45, tzinfo=timezone.utc)
+    times = iter([first_time, second_time])
+    service = KnowledgeService(repo, activity, clock=lambda: next(times))
+    source = service.create_draft("Official", "Version one")
+    service.approve_draft(source.id)
+    replacement = service.create_replacement_draft(source.id)
+    service.edit_draft(replacement.id, "Official", "Version two")
+    activity.calls.clear()
+
+    approved = service.approve_draft(replacement.id)
+
+    assert approved.status == "approved"
+    assert approved.approved_at == second_time
+    assert approved.approved_by == "owner"
+    assert source.status == "superseded"
+    assert source.approved_at == first_time
+    assert source.approved_by == "owner"
+    assert repo.save_calls == 4
+    assert activity.calls == [
+        ("knowledge_approved", "knowledge", replacement.id),
+        ("knowledge_superseded", "knowledge", source.id),
+    ]
+
+
+def test_replacement_approval_rejects_stale_source_without_mutation():
+    repo = FakeKnowledgeRepository()
+    service = KnowledgeService(repo)
+    source = service.create_draft("Official", "Version one")
+    service.approve_draft(source.id)
+    replacement = service.create_replacement_draft(source.id)
+    source.status = "archived"
+    save_calls_before = repo.save_calls
+
+    with pytest.raises(KnowledgeReplacementSourceError, match="no longer approved"):
+        service.approve_draft(replacement.id)
+
+    assert replacement.status == "draft"
+    assert replacement.approved_at is None
+    assert replacement.approved_by is None
+    assert repo.save_calls == save_calls_before
+
+
+def test_replacement_second_save_failure_restores_both_lifecycle_states():
+    repo = FakeKnowledgeRepository()
+    service = KnowledgeService(repo)
+    source = service.create_draft("Official", "Version one")
+    service.approve_draft(source.id)
+    replacement = service.create_replacement_draft(source.id)
+    repo.save_error = RuntimeError("database unavailable")
+    repo.save_error_on_call = repo.save_calls + 2
+
+    with pytest.raises(RuntimeError, match="database unavailable"):
+        service.approve_draft(replacement.id)
+
+    assert source.status == "approved"
+    assert (replacement.status, replacement.approved_at, replacement.approved_by) == (
+        "draft",
+        None,
+        None,
+    )
+
+
+def test_replacement_activity_failure_restores_both_lifecycle_states():
+    repo = FakeKnowledgeRepository()
+    source_time = datetime(2026, 8, 25, 10, 30, tzinfo=timezone.utc)
+    service = KnowledgeService(repo, clock=lambda: source_time)
+    source = service.create_draft("Official", "Version one")
+    service.approve_draft(source.id)
+    replacement = service.create_replacement_draft(source.id)
+    activity = FakeActivityService()
+    activity.error = RuntimeError("activity unavailable")
+
+    with pytest.raises(RuntimeError, match="activity unavailable"):
+        KnowledgeService(repo, activity).approve_draft(replacement.id)
+
+    assert source.status == "approved"
+    assert source.approved_at == source_time
+    assert (replacement.status, replacement.approved_at, replacement.approved_by) == (
+        "draft",
+        None,
+        None,
+    )
+
+
+def test_approved_source_with_active_replacement_cannot_be_archived():
+    repo = FakeKnowledgeRepository()
+    service = KnowledgeService(repo)
+    source = service.create_draft("Official", "Version one")
+    service.approve_draft(source.id)
+    service.create_replacement_draft(source.id)
+    save_calls_before = repo.save_calls
+
+    with pytest.raises(KnowledgeReplacementPendingError, match="active replacement"):
+        service.archive_draft(source.id)
+
+    assert source.status == "approved"
+    assert repo.save_calls == save_calls_before
+
+
 def test_archive_draft_is_one_way_and_preserves_content():
     repo = FakeKnowledgeRepository()
     item = KnowledgeService(repo).create_draft("Original", "Old")
@@ -384,3 +571,33 @@ def test_activity_failure_rolls_back_database_knowledge_approval():
             None,
             None,
         )
+
+
+def test_activity_failure_rolls_back_database_replacement_approval_pair():
+    engine = create_engine("sqlite:///:memory:")
+    Base.metadata.create_all(engine)
+    session_factory = create_session_factory(engine)
+
+    with session_scope(session_factory) as session:
+        service = KnowledgeService(KnowledgeItemRepository(session))
+        source = service.create_draft("Official", "Version one")
+        service.approve_draft(source.id)
+        replacement = service.create_replacement_draft(source.id)
+        source_id = source.id
+        replacement_id = replacement.id
+
+    activity = FakeActivityService()
+    activity.error = RuntimeError("activity unavailable")
+    with pytest.raises(RuntimeError, match="activity unavailable"):
+        with session_scope(session_factory) as session:
+            KnowledgeService(
+                KnowledgeItemRepository(session), activity
+            ).approve_draft(replacement_id)
+
+    with session_scope(session_factory) as session:
+        source = session.get(KnowledgeItem, source_id)
+        replacement = session.get(KnowledgeItem, replacement_id)
+        assert source.status == "approved"
+        assert replacement.status == "draft"
+        assert replacement.approved_at is None
+        assert replacement.approved_by is None

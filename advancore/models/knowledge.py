@@ -1,6 +1,14 @@
 from datetime import datetime
 
-from sqlalchemy import CheckConstraint, DateTime, ForeignKey, String, Text
+from sqlalchemy import (
+    CheckConstraint,
+    DateTime,
+    ForeignKey,
+    Index,
+    String,
+    Text,
+    text,
+)
 from sqlalchemy.orm import Mapped, mapped_column
 
 from advancore.models.base import Base, TimestampMixin
@@ -28,12 +36,38 @@ class KnowledgeItem(TimestampMixin, Base):
             "approved_by IS NULL OR length(trim(approved_by)) > 0",
             name="ck_knowledge_items_approver_nonblank",
         ),
+        CheckConstraint(
+            "replaces_knowledge_item_id IS NULL OR "
+            "replaces_knowledge_item_id <> id",
+            name="ck_knowledge_items_not_self_replacing",
+        ),
+        CheckConstraint(
+            "status <> 'superseded' OR "
+            "(approved_at IS NOT NULL AND approved_by IS NOT NULL)",
+            name="ck_knowledge_items_superseded_has_metadata",
+        ),
+        Index(
+            "uq_knowledge_items_open_replacement",
+            "replaces_knowledge_item_id",
+            unique=True,
+            postgresql_where=text(
+                "replaces_knowledge_item_id IS NOT NULL AND status <> 'archived'"
+            ),
+            sqlite_where=text(
+                "replaces_knowledge_item_id IS NOT NULL AND status <> 'archived'"
+            ),
+        ),
     )
 
     id: Mapped[int] = mapped_column(primary_key=True)
 
     project_id: Mapped[int | None] = mapped_column(
         ForeignKey("projects.id"),
+        nullable=True,
+    )
+
+    replaces_knowledge_item_id: Mapped[int | None] = mapped_column(
+        ForeignKey("knowledge_items.id", ondelete="RESTRICT"),
         nullable=True,
     )
 

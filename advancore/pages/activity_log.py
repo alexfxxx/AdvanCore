@@ -19,6 +19,8 @@ _ACTION_FILTERS = (
     "knowledge_created",
     "knowledge_updated",
     "knowledge_approved",
+    "knowledge_replacement_created",
+    "knowledge_superseded",
     "knowledge_archived",
 )
 _ACTION_LABELS = {
@@ -28,6 +30,8 @@ _ACTION_LABELS = {
     "knowledge_created": "Knowledge created",
     "knowledge_updated": "Knowledge updated",
     "knowledge_approved": "Knowledge approved",
+    "knowledge_replacement_created": "Knowledge replacement draft created",
+    "knowledge_superseded": "Knowledge superseded",
     "knowledge_archived": "Knowledge archived",
 }
 _ENTITY_LABELS = {
