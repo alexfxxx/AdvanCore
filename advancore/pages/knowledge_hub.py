@@ -13,6 +13,9 @@ from advancore.services.knowledge_service import (
     KnowledgeAlreadyArchivedError,
     KnowledgeNotFoundError,
     KnowledgeReadOnlyError,
+    KnowledgeReplacementConflictError,
+    KnowledgeReplacementPendingError,
+    KnowledgeReplacementSourceError,
     KnowledgeService,
     KnowledgeValidationError,
 )
@@ -28,6 +31,7 @@ _KNOWLEDGE_SUCCESS_MESSAGES = frozenset(
         "Knowledge draft created successfully.",
         "Knowledge draft updated successfully.",
         "Knowledge approved as official and is now read-only.",
+        "Knowledge replacement draft created successfully.",
         "Knowledge draft archived successfully.",
         "Approved knowledge archived successfully.",
     }
@@ -85,6 +89,7 @@ def _archive_draft(item_id: int) -> bool:
         KnowledgeNotFoundError,
         KnowledgeReadOnlyError,
         KnowledgeAlreadyArchivedError,
+        KnowledgeReplacementPendingError,
     ) as exc:
         st.warning(str(exc))
         return False
@@ -103,6 +108,7 @@ def _approve_draft(item_id: int) -> bool:
         KnowledgeNotFoundError,
         KnowledgeReadOnlyError,
         KnowledgeAlreadyApprovedError,
+        KnowledgeReplacementSourceError,
     ) as exc:
         st.warning(str(exc))
         return False
@@ -110,6 +116,25 @@ def _approve_draft(item_id: int) -> bool:
         st.error("Knowledge approval failed. Please try again.")
         return False
     return True
+
+
+def _create_replacement_draft(item_id: int) -> int | None:
+    """Create one linked correction draft through the service boundary."""
+    try:
+        with _knowledge_service() as service:
+            created = service.create_replacement_draft(item_id)
+            created_id = created.id
+    except (
+        KnowledgeNotFoundError,
+        KnowledgeReplacementConflictError,
+        KnowledgeReplacementSourceError,
+    ) as exc:
+        st.warning(str(exc))
+        return None
+    except Exception:
+        st.error("Knowledge replacement creation failed. Please try again.")
+        return None
+    return created_id
 
 
 def _refresh_with_success(
@@ -186,6 +211,33 @@ def _render_archive_form(item) -> None:
             )
 
 
+def _render_replacement_form(item) -> None:
+    """Render the confirmed owner action that copies an approved version."""
+    st.subheader("Create correction draft")
+    st.write(
+        "This creates a new editable copy. The approved version remains official "
+        "until you approve its replacement."
+    )
+    with st.form(f"replace_knowledge_{item.id}"):
+        replacement_confirmed = st.checkbox(
+            "I confirm that I want to create a correction draft from this "
+            "approved Knowledge."
+        )
+        replacement_submitted = st.form_submit_button(
+            "Create correction draft"
+        )
+    if replacement_submitted:
+        if not replacement_confirmed:
+            st.warning("Confirm replacement draft creation before submitting.")
+            return
+        created_id = _create_replacement_draft(item.id)
+        if created_id is not None:
+            st.session_state[_KNOWLEDGE_SELECTED_VALUE_KEY] = created_id
+            _refresh_with_success(
+                "Knowledge replacement draft created successfully."
+            )
+
+
 def _render_items() -> None:
     """Load and render the deterministic knowledge list and selected detail."""
     try:
@@ -220,6 +272,17 @@ def _render_items() -> None:
                     st.warning("The selected knowledge item could not be found.")
                     return
 
+                direct_replacements = [
+                    item
+                    for item in items
+                    if item.replaces_knowledge_item_id == selected.id
+                ]
+                active_replacements = [
+                    item
+                    for item in direct_replacements
+                    if item.status != "archived"
+                ]
+
                 st.subheader("Knowledge details")
                 st.write(f"Title: {selected.title}")
                 st.write(f"Status: {selected.status}")
@@ -239,6 +302,17 @@ def _render_items() -> None:
                             if selected.approved_by == "owner"
                             else "Not available"
                         )
+                    )
+                if selected.replaces_knowledge_item_id is not None:
+                    st.write(
+                        "Replaces Knowledge item: "
+                        f"#{selected.replaces_knowledge_item_id}"
+                    )
+                if len(active_replacements) == 1:
+                    active_replacement = active_replacements[0]
+                    st.write(
+                        "Active replacement: "
+                        f"#{active_replacement.id} ({active_replacement.status})"
                     )
                 content_widget_key = _content_widget_key(
                     selected.id, selected.content
@@ -263,9 +337,27 @@ def _render_items() -> None:
                     else:
                         st.info("Archived knowledge draft — read-only.")
                     return
+                if len(active_replacements) > 1:
+                    st.warning(
+                        "This Knowledge has ambiguous replacement history and is "
+                        "read-only until reviewed."
+                    )
+                    return
                 if selected.status == "approved":
                     st.info("Official Knowledge — approved and read-only.")
+                    if active_replacements:
+                        st.info(
+                            "A replacement is already active. Complete or archive "
+                            "that draft before starting another."
+                        )
+                        return
+                    _render_replacement_form(selected)
                     _render_archive_form(selected)
+                    return
+                if selected.status == "superseded":
+                    st.info(
+                        "Superseded Knowledge — preserved as read-only history."
+                    )
                     return
                 if selected.status != "draft":
                     st.warning(

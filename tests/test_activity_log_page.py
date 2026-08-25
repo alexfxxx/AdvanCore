@@ -161,6 +161,8 @@ def test_entity_and_action_filters_bound_the_selectable_records(monkeypatch):
         "Knowledge created",
         "Knowledge updated",
         "Knowledge approved",
+        "Knowledge replacement draft created",
+        "Knowledge superseded",
         "Knowledge archived",
     ]
     assert fake_st.selectbox_labels["Select an activity record"] == [
@@ -203,6 +205,17 @@ def test_knowledge_approval_event_has_readable_filter_and_detail(monkeypatch):
     assert "Action: Knowledge approved" in fake_st.text()
     assert "Entity type: Knowledge" in fake_st.text()
     assert "Entity ID: 12" in fake_st.text()
+
+
+@pytest.mark.parametrize(
+    ("action", "expected"),
+    [
+        ("knowledge_replacement_created", "Knowledge replacement draft created"),
+        ("knowledge_superseded", "Knowledge superseded"),
+    ],
+)
+def test_replacement_actions_have_readable_labels(action, expected):
+    assert activity_log._action_label(action) == expected
 
 
 def test_filters_have_clear_empty_state(monkeypatch):

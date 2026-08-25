@@ -156,6 +156,35 @@ class TestKnowledgeItemRepository:
             assert len(a_items) == 1
             assert a_items[0].title == "A1"
 
+    def test_active_replacement_lookup_ignores_archived_attempts(
+        self, sqlite_session_factory
+    ):
+        with session_scope(sqlite_session_factory) as session:
+            repo = KnowledgeItemRepository(session)
+            source = repo.add(KnowledgeItem(title="Source", content="Content"))
+            source_id = source.id
+            repo.add(
+                KnowledgeItem(
+                    title="Old attempt",
+                    content="Content",
+                    status="archived",
+                    replaces_knowledge_item_id=source_id,
+                )
+            )
+            active = repo.add(
+                KnowledgeItem(
+                    title="Current attempt",
+                    content="Content",
+                    replaces_knowledge_item_id=source_id,
+                )
+            )
+            active_id = active.id
+
+        with session_scope(sqlite_session_factory) as session:
+            repo = KnowledgeItemRepository(session)
+            assert repo.get_active_replacement_for(source_id).id == active_id
+            assert repo.get_active_replacement_for(999_999) is None
+
 
 class TestActivityLogRepository:
     def test_add_persists_minimal_activity(self, sqlite_session_factory):

@@ -115,6 +115,16 @@ class FakeRepository:
     def list(self): return list(self.items)
     def get_by_id(self, item_id):
         return next((item for item in self.items if item.id == item_id), None)
+    def get_active_replacement_for(self, source_item_id):
+        return next(
+            (
+                item
+                for item in self.items
+                if item.replaces_knowledge_item_id == source_item_id
+                and item.status != "archived"
+            ),
+            None,
+        )
     def save(self, item):
         self.save_calls += 1
         if self.save_error:
@@ -431,6 +441,7 @@ def test_owner_approval_requires_confirmation_then_refreshes_official_state(
     assert refreshed.selected_option == "Reviewed rule (approved)"
     assert "Knowledge title" not in refreshed.widget_labels
     assert "Approve as official Knowledge" not in refreshed.widget_labels
+    assert "Create correction draft" in refreshed.widget_labels
     assert "Archive approved knowledge" in refreshed.widget_labels
 
 
@@ -470,6 +481,107 @@ def test_approved_knowledge_can_be_archived_without_losing_approval_evidence(
     assert "Approved by: Owner" in refreshed.text()
     assert "Approve as official Knowledge" not in refreshed.widget_labels
     assert "Archive approved knowledge" not in refreshed.widget_labels
+
+
+def test_owner_creates_selected_replacement_draft_without_changing_source(
+    monkeypatch,
+):
+    approved_at = datetime(2026, 8, 25, 14, 30, tzinfo=timezone.utc)
+    source = _item(1, "Official rule", "Saved version", status="approved")
+    source.approved_at = approved_at
+    source.approved_by = "owner"
+    repo = FakeRepository([source])
+    state = {}
+    submitted = FakeStreamlit(
+        selected_id=1,
+        submissions={"replace_knowledge_1": True},
+        confirmed=True,
+        session_state=state,
+    )
+    _install(monkeypatch, submitted, KnowledgeService(repo))
+
+    knowledge_hub.render()
+
+    assert len(repo.items) == 2
+    replacement = repo.items[1]
+    assert (source.title, source.content, source.status) == (
+        "Official rule",
+        "Saved version",
+        "approved",
+    )
+    assert (replacement.title, replacement.content, replacement.status) == (
+        "Official rule",
+        "Saved version",
+        "draft",
+    )
+    assert replacement.replaces_knowledge_item_id == source.id
+    assert state[knowledge_hub._KNOWLEDGE_SELECTED_VALUE_KEY] == replacement.id
+    assert state[knowledge_hub._KNOWLEDGE_FLASH_KEY] == (
+        "Knowledge replacement draft created successfully."
+    )
+    assert submitted.rerun_calls == 1
+
+    refreshed = FakeStreamlit(selected_id=replacement.id, session_state=state)
+    _install(monkeypatch, refreshed, KnowledgeService(repo))
+    knowledge_hub.render()
+    assert "Knowledge replacement draft created successfully." in refreshed.text()
+    assert "Replaces Knowledge item: #1" in refreshed.text()
+    assert "Knowledge title" in refreshed.widget_labels
+    assert "Approve as official Knowledge" in refreshed.widget_labels
+
+
+def test_active_replacement_hides_source_mutations_and_superseded_is_history(
+    monkeypatch,
+):
+    approved_at = datetime(2026, 8, 25, 14, 30, tzinfo=timezone.utc)
+    replacement_time = datetime(2026, 8, 26, 9, 15, tzinfo=timezone.utc)
+    source = _item(1, "Official rule", "Version one", status="approved")
+    source.approved_at = approved_at
+    source.approved_by = "owner"
+    replacement = _item(2, "Official rule", "Version two", status="draft")
+    replacement.replaces_knowledge_item_id = source.id
+    repo = FakeRepository([source, replacement])
+
+    source_view = FakeStreamlit(selected_id=source.id)
+    _install(monkeypatch, source_view, KnowledgeService(repo))
+    knowledge_hub.render()
+    assert "Active replacement: #2 (draft)" in source_view.text()
+    assert "A replacement is already active" in source_view.text()
+    assert "Create correction draft" not in source_view.widget_labels
+    assert "Archive approved knowledge" not in source_view.widget_labels
+
+    KnowledgeService(repo, clock=lambda: replacement_time).approve_draft(
+        replacement.id
+    )
+    superseded_view = FakeStreamlit(selected_id=source.id)
+    _install(monkeypatch, superseded_view, KnowledgeService(repo))
+    knowledge_hub.render()
+    assert "Status: superseded" in superseded_view.text()
+    assert "Active replacement: #2 (approved)" in superseded_view.text()
+    assert "Superseded Knowledge — preserved as read-only history." in (
+        superseded_view.text()
+    )
+    assert "Knowledge title" not in superseded_view.widget_labels
+    assert "Approve as official Knowledge" not in superseded_view.widget_labels
+    assert "Create correction draft" not in superseded_view.widget_labels
+    assert "Archive approved knowledge" not in superseded_view.widget_labels
+
+
+def test_replacement_creation_requires_confirmation(monkeypatch):
+    source = _item(1, status="approved")
+    source.approved_at = datetime(2026, 8, 25, tzinfo=timezone.utc)
+    source.approved_by = "owner"
+    repo = FakeRepository([source])
+    fake_st = FakeStreamlit(
+        selected_id=1, submissions={"replace_knowledge_1": True}
+    )
+    _install(monkeypatch, fake_st, KnowledgeService(repo))
+
+    knowledge_hub.render()
+
+    assert len(repo.items) == 1
+    assert "Confirm replacement draft creation" in fake_st.text()
+    assert fake_st.rerun_calls == 0
 
 
 def test_known_approval_failure_is_readable_and_does_not_rerun(monkeypatch):
@@ -517,14 +629,18 @@ def test_unknown_status_and_unknown_flash_are_never_treated_as_trusted(monkeypat
     assert "Approve as official Knowledge" not in fake_st.widget_labels
 
 
-@pytest.mark.parametrize("operation", ["edit", "approve", "archive"])
+@pytest.mark.parametrize("operation", ["edit", "approve", "replace", "archive"])
 def test_lifecycle_failures_are_generic_and_do_not_rerun(monkeypatch, operation):
     class FailingService:
-        def list_items(self): return [_item(1)]
-        def get_item(self, _item_id): return _item(1)
+        def _selected(self):
+            return _item(1, status="approved" if operation == "replace" else "draft")
+        def list_items(self): return [self._selected()]
+        def get_item(self, _item_id): return self._selected()
         def edit_draft(self, *_args):
             raise RuntimeError("password SQL token traceback")
         def approve_draft(self, *_args):
+            raise RuntimeError("password SQL token traceback")
+        def create_replacement_draft(self, *_args):
             raise RuntimeError("password SQL token traceback")
         def archive_draft(self, *_args):
             raise RuntimeError("password SQL token traceback")
@@ -543,7 +659,11 @@ def test_lifecycle_failures_are_generic_and_do_not_rerun(monkeypatch, operation)
         else (
             "Knowledge approval failed"
             if operation == "approve"
-            else "Knowledge draft archive failed"
+            else (
+                "Knowledge replacement creation failed"
+                if operation == "replace"
+                else "Knowledge draft archive failed"
+            )
         )
     )
     assert expected in fake_st.text()

@@ -28,6 +28,18 @@ class KnowledgeAlreadyApprovedError(ValueError):
     """Raised when an approved item is approved again."""
 
 
+class KnowledgeReplacementConflictError(ValueError):
+    """Raised when a source already has an active replacement."""
+
+
+class KnowledgeReplacementSourceError(ValueError):
+    """Raised when replacement lineage is missing, stale, or unsupported."""
+
+
+class KnowledgeReplacementPendingError(ValueError):
+    """Raised when a source mutation conflicts with its active replacement."""
+
+
 _OWNER_APPROVER = "owner"
 
 
@@ -76,9 +88,42 @@ class KnowledgeService:
                 source_reference=None,
                 approved_at=None,
                 approved_by=None,
+                replaces_knowledge_item_id=None,
             )
         )
         self._record_activity("knowledge_created", saved.id)
+        return saved
+
+    def create_replacement_draft(self, source_item_id: int) -> KnowledgeItem:
+        """Copy one approved item into a linked, editable replacement draft."""
+        source = self._repo.get_by_id(source_item_id)
+        if source is None:
+            raise KnowledgeNotFoundError(
+                "The selected knowledge item could not be found."
+            )
+        if source.status != "approved":
+            raise KnowledgeReplacementSourceError(
+                "Only approved Knowledge can start a replacement draft."
+            )
+        if self._repo.get_active_replacement_for(source.id) is not None:
+            raise KnowledgeReplacementConflictError(
+                "This Knowledge already has an active replacement."
+            )
+
+        saved = self._repo.add(
+            KnowledgeItem(
+                title=source.title,
+                content=source.content,
+                status="draft",
+                project_id=source.project_id,
+                source_type=source.source_type,
+                source_reference=source.source_reference,
+                approved_at=None,
+                approved_by=None,
+                replaces_knowledge_item_id=source.id,
+            )
+        )
+        self._record_activity("knowledge_replacement_created", saved.id)
         return saved
 
     def approve_draft(self, item_id: int) -> KnowledgeItem:
@@ -97,6 +142,23 @@ class KnowledgeService:
                 "This knowledge item cannot be approved in its current status."
             )
 
+        replacement_source = None
+        if item.replaces_knowledge_item_id is not None:
+            replacement_source = self._repo.get_by_id(
+                item.replaces_knowledge_item_id
+            )
+            if replacement_source is None or replacement_source.status != "approved":
+                raise KnowledgeReplacementSourceError(
+                    "The replacement source is no longer approved."
+                )
+            active_replacement = self._repo.get_active_replacement_for(
+                replacement_source.id
+            )
+            if active_replacement is None or active_replacement.id != item.id:
+                raise KnowledgeReplacementSourceError(
+                    "The replacement lineage is no longer current."
+                )
+
         approved_at = self._clock()
         if (
             not isinstance(approved_at, datetime)
@@ -107,18 +169,27 @@ class KnowledgeService:
         approved_at = approved_at.astimezone(timezone.utc)
 
         previous = (item.status, item.approved_at, item.approved_by)
+        previous_source_status = (
+            replacement_source.status if replacement_source is not None else None
+        )
         item.status = "approved"
         item.approved_at = approved_at
         item.approved_by = _OWNER_APPROVER
+        if replacement_source is not None:
+            replacement_source.status = "superseded"
         try:
             saved = self._repo.save(item)
-        except Exception:
-            item.status, item.approved_at, item.approved_by = previous
-            raise
-        try:
+            if replacement_source is not None:
+                self._repo.save(replacement_source)
             self._record_activity("knowledge_approved", saved.id)
+            if replacement_source is not None:
+                self._record_activity(
+                    "knowledge_superseded", replacement_source.id
+                )
         except Exception:
             item.status, item.approved_at, item.approved_by = previous
+            if replacement_source is not None:
+                replacement_source.status = previous_source_status
             raise
         return saved
 
@@ -163,6 +234,13 @@ class KnowledgeService:
         if item.status not in {"draft", "approved"}:
             raise KnowledgeReadOnlyError(
                 "This knowledge item has an unsupported status and cannot be archived."
+            )
+        if (
+            item.status == "approved"
+            and self._repo.get_active_replacement_for(item.id) is not None
+        ):
+            raise KnowledgeReplacementPendingError(
+                "Archive the active replacement draft before archiving its source."
             )
         previous_status = item.status
         item.status = "archived"

@@ -151,3 +151,58 @@ def test_knowledge_approval_migration_adds_only_nullable_fields_and_checks():
     mock_op.drop_constraint.assert_not_called()
     mock_op.alter_column.assert_not_called()
     mock_op.execute.assert_not_called()
+
+
+def test_knowledge_replacement_migration_adds_nullable_bounded_lineage():
+    migration_path = _migration_file("*_knowledge_replacement_history.py")
+    spec = importlib.util.spec_from_file_location(
+        "knowledge_replacement_migration", migration_path
+    )
+    migration = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(migration)
+
+    assert migration.down_revision == "3f61b4a9c2d7"
+    mock_op = MagicMock()
+    migration.op = mock_op
+    migration.upgrade()
+
+    added_column = mock_op.add_column.call_args.args[1]
+    assert added_column.name == "replaces_knowledge_item_id"
+    assert added_column.nullable is True
+    assert added_column.type.python_type is int
+
+    foreign_key_call = mock_op.create_foreign_key.call_args
+    assert foreign_key_call.args[:3] == (
+        "fk_knowledge_items_replaces_knowledge_item_id",
+        "knowledge_items",
+        "knowledge_items",
+    )
+    assert foreign_key_call.args[3:] == (
+        ["replaces_knowledge_item_id"],
+        ["id"],
+    )
+    assert foreign_key_call.kwargs["ondelete"] == "RESTRICT"
+
+    constraint_names = {
+        call.args[0] for call in mock_op.create_check_constraint.call_args_list
+    }
+    assert constraint_names == {
+        "ck_knowledge_items_not_self_replacing",
+        "ck_knowledge_items_superseded_has_metadata",
+    }
+    index_call = mock_op.create_index.call_args
+    assert index_call.args[:3] == (
+        "uq_knowledge_items_open_replacement",
+        "knowledge_items",
+        ["replaces_knowledge_item_id"],
+    )
+    assert index_call.kwargs["unique"] is True
+    assert "status <> 'archived'" in str(
+        index_call.kwargs["postgresql_where"]
+    )
+    mock_op.drop_table.assert_not_called()
+    mock_op.drop_column.assert_not_called()
+    mock_op.drop_constraint.assert_not_called()
+    mock_op.drop_index.assert_not_called()
+    mock_op.alter_column.assert_not_called()
+    mock_op.execute.assert_not_called()
