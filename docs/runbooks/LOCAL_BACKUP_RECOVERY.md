@@ -10,7 +10,8 @@ not an operational database backup.
 
 - Owner-triggered backup from **Settings**.
 - A command-line backup path when the Streamlit page is unavailable.
-- PostgreSQL custom-format archives created with no-owner/no-privilege intent.
+- PostgreSQL custom-format archives created by the already-running PostgreSQL
+  container's server-matched client, with no-owner/no-privilege intent.
   Because archive restore controls are applied by `pg_restore`, any future
   disposable restore must also use `--no-owner --no-privileges`.
 - A strict non-secret JSON manifest, file size, and SHA-256 checksum.
@@ -56,26 +57,35 @@ Verification checks the manifest, regular-file and path boundaries, PostgreSQL
 archive signature, exact size, SHA-256, and readable archive table of contents.
 It does not connect to, create, drop, clean, or change any database.
 
-## Fail-closed recovery boundary
+## Proven disposable recovery rehearsal
 
-TASK-077 deliberately provides **no restore button or restore command**. Do not
-run `pg_restore --clean`, do not restore into the configured `advancore`
-database, and do not replace or remove the saved Docker volume.
+The application deliberately provides **no in-place restore button or
+command**. Do not run `pg_restore --clean`, do not restore into the configured
+`advancore` database, and do not replace or remove the saved Docker volume.
 
-If recovery is needed:
+TASK-079 adds one bounded local rehearsal command:
+
+```bash
+.venv/bin/python scripts/rehearse-advancore-recovery.py
+```
+
+It accepts no database name or other argument. It verifies the latest archive,
+resolves exactly one running local PostgreSQL Compose service, generates a
+unique `advancore_recovery_` database name, restores with the matching
+container client and `--no-owner --no-privileges --exit-on-error`, checks the
+migration head and bounded row counts for required tables, and then drops only
+the exact disposable database it generated. Every post-creation failure still
+attempts that exact cleanup. An ambiguous container or unconfirmed cleanup
+fails closed.
+
+If an actual recovery is needed:
 
 1. Stop business changes and preserve the current volume and backup folder.
 2. Verify the selected backup again.
-3. Create a separately named disposable PostgreSQL recovery database under a
-   separately approved rehearsal procedure.
-4. Restore only into that disposable database. The approved command must use
-   `pg_restore --no-owner --no-privileges`.
-5. Check migrations and business record counts before any owner decision about
-   production recovery.
-
-The disposable restore and verification workflow is the recommended next task.
-It must prove that the target is not the configured saved database before it
-performs any mutation.
+3. Run the bounded rehearsal above and require a cleanup-confirmed pass.
+4. Preserve the resulting evidence for owner review.
+5. Treat any proposal to replace or restore the operational database as a new,
+   separately approved destructive recovery task.
 
 ## Current limitations
 
@@ -84,4 +94,5 @@ performs any mutation.
 - No automatic schedule or retention deletion exists yet.
 - PostgreSQL cluster-global roles and tablespaces are not included.
 - No point-in-time/WAL recovery exists.
-- Recovery is not proven until a disposable restore rehearsal passes.
+- Disposable recovery has been proven locally, but no in-place operational
+  restore has been authorised or automated.

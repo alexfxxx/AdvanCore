@@ -92,10 +92,19 @@ to GitHub. The same safe actions remain available if the UI is unavailable:
 .venv/bin/python scripts/backup-advancore.py status
 ```
 
-TASK-077 does not expose restore or deletion. Never restore over the configured
-saved database. See
+Backups are created with the matching PostgreSQL client from the already-running
+local database container. A separately approved disposable recovery rehearsal
+is available without any caller-supplied database target:
+
+```bash
+.venv/bin/python scripts/rehearse-advancore-recovery.py
+```
+
+This command creates and deletes only its generated temporary database. It does
+not expose an in-place restore path. Never restore over the configured saved
+database. See
 [`docs/runbooks/LOCAL_BACKUP_RECOVERY.md`](docs/runbooks/LOCAL_BACKUP_RECOVERY.md)
-for the fail-closed recovery boundary and the disposable-rehearsal next step.
+for the fail-closed recovery boundary.
 
 The launcher also recognises the verified legacy `advancore-postgres` local
 container. It keeps the existing database volume, stops the legacy container

@@ -29,7 +29,9 @@ class FakeCommandRunner:
 
     def __call__(self, args, **kwargs):
         self.calls.append((list(args), kwargs))
-        if str(args[0]).endswith("pg_dump"):
+        if str(args[0]).endswith("docker") and args[1] == "ps":
+            return subprocess.CompletedProcess(args, 0, stdout="0123456789ab\n", stderr="")
+        if str(args[0]).endswith("docker") and args[1] == "exec":
             if self.dump_code == 0:
                 kwargs["stdout"].write(self.archive)
             return subprocess.CompletedProcess(
@@ -98,10 +100,22 @@ def test_create_writes_atomic_owner_only_archive_and_strict_manifest(tmp_path):
     assert "sup3rsecret" not in manifest_text
     assert "advancore:sup3rsecret" not in manifest_text
 
-    dump_args, dump_kwargs = runner.calls[0]
-    restore_args, restore_kwargs = runner.calls[1]
+    discovery_args, discovery_kwargs = runner.calls[0]
+    dump_args, dump_kwargs = runner.calls[1]
+    restore_args, restore_kwargs = runner.calls[2]
+    assert discovery_args[:2] == ["/tools/docker", "ps"]
+    assert "PGPASSWORD" not in discovery_kwargs["env"]
     assert dump_args == [
-        "/tools/pg_dump",
+        "/tools/docker",
+        "exec",
+        "-u",
+        "postgres",
+        "0123456789ab",
+        "pg_dump",
+        "--username",
+        "advancore",
+        "--dbname",
+        "advancore",
         "--format=custom",
         "--no-owner",
         "--no-privileges",

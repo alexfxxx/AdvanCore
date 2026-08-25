@@ -39,6 +39,7 @@ _MAX_INVENTORY_FILES = 2_000
 _DUMP_TIMEOUT_SECONDS = 180
 _VERIFY_TIMEOUT_SECONDS = 60
 _LOOPBACK_HOSTS = {"localhost", "127.0.0.1", "::1"}
+_CONTAINER_ID_PATTERN = re.compile(r"[0-9a-f]{12,64}")
 
 
 class LocalBackupError(RuntimeError):
@@ -149,6 +150,48 @@ class LocalBackupService:
         timestamp = created_at.strftime("%Y%m%dT%H%M%SZ")
         return f"advancore-{timestamp}-{token}", created_at
 
+    def _running_postgres_container(self, docker: str) -> str:
+        """Resolve one running Compose PostgreSQL service without caller input."""
+        try:
+            result = self._command_runner(
+                [
+                    docker,
+                    "ps",
+                    "--filter",
+                    "label=com.docker.compose.service=postgres",
+                    "--filter",
+                    "status=running",
+                    "--format",
+                    "{{.ID}}",
+                ],
+                cwd=self._repository_root,
+                env={"LC_ALL": "C"},
+                stdin=subprocess.DEVNULL,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                timeout=10,
+                check=False,
+            )
+        except (OSError, subprocess.SubprocessError) as exc:
+            raise LocalBackupError(
+                "The local PostgreSQL backup container is unavailable."
+            ) from exc
+        candidates = [
+            line.strip()
+            for line in (result.stdout or "").splitlines()
+            if line.strip()
+        ]
+        if (
+            result.returncode != 0
+            or len(candidates) != 1
+            or not _CONTAINER_ID_PATTERN.fullmatch(candidates[0])
+        ):
+            raise LocalBackupError(
+                "The local PostgreSQL backup container is ambiguous or unavailable."
+            )
+        return candidates[0]
+
     @staticmethod
     def _hash_archive(path: Path, expected_size: int | None = None) -> tuple[int, str]:
         flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
@@ -223,9 +266,19 @@ class LocalBackupService:
         if archive_path.exists() or manifest_path.exists() or temporary_path.exists():
             raise LocalBackupError("Backup identifier already exists.")
 
-        pg_dump = self._tool_path(self._tool_finder, "pg_dump")
+        docker = self._tool_path(self._tool_finder, "docker")
+        container_id = self._running_postgres_container(docker)
         command = [
-            pg_dump,
+            docker,
+            "exec",
+            "-u",
+            "postgres",
+            container_id,
+            "pg_dump",
+            "--username",
+            self._database_environment["PGUSER"],
+            "--dbname",
+            self._database_environment["PGDATABASE"],
             "--format=custom",
             "--no-owner",
             "--no-privileges",
