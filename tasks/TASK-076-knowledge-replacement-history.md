@@ -94,7 +94,7 @@ the governed correction path so official history is never silently rewritten.
 
 ## Acceptance criteria
 
-- [ ] Existing rows migrate without synthetic lineage or content changes.
+- [x] Existing rows migrate without synthetic lineage or content changes.
 - [x] Only approved Knowledge can create a replacement draft.
 - [x] The source remains unchanged and official while the replacement is draft.
 - [x] A replacement draft copies bounded saved fields and links only by numeric
@@ -176,8 +176,8 @@ TASK-074 rule that corrections use replacement drafts remains authoritative.
   119 passed, 1 intentionally skipped locally.
 - Full repository suite: 975 passed, 2 intentionally skipped in 169.74 seconds.
 - Compilation, `git diff --check`, and Alembic head/history passed.
-- The remaining migration execution test is restricted to GitHub's disposable
-  PostgreSQL service and never touches the owner's saved local database.
+- GitHub PR #17 CI passed, including the real migration against its disposable
+  PostgreSQL service; GitGuardian also passed.
 
 ### Assumptions
 
@@ -186,7 +186,6 @@ TASK-074 rule that corrections use replacement drafts remains authoritative.
 
 ### Risks / unresolved issues
 
-- Real PostgreSQL migration execution remains pending until pull-request CI.
 - History is intentionally linear; branching, rollback, and content diffing are
   not included.
 
@@ -196,6 +195,5 @@ None for this approved scope.
 
 ### Recommended next step
 
-Publish the TASK-076 pull request to `projects-lifecycle-recovery`, require the
-real PostgreSQL migration and security checks to pass, then evaluate the next
-owner-prioritised capability separately.
+Merge green PR #17 into `projects-lifecycle-recovery` (never `main`), then
+evaluate the next owner-prioritised capability separately.
