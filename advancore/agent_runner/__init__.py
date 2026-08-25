@@ -215,6 +215,15 @@ from advancore.agent_runner.worker import (
     validate_worker_policy,
     validate_planner_policy,
 )
+from advancore.agent_runner.worker_registry import (
+    WorkerApprovalState,
+    WorkerProfile,
+    WorkerRole,
+    eligible_workers,
+    get_worker_profile,
+    validate_worker_registry,
+    worker_profiles,
+)
 
 __all__ = [
     "ActorRole",
@@ -364,8 +373,15 @@ __all__ = [
     "TaskStatus",
     "ValidationResult",
     "WorkerAdapter",
+    "WorkerApprovalState",
     "WorkerError",
+    "WorkerProfile",
     "WorkerResult",
+    "WorkerRole",
+    "eligible_workers",
+    "get_worker_profile",
+    "validate_worker_registry",
+    "worker_profiles",
     "build_worker_instruction",
     "parse_worker_timeout",
     "run_bounded_worker_process",
