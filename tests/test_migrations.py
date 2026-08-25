@@ -47,22 +47,20 @@ def test_alembic_env_target_metadata_matches_base():
     assert env_module.target_metadata is Base.metadata
 
 
-def _latest_baseline_file() -> Path:
-    """Return the most recently created revision script in alembic/versions."""
+def _migration_file(pattern: str) -> Path:
+    """Return the one migration matching an explicit semantic filename."""
     versions_dir = ALEMBIC_DIR / "versions"
     assert versions_dir.exists(), "Alembic versions directory is missing"
-    revision_files = sorted(
-        versions_dir.glob("*.py"),
-        key=lambda p: p.stat().st_mtime,
-        reverse=True,
+    revision_files = list(versions_dir.glob(pattern))
+    assert len(revision_files) == 1, (
+        f"Expected one migration matching {pattern}, found {revision_files}"
     )
-    assert revision_files, "No migration revision files found"
     return revision_files[0]
 
 
 def test_baseline_migration_creates_expected_tables():
     """The baseline migration creates the four existing AdvanCore tables."""
-    baseline = _latest_baseline_file()
+    baseline = _migration_file("*_baseline.py")
     source = baseline.read_text()
     tree = ast.parse(source)
 
@@ -86,7 +84,7 @@ def test_baseline_migration_creates_expected_tables():
 
 def test_baseline_migration_upgrade_has_no_destructive_operations():
     """The baseline upgrade does not drop tables, columns, or indexes."""
-    baseline = _latest_baseline_file()
+    baseline = _migration_file("*_baseline.py")
     source = baseline.read_text()
     tree = ast.parse(source)
 
@@ -115,3 +113,41 @@ def test_baseline_migration_upgrade_has_no_destructive_operations():
     assert not upgrade_calls, (
         f"Baseline upgrade contains destructive operations: {upgrade_calls}"
     )
+
+
+def test_knowledge_approval_migration_adds_only_nullable_fields_and_checks():
+    migration_path = _migration_file("*_knowledge_approval_foundation.py")
+    spec = importlib.util.spec_from_file_location(
+        "knowledge_approval_migration", migration_path
+    )
+    migration = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(migration)
+
+    assert migration.down_revision == "639d8b65223c"
+    mock_op = MagicMock()
+    migration.op = mock_op
+    migration.upgrade()
+
+    added_columns = {
+        call.args[1].name: call.args[1]
+        for call in mock_op.add_column.call_args_list
+    }
+    assert set(added_columns) == {"approved_at", "approved_by"}
+    assert all(column.nullable is True for column in added_columns.values())
+    assert added_columns["approved_at"].type.timezone is True
+    assert added_columns["approved_by"].type.length == 100
+
+    constraint_names = {
+        call.args[0] for call in mock_op.create_check_constraint.call_args_list
+    }
+    assert constraint_names == {
+        "ck_knowledge_items_approval_fields_paired",
+        "ck_knowledge_items_approved_has_metadata",
+        "ck_knowledge_items_draft_unapproved",
+        "ck_knowledge_items_approver_nonblank",
+    }
+    mock_op.drop_table.assert_not_called()
+    mock_op.drop_column.assert_not_called()
+    mock_op.drop_constraint.assert_not_called()
+    mock_op.alter_column.assert_not_called()
+    mock_op.execute.assert_not_called()

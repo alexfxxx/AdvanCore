@@ -58,6 +58,7 @@ def test_list_and_get_delegate_to_repository():
         ("project_archived", "project"),
         ("knowledge_created", "knowledge"),
         ("knowledge_updated", "knowledge"),
+        ("knowledge_approved", "knowledge"),
         ("knowledge_archived", "knowledge"),
     ],
 )
