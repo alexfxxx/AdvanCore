@@ -20,7 +20,7 @@ AVAILABLE_DASHBOARD_MODULES = (
     "knowledge",
     "activity",
 )
-AVAILABLE_WORKER_CARDS = ("kimi-swarm", "codex")
+AVAILABLE_WORKER_CARDS = ("kimi-swarm", "codex", "gemini")
 
 
 class DashboardPreferenceError(ValueError):

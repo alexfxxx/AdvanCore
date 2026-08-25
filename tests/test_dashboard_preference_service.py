@@ -73,7 +73,7 @@ def test_save_and_reload_allowlisted_preferences():
         "[]",
         '{"version":2,"modules":[],"workers":[]}',
         '{"version":1,"modules":["unknown"],"workers":[]}',
-        '{"version":1,"modules":[],"workers":["gemini"]}',
+        '{"version":1,"modules":[],"workers":["unknown-worker"]}',
         '{"version":1,"modules":[],"workers":[],"secret":"x"}',
     ],
 )
@@ -88,7 +88,7 @@ def test_invalid_stored_value_fails_to_defaults(value):
     ("modules", "workers"),
     [
         (["unknown"], []),
-        ([], ["gemini"]),
+        ([], ["unknown-worker"]),
         (["projects", "projects"], []),
         ([{"not": "hashable"}], []),
         ("projects", []),
@@ -105,3 +105,10 @@ def test_reset_restores_complete_catalogue():
     assert service.reset() == DashboardPreferences(
         AVAILABLE_DASHBOARD_MODULES, AVAILABLE_WORKER_CARDS
     )
+
+
+def test_gemini_candidate_card_is_an_allowlisted_display_choice_only():
+    service = DashboardPreferenceService(FakeRepository())
+    saved = service.save(["ai_workforce"], ["gemini"])
+    assert saved.workers == ("gemini",)
+    assert service.load() == saved

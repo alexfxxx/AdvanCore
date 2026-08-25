@@ -21,6 +21,10 @@ from advancore.services.dashboard_preference_service import (
 )
 from advancore.services.dashboard_service import DashboardService
 from advancore.services.worker_usage_service import UsageState, WorkerUsageService
+from advancore.services.worker_health_service import (
+    WorkerHealthService,
+    WorkerHealthState,
+)
 from advancore.ui.custom_components import render_fuel_status_component
 from advancore.ui.fuel_trends import ALLOWED_FUEL_WINDOWS, build_fuel_trend_figure
 
@@ -35,6 +39,7 @@ _MODULE_LABELS = {
 _WORKER_LABELS = {
     "kimi-swarm": "Kimi / Kimi-Swarm",
     "codex": "Codex",
+    "gemini": "Gemini",
 }
 _FUEL_WINDOW_LABELS = {
     7: "Latest 7 readings",
@@ -66,6 +71,10 @@ def _dashboard_preference_service() -> Iterator[DashboardPreferenceService]:
 
 def _worker_usage_service() -> WorkerUsageService:
     return WorkerUsageService(Path(__file__).resolve().parents[2])
+
+
+def _worker_health_service() -> WorkerHealthService:
+    return WorkerHealthService(_worker_usage_service())
 
 
 def _metric_grid(metrics: list[tuple[str, object]]) -> None:
@@ -188,6 +197,7 @@ def _render_ai_workforce(workers: tuple[str, ...]) -> None:
     if "kimi-swarm" in workers:
         _render_kimi_usage()
     if "codex" in workers:
+        status = _worker_health_service().get_status("codex")
         _metric_grid(
             [
                 ("Codex role", "Approved fallback"),
@@ -195,9 +205,24 @@ def _render_ai_workforce(workers: tuple[str, ...]) -> None:
             ]
         )
         st.caption(
-            "Codex can be selected only through the existing governed fallback path; "
-            "no quota is inferred from chat history."
+            "Codex readiness is checked at launch. No quota is inferred from chat "
+            f"history. Status: {status.state.value.replace('_', ' ').title()}."
         )
+    if "gemini" in workers:
+        status = _worker_health_service().get_status("gemini")
+        _metric_grid(
+            [
+                ("Gemini role", "Candidate — not active"),
+                ("Gemini status", status.state.value.replace("_", " ").title()),
+                ("Gemini usage", "Not connected"),
+            ]
+        )
+        if status.state == WorkerHealthState.SETUP_REQUIRED:
+            st.warning(
+                "Gemini requires owner setup and evaluation before it can become "
+                "an approved worker. A Gemini app subscription does not grant "
+                "agent_runner authority."
+            )
 
 
 def _active_fuel_window() -> int | None:
