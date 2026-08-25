@@ -21,6 +21,8 @@ from advancore.services.dashboard_preference_service import (
 )
 from advancore.services.dashboard_service import DashboardService
 from advancore.services.worker_usage_service import UsageState, WorkerUsageService
+from advancore.ui.custom_components import render_fuel_status_component
+from advancore.ui.fuel_trends import ALLOWED_FUEL_WINDOWS, build_fuel_trend_figure
 
 
 _MODULE_LABELS = {
@@ -34,6 +36,12 @@ _WORKER_LABELS = {
     "kimi-swarm": "Kimi / Kimi-Swarm",
     "codex": "Codex",
 }
+_FUEL_WINDOW_LABELS = {
+    7: "Latest 7 readings",
+    30: "Latest 30 readings",
+    None: "All available readings",
+}
+_FUEL_WINDOW_STATE_KEY = "dashboard_fuel_window"
 
 
 @contextmanager
@@ -192,6 +200,82 @@ def _render_ai_workforce(workers: tuple[str, ...]) -> None:
         )
 
 
+def _active_fuel_window() -> int | None:
+    selected = st.session_state.get(_FUEL_WINDOW_STATE_KEY, 7)
+    if selected not in ALLOWED_FUEL_WINDOWS:
+        selected = 7
+        st.session_state[_FUEL_WINDOW_STATE_KEY] = selected
+    return selected
+
+
+def _render_fuel_visual_foundation() -> None:
+    """Render the no-fabrication fuel chart and explicit voice confirmation UI."""
+    st.subheader("Fuel trend console")
+    st.caption(
+        "Visual groundwork only. No operational fuel records are connected, so "
+        "AdvanCore will not invent a trend."
+    )
+    render_fuel_status_component()
+
+    active_window = _active_fuel_window()
+    selected_window = st.selectbox(
+        "Choose the fuel view",
+        options=ALLOWED_FUEL_WINDOWS,
+        index=ALLOWED_FUEL_WINDOWS.index(active_window),
+        format_func=lambda value: _FUEL_WINDOW_LABELS[value],
+        key="dashboard_fuel_window_choice",
+    )
+    recording = st.audio_input(
+        "Record a short confirmation for the selected fuel view",
+        key="dashboard_fuel_voice_confirmation",
+        help=(
+            "The recording stays in this Streamlit session. It is not transcribed, "
+            "saved as a business record, or sent to an AI provider."
+        ),
+    )
+    st.caption(
+        "Recording alone changes nothing. Use the confirmation button below, or "
+        "apply the same view without voice."
+    )
+
+    voice_column, manual_column = st.columns(2)
+    voice_confirmed = voice_column.button(
+        "Confirm selected view with recording",
+        key="dashboard_fuel_voice_apply",
+        disabled=recording is None,
+    )
+    manual_confirmed = manual_column.button(
+        "Apply selected view without voice",
+        key="dashboard_fuel_manual_apply",
+    )
+
+    if voice_confirmed and recording is not None:
+        active_window = selected_window
+        st.session_state[_FUEL_WINDOW_STATE_KEY] = selected_window
+        st.success("Fuel view applied after your recorded confirmation.")
+    elif manual_confirmed:
+        active_window = selected_window
+        st.session_state[_FUEL_WINDOW_STATE_KEY] = selected_window
+        st.success("Fuel view applied without voice.")
+
+    st.caption(f"Active view: {_FUEL_WINDOW_LABELS[active_window]}.")
+    figure = build_fuel_trend_figure((), active_window)
+    st.plotly_chart(
+        figure,
+        width="stretch",
+        theme=None,
+        key="dashboard_fuel_trend",
+        config={
+            "displaylogo": False,
+            "scrollZoom": False,
+            "modeBarButtonsToRemove": ["select2d", "lasso2d"],
+        },
+    )
+    st.info(
+        "Fuel data connection is intentionally pending a separate governed task."
+    )
+
+
 def render():
     st.header("Executive Command Center")
     st.caption("Real AdvanCore status only — no placeholder business figures.")
@@ -214,6 +298,7 @@ def render():
     if "platform" in visible:
         st.subheader("Platform status")
         st.success("Core application shell operational.")
+        _render_fuel_visual_foundation()
 
     if "ai_workforce" in visible:
         _render_ai_workforce(preferences.workers)
