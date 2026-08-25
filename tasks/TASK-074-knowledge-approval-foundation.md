@@ -83,7 +83,7 @@ self-approve, and corrections use a later replacement-draft workflow.
 
 ## Acceptance criteria
 
-- [ ] Existing rows migrate without synthetic approval data.
+- [x] Existing rows migrate without synthetic approval data.
 - [x] A draft can be approved exactly once and becomes read-only.
 - [x] Approval always stores an aware UTC time and fixed `owner` identity.
 - [x] No API accepts an arbitrary approver identity.
@@ -152,8 +152,8 @@ TASK-074 on 25 August 2026.
 - Focused: 66 passed, 1 intentionally skipped locally.
 - Full repository: 950 passed, 1 intentionally skipped in 166.40 seconds.
 - `git diff --check`, Alembic head/history, and Python compilation passed.
-- The skipped test is restricted to GitHub Actions and will validate the real
-  migration against its disposable PostgreSQL service database.
+- GitHub PR #15 CI passed, including the real migration against its disposable
+  PostgreSQL service database; GitGuardian also passed.
 
 ### Assumptions
 
@@ -162,7 +162,6 @@ TASK-074 on 25 August 2026.
 
 ### Risks / unresolved issues
 
-- The PostgreSQL execution check remains pending until pull-request CI runs.
 - Owner approval is not yet available in the app; this is intentional until
   TASK-075 adds the explicit review and confirmation interface.
 
@@ -172,5 +171,5 @@ None for this approved scope.
 
 ### Recommended next step
 
-Publish the TASK-074 pull request to `projects-lifecycle-recovery`, require the
-GitHub PostgreSQL check to pass, then proceed to TASK-075 owner approval UI.
+Merge green PR #15 into `projects-lifecycle-recovery` (never `main`), then
+proceed to TASK-075 owner approval UI.
