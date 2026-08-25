@@ -16,6 +16,7 @@ _APPROVED_ACTION_ENTITIES = {
     "project_archived": "project",
     "knowledge_created": "knowledge",
     "knowledge_updated": "knowledge",
+    "knowledge_approved": "knowledge",
     "knowledge_archived": "knowledge",
 }
 

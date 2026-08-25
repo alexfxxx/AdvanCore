@@ -18,6 +18,7 @@ _ACTION_FILTERS = (
     "project_archived",
     "knowledge_created",
     "knowledge_updated",
+    "knowledge_approved",
     "knowledge_archived",
 )
 _ACTION_LABELS = {
@@ -26,6 +27,7 @@ _ACTION_LABELS = {
     "project_archived": "Project archived",
     "knowledge_created": "Knowledge created",
     "knowledge_updated": "Knowledge updated",
+    "knowledge_approved": "Knowledge approved",
     "knowledge_archived": "Knowledge archived",
 }
 _ENTITY_LABELS = {

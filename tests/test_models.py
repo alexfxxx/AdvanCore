@@ -1,5 +1,14 @@
 """Smoke and metadata tests for the AdvanCore model foundation."""
 
+from datetime import datetime, timezone
+
+import pytest
+from sqlalchemy import create_engine
+from sqlalchemy.exc import IntegrityError
+from sqlalchemy.orm import Session
+
+from advancore.models import Base, KnowledgeItem
+
 
 def test_model_package_imports():
     """All public models and Base import successfully from advancore.models."""
@@ -28,3 +37,69 @@ def test_expected_model_tables_registered():
     assert "knowledge_items" in table_names
     assert "activity_logs" in table_names
     assert "system_settings" in table_names
+
+
+def test_knowledge_model_registers_bounded_approval_metadata():
+    table = KnowledgeItem.__table__
+    assert table.c.approved_at.nullable is True
+    assert table.c.approved_at.type.timezone is True
+    assert table.c.approved_by.nullable is True
+    assert table.c.approved_by.type.length == 100
+    assert {constraint.name for constraint in table.constraints} >= {
+        "ck_knowledge_items_approval_fields_paired",
+        "ck_knowledge_items_approved_has_metadata",
+        "ck_knowledge_items_draft_unapproved",
+        "ck_knowledge_items_approver_nonblank",
+    }
+
+
+@pytest.mark.parametrize(
+    "invalid_fields",
+    [
+        {"status": "approved"},
+        {
+            "status": "archived",
+            "approved_at": datetime(2026, 8, 25, tzinfo=timezone.utc),
+        },
+        {
+            "status": "draft",
+            "approved_at": datetime(2026, 8, 25, tzinfo=timezone.utc),
+            "approved_by": "owner",
+        },
+        {
+            "status": "archived",
+            "approved_at": datetime(2026, 8, 25, tzinfo=timezone.utc),
+            "approved_by": "   ",
+        },
+    ],
+)
+def test_knowledge_approval_constraints_reject_inconsistent_rows(invalid_fields):
+    engine = create_engine("sqlite:///:memory:")
+    Base.metadata.create_all(engine)
+    with Session(engine) as session:
+        session.add(
+            KnowledgeItem(
+                title="Knowledge",
+                content="Content",
+                **invalid_fields,
+            )
+        )
+        with pytest.raises(IntegrityError):
+            session.flush()
+
+
+def test_archived_approved_knowledge_retains_valid_approval_evidence():
+    engine = create_engine("sqlite:///:memory:")
+    Base.metadata.create_all(engine)
+    approved_at = datetime(2026, 8, 25, tzinfo=timezone.utc)
+    with Session(engine) as session:
+        item = KnowledgeItem(
+            title="Knowledge",
+            content="Content",
+            status="archived",
+            approved_at=approved_at,
+            approved_by="owner",
+        )
+        session.add(item)
+        session.flush()
+        assert item.id is not None

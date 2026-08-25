@@ -160,6 +160,7 @@ def test_entity_and_action_filters_bound_the_selectable_records(monkeypatch):
         "Project archived",
         "Knowledge created",
         "Knowledge updated",
+        "Knowledge approved",
         "Knowledge archived",
     ]
     assert fake_st.selectbox_labels["Select an activity record"] == [
@@ -174,6 +175,34 @@ def test_unknown_activity_codes_have_readable_non_destructive_fallback():
     )
     assert activity_log._entity_label("service_route") == "Service route"
     assert activity_log._action_label("") == "Not provided"
+
+
+def test_knowledge_approval_event_has_readable_filter_and_detail(monkeypatch):
+    record = _activity(
+        7,
+        "knowledge_approved",
+        entity_type="knowledge",
+        entity_id="12",
+    )
+    fake_st = FakeStreamlit(
+        selected_id=7,
+        selected_filters={"Filter by action": "knowledge_approved"},
+    )
+    _install(
+        monkeypatch,
+        fake_st,
+        ActivityLogService(FakeRepository([record])),
+    )
+
+    activity_log.render()
+
+    assert fake_st.selectbox_options["Select an activity record"] == [7]
+    assert fake_st.selectbox_labels["Select an activity record"] == [
+        "Knowledge approved (record #7)"
+    ]
+    assert "Action: Knowledge approved" in fake_st.text()
+    assert "Entity type: Knowledge" in fake_st.text()
+    assert "Entity ID: 12" in fake_st.text()
 
 
 def test_filters_have_clear_empty_state(monkeypatch):

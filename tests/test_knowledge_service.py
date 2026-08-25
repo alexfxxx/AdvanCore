@@ -1,4 +1,7 @@
-"""Deterministic tests for the draft-only KnowledgeService."""
+"""Deterministic tests for bounded Knowledge lifecycle transitions."""
+
+from datetime import datetime, timedelta, timezone
+from inspect import signature
 
 import pytest
 from sqlalchemy import create_engine, select
@@ -8,6 +11,7 @@ from advancore.repositories import KnowledgeItemRepository
 from advancore.services.database import create_session_factory, session_scope
 
 from advancore.services.knowledge_service import (
+    KnowledgeAlreadyApprovedError,
     KnowledgeAlreadyArchivedError,
     KnowledgeNotFoundError,
     KnowledgeReadOnlyError,
@@ -52,6 +56,7 @@ class FakeActivityService:
         if self.error:
             raise self.error
 
+
 def test_create_draft_normalizes_and_sets_bounded_defaults():
     repo = FakeKnowledgeRepository()
     item = KnowledgeService(repo).create_draft("  Operating note  ", "  Details  ")
@@ -63,6 +68,8 @@ def test_create_draft_normalizes_and_sets_bounded_defaults():
     assert item.project_id is None
     assert item.source_type is None
     assert item.source_reference is None
+    assert item.approved_at is None
+    assert item.approved_by is None
     assert repo.add_calls == 1
 
 
@@ -152,6 +159,95 @@ def test_edit_failure_restores_in_memory_fields():
     assert (item.title, item.content) == ("Original", "Old")
 
 
+def test_approve_draft_sets_fixed_owner_and_aware_utc_time_once():
+    repo = FakeKnowledgeRepository()
+    singapore = timezone(timedelta(hours=8))
+    local_time = datetime(2026, 8, 25, 18, 30, tzinfo=singapore)
+    service = KnowledgeService(repo, clock=lambda: local_time)
+    item = service.create_draft("Official rule", "Approved content")
+
+    approved = service.approve_draft(item.id)
+
+    assert approved is item
+    assert approved.status == "approved"
+    assert approved.approved_by == "owner"
+    assert approved.approved_at == datetime(
+        2026, 8, 25, 10, 30, tzinfo=timezone.utc
+    )
+    assert approved.approved_at.tzinfo is timezone.utc
+    assert list(signature(KnowledgeService.approve_draft).parameters) == [
+        "self",
+        "item_id",
+    ]
+    assert repo.save_calls == 1
+
+    with pytest.raises(KnowledgeAlreadyApprovedError, match="already approved"):
+        service.approve_draft(item.id)
+    assert repo.save_calls == 1
+
+
+def test_approve_rejects_missing_archived_and_unknown_without_save():
+    repo = FakeKnowledgeRepository()
+    service = KnowledgeService(repo)
+    with pytest.raises(KnowledgeNotFoundError):
+        service.approve_draft(404)
+    item = service.create_draft("Original", "Old")
+    item.status = "archived"
+    with pytest.raises(KnowledgeReadOnlyError, match="current status"):
+        service.approve_draft(item.id)
+    item.status = "unexpected"
+    with pytest.raises(KnowledgeReadOnlyError, match="current status"):
+        service.approve_draft(item.id)
+    assert repo.save_calls == 0
+
+
+def test_approved_item_is_immutable():
+    repo = FakeKnowledgeRepository()
+    service = KnowledgeService(repo)
+    item = service.create_draft("Official", "Content")
+    service.approve_draft(item.id)
+
+    with pytest.raises(KnowledgeReadOnlyError, match="read-only"):
+        service.edit_draft(item.id, "Changed", "Changed content")
+    assert (item.title, item.content, item.status) == (
+        "Official",
+        "Content",
+        "approved",
+    )
+    assert repo.save_calls == 1
+
+
+def test_approval_save_failure_restores_all_lifecycle_fields():
+    repo = FakeKnowledgeRepository()
+    item = KnowledgeService(repo).create_draft("Original", "Old")
+    repo.save_error = RuntimeError("database unavailable")
+
+    with pytest.raises(RuntimeError, match="database unavailable"):
+        KnowledgeService(repo).approve_draft(item.id)
+
+    assert (item.status, item.approved_at, item.approved_by) == (
+        "draft",
+        None,
+        None,
+    )
+
+
+def test_approval_rejects_naive_internal_clock_without_mutation():
+    repo = FakeKnowledgeRepository()
+    item = KnowledgeService(repo).create_draft("Original", "Old")
+    service = KnowledgeService(repo, clock=lambda: datetime(2026, 8, 25, 10, 30))
+
+    with pytest.raises(RuntimeError, match="aware time"):
+        service.approve_draft(item.id)
+
+    assert (item.status, item.approved_at, item.approved_by) == (
+        "draft",
+        None,
+        None,
+    )
+    assert repo.save_calls == 0
+
+
 def test_archive_draft_is_one_way_and_preserves_content():
     repo = FakeKnowledgeRepository()
     item = KnowledgeService(repo).create_draft("Original", "Old")
@@ -160,6 +256,20 @@ def test_archive_draft_is_one_way_and_preserves_content():
     assert (archived.id, archived.title, archived.content) == before
     assert archived.status == "archived"
     assert repo.save_calls == 1
+
+
+def test_archive_approved_item_preserves_approval_evidence():
+    repo = FakeKnowledgeRepository()
+    approved_time = datetime(2026, 8, 25, 10, 30, tzinfo=timezone.utc)
+    service = KnowledgeService(repo, clock=lambda: approved_time)
+    item = service.create_draft("Official", "Content")
+    service.approve_draft(item.id)
+
+    archived = service.archive_draft(item.id)
+
+    assert archived.status == "archived"
+    assert archived.approved_at == approved_time
+    assert archived.approved_by == "owner"
 
 
 def test_archive_rejects_missing_archived_and_unknown_without_save():
@@ -193,17 +303,19 @@ def test_successful_mutations_record_exact_minimal_knowledge_events():
 
     created = service.create_draft("Recorded", "Private content")
     service.edit_draft(created.id, "Recorded update", "Changed")
+    service.approve_draft(created.id)
     service.archive_draft(created.id)
 
     assert activity.calls == [
         ("knowledge_created", "knowledge", created.id),
         ("knowledge_updated", "knowledge", created.id),
+        ("knowledge_approved", "knowledge", created.id),
         ("knowledge_archived", "knowledge", created.id),
     ]
     assert all("Private" not in str(call) for call in activity.calls)
 
 
-@pytest.mark.parametrize("operation", ["edit", "archive"])
+@pytest.mark.parametrize("operation", ["edit", "approve", "archive"])
 def test_activity_failure_restores_knowledge_mutation_state(operation):
     repo = FakeKnowledgeRepository()
     item = KnowledgeService(repo).create_draft("Original", "Details")
@@ -214,6 +326,8 @@ def test_activity_failure_restores_knowledge_mutation_state(operation):
     with pytest.raises(RuntimeError, match="activity unavailable"):
         if operation == "edit":
             service.edit_draft(item.id, "Changed", "New")
+        elif operation == "approve":
+            service.approve_draft(item.id)
         else:
             service.archive_draft(item.id)
 
@@ -222,6 +336,8 @@ def test_activity_failure_restores_knowledge_mutation_state(operation):
         "Details",
         "draft",
     )
+    assert item.approved_at is None
+    assert item.approved_by is None
 
 
 def test_activity_failure_rolls_back_database_knowledge_insert():
@@ -239,3 +355,32 @@ def test_activity_failure_rolls_back_database_knowledge_insert():
 
     with session_scope(session_factory) as session:
         assert session.scalars(select(KnowledgeItem)).all() == []
+
+
+def test_activity_failure_rolls_back_database_knowledge_approval():
+    engine = create_engine("sqlite:///:memory:")
+    Base.metadata.create_all(engine)
+    session_factory = create_session_factory(engine)
+
+    with session_scope(session_factory) as session:
+        created = KnowledgeService(
+            KnowledgeItemRepository(session)
+        ).create_draft("Retained draft", "Private content")
+        item_id = created.id
+
+    activity = FakeActivityService()
+    activity.error = RuntimeError("activity unavailable")
+    with pytest.raises(RuntimeError, match="activity unavailable"):
+        with session_scope(session_factory) as session:
+            KnowledgeService(
+                KnowledgeItemRepository(session), activity
+            ).approve_draft(item_id)
+
+    with session_scope(session_factory) as session:
+        saved = session.get(KnowledgeItem, item_id)
+        assert saved is not None
+        assert (saved.status, saved.approved_at, saved.approved_by) == (
+            "draft",
+            None,
+            None,
+        )
