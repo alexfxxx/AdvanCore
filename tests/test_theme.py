@@ -34,6 +34,8 @@ def test_theme_is_local_responsive_and_has_no_script_dependency():
     )
     assert "label > div > div > div:first-child" in COMMAND_CENTER_CSS
     assert "background: #ffffff" in COMMAND_CENTER_CSS
+    assert ".stButton > button p" in COMMAND_CENTER_CSS
+    assert "color: #ffffff !important" in COMMAND_CENTER_CSS
     assert "data:image/svg+xml" in COMMAND_CENTER_CSS
     assert COMMAND_CENTER_CSS.count("data:image/svg+xml") == 6
     assert "@keyframes adv-enter" in COMMAND_CENTER_CSS

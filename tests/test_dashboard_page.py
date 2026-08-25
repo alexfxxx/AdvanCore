@@ -130,6 +130,7 @@ def _install(
         "_worker_usage_service",
         lambda: FakeUsageService(usage_summary or _usage_summary()),
     )
+    monkeypatch.setattr(dashboard, "_render_fuel_visual_foundation", lambda: None)
     return preferences
 
 

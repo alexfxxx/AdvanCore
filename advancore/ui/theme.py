@@ -158,6 +158,14 @@ div[data-testid="stExpander"]:hover {{
     transition: transform 160ms ease, box-shadow 160ms ease,
         border-color 160ms ease;
 }}
+.stButton > button p,
+.stButton > button span {{
+    color: #ffffff !important;
+}}
+.stButton > button:disabled p,
+.stButton > button:disabled span {{
+    color: rgba(255, 255, 255, 0.76) !important;
+}}
 .stButton > button:hover {{
     border-color: #153da6;
     color: white;
