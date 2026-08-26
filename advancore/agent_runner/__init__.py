@@ -142,6 +142,12 @@ from advancore.agent_runner.worker_routing import (
     build_kimi_first_worker_route,
     select_governed_worker,
 )
+from advancore.agent_runner.worker_rehearsal import (
+    MultiWorkerRehearsalReport,
+    RehearsalCheck,
+    format_multi_worker_rehearsal,
+    run_multi_worker_governance_rehearsal,
+)
 from advancore.agent_runner.owner_notifications import (
     OwnerNotification,
     OwnerNotificationFeed,
@@ -309,6 +315,10 @@ __all__ = [
     "WorkerSelectionError",
     "build_kimi_first_worker_route",
     "select_governed_worker",
+    "MultiWorkerRehearsalReport",
+    "RehearsalCheck",
+    "format_multi_worker_rehearsal",
+    "run_multi_worker_governance_rehearsal",
     "OwnerNotification",
     "OwnerNotificationFeed",
     "build_owner_notification_feed",
