@@ -9,10 +9,14 @@ when every gate passes.
 
 from __future__ import annotations
 
+import fcntl
 import json
+import os
 import re
-import shutil
 import subprocess
+import sys
+import pwd
+import stat
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from enum import Enum
@@ -82,6 +86,7 @@ class ProviderFailure(str, Enum):
 
     EXECUTABLE_UNAVAILABLE = "EXECUTABLE_UNAVAILABLE"
     QUOTA_OR_CAPACITY = "QUOTA_OR_CAPACITY"
+    CAPACITY = "CAPACITY"
     AUTHENTICATION_UNAVAILABLE = "AUTHENTICATION_UNAVAILABLE"
     UNKNOWN = "UNKNOWN"
 
@@ -435,10 +440,8 @@ _SUMMARY_RE = re.compile(r"=+\s+([\w\s,]+)\s+=+")
 
 def default_pytest_command(repo_root: Path) -> list[str]:
     """Return the default pytest command for *repo_root*."""
-    python = shutil.which("python") or "python"
     venv_python = repo_root / ".venv" / "bin" / "python"
-    if venv_python.exists():
-        python = str(venv_python)
+    python = str(venv_python) if venv_python.is_file() else sys.executable
     return [python, "-m", "pytest", "tests/", "-v"]
 
 
@@ -532,8 +535,13 @@ def classify_provider_failure(result: WorkerResult | None) -> ProviderFailure:
     if "not found in path" in evidence or "no such file or directory" in evidence:
         return ProviderFailure.EXECUTABLE_UNAVAILABLE
     if any(token in evidence for token in (
-        "quota", "rate limit", "rate-limit", "capacity", "overloaded",
-        "resource exhausted", "too many requests",
+        "provider capacity unavailable", "provider capacity exhausted",
+        "provider is overloaded",
+    )):
+        return ProviderFailure.CAPACITY
+    if any(token in evidence for token in (
+        "quota", "rate limit", "rate-limit", "resource exhausted",
+        "too many requests",
     )):
         return ProviderFailure.QUOTA_OR_CAPACITY
     if any(token in evidence for token in (
@@ -577,11 +585,146 @@ def _fallback_integrity_ok(
 
 AUTO_SUBDIR = "auto"
 AUTO_ARTIFACT_FILENAME = "auto_pipeline.jsonl"
+SWITCHING_STATUS_MAX_BYTES = 2_000_000
+_SWITCHING_ROUTE = ("kimi-swarm", "gemini", "codex")
+_SWITCHING_REASONS = {
+    "executable",
+    "limit_or_quota",
+    "capacity",
+    "authentication",
+}
 
 
 def default_auto_dir(repo_root: Path) -> Path:
     """Return the default auto-pipeline artifact directory for *repo_root*."""
     return repo_root / ".agent_runner" / AUTO_SUBDIR
+
+
+def default_switching_status_path() -> Path:
+    """Return the worker-inaccessible projection shared by every checkout."""
+    account_home = Path(pwd.getpwuid(os.getuid()).pw_dir).resolve()
+    if sys.platform == "darwin":
+        root = account_home / "Library" / "Application Support" / "AdvanCore"
+    else:
+        root = account_home / ".local" / "state" / "advancore"
+    return root / "agent_runner" / "switching-status" / "worker-switches.jsonl"
+
+
+def _path_has_symlink(path: Path) -> bool:
+    current = Path(path.anchor)
+    for part in path.parts[1:]:
+        current /= part
+        try:
+            details = os.lstat(current)
+        except FileNotFoundError:
+            break
+        if stat.S_ISLNK(details.st_mode):
+            return True
+    return False
+
+
+def write_switching_status_projection(
+    payload: dict[str, Any],
+    repo_root: Path,
+    destination: Path | None = None,
+) -> Path:
+    """Append only the bounded safe switching projection outside workspaces."""
+    path = Path(destination or default_switching_status_path())
+    if not path.is_absolute():
+        path = Path.cwd() / path
+    resolved_repo = repo_root.resolve()
+    if _path_has_symlink(path):
+        raise AutoArtifactWriteError("worker switching evidence location is unsafe")
+    resolved = path.resolve()
+    if resolved == resolved_repo or resolved_repo in resolved.parents:
+        raise AutoArtifactWriteError(
+            "worker switching evidence must be outside the worker workspace"
+        )
+
+    timestamp = payload.get("timestamp")
+    terminal_worker = payload.get("terminal_worker")
+    raw_handoffs = payload.get("automatic_handoffs")
+    if not isinstance(timestamp, str) or len(timestamp) > 40:
+        raise AutoArtifactWriteError("worker switching timestamp is invalid")
+    if terminal_worker not in _SWITCHING_ROUTE:
+        raise AutoArtifactWriteError("worker switching terminal worker is invalid")
+    if not isinstance(raw_handoffs, list) or len(raw_handoffs) > 2:
+        raise AutoArtifactWriteError("worker switching handoffs are invalid")
+
+    handoffs: list[dict[str, str]] = []
+    for item in raw_handoffs:
+        if not isinstance(item, dict) or set(item) != {
+            "previous_worker",
+            "next_worker",
+            "reason",
+        }:
+            raise AutoArtifactWriteError("worker switching handoff is invalid")
+        previous = item.get("previous_worker")
+        following = item.get("next_worker")
+        reason = item.get("reason")
+        if (
+            previous not in _SWITCHING_ROUTE
+            or following not in _SWITCHING_ROUTE
+            or _SWITCHING_ROUTE.index(following)
+            != _SWITCHING_ROUTE.index(previous) + 1
+            or reason not in _SWITCHING_REASONS
+        ):
+            raise AutoArtifactWriteError("worker switching handoff is invalid")
+        handoffs.append(
+            {
+                "previous_worker": previous,
+                "next_worker": following,
+                "reason": reason,
+            }
+        )
+
+    projection = {
+        "timestamp": timestamp,
+        "terminal_worker": terminal_worker,
+        "automatic_handoffs": handoffs,
+    }
+    encoded = (
+        json.dumps(projection, separators=(",", ":"), sort_keys=True) + "\n"
+    ).encode("utf-8")
+    try:
+        resolved.parent.mkdir(parents=True, mode=0o700, exist_ok=True)
+        if _path_has_symlink(resolved.parent) or not resolved.parent.is_dir():
+            raise AutoArtifactWriteError(
+                "worker switching evidence location is unsafe"
+            )
+        parent_details = resolved.parent.stat()
+        if parent_details.st_uid != os.getuid():
+            raise AutoArtifactWriteError(
+                "worker switching evidence location is unsafe"
+            )
+        os.chmod(resolved.parent, 0o700)
+        flags = os.O_WRONLY | os.O_APPEND | os.O_CREAT
+        if hasattr(os, "O_NOFOLLOW"):
+            flags |= os.O_NOFOLLOW
+        descriptor = os.open(resolved, flags, 0o600)
+        with os.fdopen(descriptor, "ab", closefd=True) as handle:
+            fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
+            details = os.fstat(handle.fileno())
+            if (
+                details.st_uid != os.getuid()
+                or stat.S_IMODE(details.st_mode) & 0o077
+                or details.st_nlink != 1
+                or details.st_size + len(encoded) > SWITCHING_STATUS_MAX_BYTES
+            ):
+                raise AutoArtifactWriteError(
+                    "worker switching evidence path is unsafe"
+                )
+            handle.write(encoded)
+            handle.flush()
+            os.fsync(handle.fileno())
+            fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+    except AutoArtifactWriteError:
+        raise
+    except OSError as exc:
+        raise AutoArtifactWriteError(
+            "worker switching evidence could not be recorded"
+        ) from exc
+    return resolved
 
 
 def build_auto_artifact_payload(result: AutoPipelineResult) -> dict[str, Any]:
@@ -599,6 +742,25 @@ def build_auto_artifact_payload(result: AutoPipelineResult) -> dict[str, Any]:
                 "evidence_keys": sorted(attempt.evidence.keys()),
             }
         )
+
+    reason_names = {
+        ProviderFailure.EXECUTABLE_UNAVAILABLE: "executable",
+        ProviderFailure.QUOTA_OR_CAPACITY: "limit_or_quota",
+        ProviderFailure.CAPACITY: "capacity",
+        ProviderFailure.AUTHENTICATION_UNAVAILABLE: "authentication",
+    }
+    automatic_handoffs = [
+        {
+            "previous_worker": attempt.primary_worker,
+            "next_worker": attempt.terminal_worker,
+            "reason": reason_names[attempt.failure],
+        }
+        for attempt in result.fallback_attempts
+        if attempt.integrity_ok
+        and attempt.failure in reason_names
+        and attempt.fallback_worker == attempt.terminal_worker
+        and attempt.primary_worker != attempt.terminal_worker
+    ]
 
     return {
         "timestamp": datetime.now(timezone.utc).isoformat(),
@@ -633,6 +795,7 @@ def build_auto_artifact_payload(result: AutoPipelineResult) -> dict[str, Any]:
             }
             for attempt in result.fallback_attempts
         ],
+        "automatic_handoffs": automatic_handoffs,
         "worker_success": result.worker_result.success if result.worker_result else None,
         "worker_timeout_seconds": result.worker_timeout_seconds,
         "terminal_reason": result.terminal_reason,
@@ -1571,6 +1734,13 @@ def run_auto_pipeline(
     result.repair_attempts = repair_attempts
     result.max_repair_attempts = repair_config.max_attempts
 
+    original_primary_worker = result.primary_worker
+    original_fallback_worker = result.fallback_worker
+    original_fallback_workers = result.fallback_workers
+    original_fallback_attempt = result.fallback_attempt
+    original_fallback_attempts = list(result.fallback_attempts)
+    original_terminal_worker = result.terminal_worker
+
     if result:
         return result
 
@@ -1652,6 +1822,18 @@ def run_auto_pipeline(
         repair_result.audit_write_ok = result.audit_write_ok
         repair_result.audit_write_error = result.audit_write_error
         repair_result.validation = result.validation
+        repair_result.primary_worker = (
+            original_primary_worker or repair_result.primary_worker
+        )
+        repair_result.fallback_worker = original_fallback_worker
+        repair_result.fallback_workers = original_fallback_workers
+        repair_result.fallback_attempt = original_fallback_attempt
+        repair_result.fallback_attempts = list(original_fallback_attempts)
+        repair_result.terminal_worker = (
+            repair_result.terminal_worker
+            or repair_result.worker_type
+            or original_terminal_worker
+        )
         result = repair_result
         result.repair_attempts = repair_attempts
         result.max_repair_attempts = repair_config.max_attempts
@@ -1685,6 +1867,13 @@ def _write_auto_artifact(result: AutoPipelineResult) -> None:
     try:
         payload = build_auto_artifact_payload(result)
         path = write_auto_artifact(payload, default_auto_dir(repo_root))
+        try:
+            projection_path = write_switching_status_projection(payload, repo_root)
+            result.messages.append(
+                f"Worker switching projection written to {projection_path.name}"
+            )
+        except AutoArtifactWriteError as exc:
+            result.messages.append(f"WARNING: {exc}")
         result.auto_artifact_path = path
         try:
             rel_path = path.relative_to(repo_root)

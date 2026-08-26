@@ -17,7 +17,6 @@ from pathlib import Path
 from unittest.mock import patch
 
 import pytest
-
 from advancore.agent_runner import (
     AutoPipelineStatus,
     CodexWorkerAdapter,
@@ -31,6 +30,15 @@ from advancore.agent_runner.__main__ import main
 from advancore.agent_runner.auto_pipeline import DiffCheckResult, PytestResult
 from advancore.agent_runner.git_info import GitInfo
 from advancore.services.worker_usage_service import WorkerUsageService
+
+
+@pytest.fixture(autouse=True)
+def _isolate_switching_status_projection(monkeypatch, tmp_path):
+    destination = tmp_path / "controller" / "worker-switches.jsonl"
+    monkeypatch.setattr(
+        "advancore.agent_runner.auto_pipeline.default_switching_status_path",
+        lambda: destination,
+    )
 
 
 RAW_PRIMARY = "PRIMARY_RAW_TRANSCRIPT credential=primary-secret"

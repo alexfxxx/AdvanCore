@@ -69,3 +69,27 @@ an unchanged fingerprint, and a different available approved worker from the
 fixed selection policy. The run is limited to a primary plus two fallbacks.
 Checkpoint selection and persistence do not launch workers or consume standing
 authority; runtime pipeline integrity checks still apply.
+
+## Dashboard switching evidence
+
+After an eligible failure and successful launch of the next adjacent worker,
+the auto-pipeline receipt records only the previous worker, next worker, and a
+safe classified reason. Executable, authentication, limit or quota, and capacity
+failures are eligible only after all existing repository, index, worktree, HEAD,
+branch, and remote-integrity checks pass. Unknown failures, timeout, cancellation,
+unsafe or ambiguous actions, and integrity changes remain terminal and create no
+switch notification.
+
+The Dashboard reads these existing controller-owned receipts across sessions and
+shows at most the five newest genuine switches from the preceding seven days.
+Route previews, authentication refreshes, blocked fallbacks, and missing or
+unreadable balance evidence never create a notification. The receipt contains no
+raw provider output, prompt, response, transcript, credential, account identifier,
+environment value, customer data, or repository path.
+
+Unreadable provider balance or Dashboard usage evidence alone neither disables a
+worker nor prevents selection, launch, or continuation. The fixed three-worker
+route, no-repetition and maximum-attempt boundaries, standing and fallback
+authority consumption, credential screening, environment isolation, timeout,
+database, production, deployment, protected-main, and Git-integrity safeguards
+remain unchanged.

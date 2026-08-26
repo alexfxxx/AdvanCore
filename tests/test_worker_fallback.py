@@ -1,10 +1,11 @@
 """Governed worker fallback boundary tests (TASK-022)."""
 
+import json
 from pathlib import Path
+import sys
 from unittest.mock import patch
 
 import pytest
-
 from advancore.agent_runner import (
     AutoPipelineStatus,
     CodexWorkerAdapter,
@@ -24,6 +25,15 @@ from advancore.agent_runner import (
 )
 from advancore.agent_runner.git_info import GitInfo
 from advancore.agent_runner.runner import PostWorkerVerification, RunnerResult, RunnerStatus
+
+
+@pytest.fixture(autouse=True)
+def _isolate_switching_status_projection(monkeypatch, tmp_path):
+    destination = tmp_path / "controller" / "worker-switches.jsonl"
+    monkeypatch.setattr(
+        "advancore.agent_runner.auto_pipeline.default_switching_status_path",
+        lambda: destination,
+    )
 
 
 class _Worker:
@@ -96,12 +106,62 @@ def test_registry_builds_only_code_owned_adapters():
         ("Worker executable 'kimi' not found in PATH", ProviderFailure.EXECUTABLE_UNAVAILABLE),
         ("provider quota exhausted", ProviderFailure.QUOTA_OR_CAPACITY),
         ("429 rate limit", ProviderFailure.QUOTA_OR_CAPACITY),
+        ("provider capacity unavailable", ProviderFailure.CAPACITY),
         ("authentication unavailable", ProviderFailure.AUTHENTICATION_UNAVAILABLE),
         ("implementation crashed", ProviderFailure.UNKNOWN),
     ],
 )
 def test_provider_failure_classification(message: str, expected: ProviderFailure):
     assert classify_provider_failure(WorkerResult(False, message=message)) == expected
+
+
+def test_default_pytest_command_uses_active_interpreter_without_worktree_venv(
+    tmp_path: Path,
+):
+    from advancore.agent_runner.auto_pipeline import default_pytest_command
+
+    assert default_pytest_command(tmp_path) == [
+        sys.executable,
+        "-m",
+        "pytest",
+        "tests/",
+        "-v",
+    ]
+
+
+def test_switching_projection_is_bounded_and_outside_worker_workspace(tmp_path: Path):
+    from advancore.agent_runner.auto_pipeline import (
+        AutoArtifactWriteError,
+        write_switching_status_projection,
+    )
+
+    repo_root = tmp_path / "repo"
+    repo_root.mkdir()
+    destination = tmp_path / "controller" / "worker-switches.jsonl"
+    payload = {
+        "timestamp": "2026-08-26T15:00:00+00:00",
+        "terminal_worker": "gemini",
+        "automatic_handoffs": [
+            {
+                "previous_worker": "kimi-swarm",
+                "next_worker": "gemini",
+                "reason": "executable",
+            }
+        ],
+    }
+
+    assert write_switching_status_projection(
+        payload, repo_root, destination
+    ) == destination
+    assert destination.stat().st_mode & 0o077 == 0
+    assert json.loads(destination.read_text(encoding="utf-8")) == payload
+
+    with pytest.raises(AutoArtifactWriteError, match="outside"):
+        write_switching_status_projection(
+            payload,
+            repo_root,
+            repo_root / ".agent_runner" / "worker-switches.jsonl",
+        )
 
 
 def test_default_has_no_fallback():
@@ -200,6 +260,70 @@ def test_three_worker_route_continues_kimi_to_gemini_to_codex(tmp_path: Path):
     assert any("kimi-swarm -> gemini" in item for item in result.messages)
     assert any("gemini -> codex" in item for item in result.messages)
     assert any("Owner login required for gemini" in item for item in result.messages)
+
+    from advancore.agent_runner.auto_pipeline import build_auto_artifact_payload
+
+    assert build_auto_artifact_payload(result)["automatic_handoffs"] == [
+        {
+            "previous_worker": "kimi-swarm",
+            "next_worker": "gemini",
+            "reason": "limit_or_quota",
+        },
+        {
+            "previous_worker": "gemini",
+            "next_worker": "codex",
+            "reason": "authentication",
+        },
+    ]
+
+
+def test_repair_preserves_genuine_handoff_metadata(tmp_path: Path):
+    from advancore.agent_runner.auto_pipeline import AutoPipelineResult
+
+    tasks = _task_dir(tmp_path)
+    kimi = _runner(tmp_path, "kimi-swarm", False, "quota exhausted")
+    gemini = _runner(tmp_path, "gemini", False, "authentication unavailable")
+    codex = _runner(tmp_path, "codex", False, "provider capacity unavailable")
+    repair = AutoPipelineResult(
+        status=AutoPipelineStatus.READY_FOR_APPROVAL,
+        git_info=_git(tmp_path),
+        pre_git_info=_git(tmp_path),
+        post_git_info=_git(tmp_path),
+        worker_type="kimi-swarm",
+        worker_result=WorkerResult(True, message="repair complete"),
+    )
+    with patch(
+        "advancore.agent_runner.auto_pipeline.execute",
+        side_effect=[kimi, gemini, codex],
+    ), patch(
+        "advancore.agent_runner.auto_pipeline._remote_fingerprint",
+        return_value=("origin x",),
+    ), patch(
+        "advancore.agent_runner.auto_pipeline.detect_staged_paths", return_value=[]
+    ), patch(
+        "advancore.agent_runner.auto_pipeline._run_repair_attempt",
+        return_value=repair,
+    ), patch("advancore.agent_runner.auto_pipeline._write_auto_artifact"):
+        result = run_auto_pipeline(
+            tasks,
+            "TASK-022",
+            _Worker("kimi-swarm"),
+            fallback_workers=(_Worker("gemini"), _Worker("codex")),
+            max_repair_attempts=1,
+        )
+
+    assert result.status == AutoPipelineStatus.READY_FOR_APPROVAL
+    assert result.terminal_worker == "kimi-swarm"
+    assert [attempt.primary_worker for attempt in result.fallback_attempts] == [
+        "kimi-swarm",
+        "gemini",
+    ]
+    from advancore.agent_runner.auto_pipeline import build_auto_artifact_payload
+
+    assert [
+        handoff["reason"]
+        for handoff in build_auto_artifact_payload(result)["automatic_handoffs"]
+    ] == ["limit_or_quota", "authentication"]
 
 
 @pytest.mark.parametrize("message", ["unexpected worker crash", "malformed output"])
