@@ -1,6 +1,7 @@
 """Governed worker fallback boundary tests (TASK-022)."""
 
 from pathlib import Path
+import sys
 from unittest.mock import patch
 
 import pytest
@@ -96,12 +97,27 @@ def test_registry_builds_only_code_owned_adapters():
         ("Worker executable 'kimi' not found in PATH", ProviderFailure.EXECUTABLE_UNAVAILABLE),
         ("provider quota exhausted", ProviderFailure.QUOTA_OR_CAPACITY),
         ("429 rate limit", ProviderFailure.QUOTA_OR_CAPACITY),
+        ("provider capacity unavailable", ProviderFailure.CAPACITY),
         ("authentication unavailable", ProviderFailure.AUTHENTICATION_UNAVAILABLE),
         ("implementation crashed", ProviderFailure.UNKNOWN),
     ],
 )
 def test_provider_failure_classification(message: str, expected: ProviderFailure):
     assert classify_provider_failure(WorkerResult(False, message=message)) == expected
+
+
+def test_default_pytest_command_uses_active_interpreter_without_worktree_venv(
+    tmp_path: Path,
+):
+    from advancore.agent_runner.auto_pipeline import default_pytest_command
+
+    assert default_pytest_command(tmp_path) == [
+        sys.executable,
+        "-m",
+        "pytest",
+        "tests/",
+        "-v",
+    ]
 
 
 def test_default_has_no_fallback():
@@ -200,6 +216,21 @@ def test_three_worker_route_continues_kimi_to_gemini_to_codex(tmp_path: Path):
     assert any("kimi-swarm -> gemini" in item for item in result.messages)
     assert any("gemini -> codex" in item for item in result.messages)
     assert any("Owner login required for gemini" in item for item in result.messages)
+
+    from advancore.agent_runner.auto_pipeline import build_auto_artifact_payload
+
+    assert build_auto_artifact_payload(result)["automatic_handoffs"] == [
+        {
+            "previous_worker": "kimi-swarm",
+            "next_worker": "gemini",
+            "reason": "limit_or_quota",
+        },
+        {
+            "previous_worker": "gemini",
+            "next_worker": "codex",
+            "reason": "authentication",
+        },
+    ]
 
 
 @pytest.mark.parametrize("message", ["unexpected worker crash", "malformed output"])

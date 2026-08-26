@@ -1,6 +1,6 @@
 # TASK-101 — Simplify Automatic Worker Switching Status
 
-STATUS: READY
+STATUS: APPROVED
 
 ## Objective
 
@@ -149,16 +149,68 @@ None
 
 ### Implemented
 
+- Replaced Dashboard balance, percentage, token, evidence-age, and
+  usage-availability cards with a plain automatic-worker status section.
+- Preserved the fixed Kimi-Swarm to Gemini to Codex route and recorded only
+  successful adjacent handoffs produced by eligible, integrity-checked
+  fallback decisions.
+- Added a bounded reader that shows the latest selected worker when known and
+  at most five genuine handoffs from the preceding seven days.
+- Added safe reason labels for executable, authentication, limit or quota, and
+  provider-capacity switches without rendering raw worker output.
+- Kept start-of-day non-generative authentication readiness and all existing
+  runner authority, credential, Git, database, production, and protected-main
+  boundaries unchanged.
+- Made the runner's pytest launcher use the active Python interpreter when a
+  worktree-local virtual environment is absent.
+
 ### Files changed
+
+- `advancore/agent_runner/auto_pipeline.py`
+- `advancore/pages/dashboard.py`
+- `advancore/services/worker_routing_evidence_service.py`
+- `docs/runbooks/AI_USAGE_DASHBOARD.md`
+- `docs/runbooks/WORKER_ROUTING.md`
+- `tests/test_dashboard_page.py`
+- `tests/test_worker_fallback.py`
+- `tests/test_worker_routing_evidence_service.py`
+- `tasks/TASK-101-simplify-automatic-worker-switching-status.md`
 
 ### Database changes
 
+None. No migration, operational row, credential, billing, provider account,
+deployment, production, or `main` change was made.
+
 ### Tests executed and results
+
+- Focused Dashboard, authentication, route-preview, routing-evidence,
+  usage-dashboard, fallback, and auto-pipeline tests: 125 passed.
+- Full suite against an in-memory test database: 1,127 passed and 2 skipped.
+  The two PostgreSQL migration tests intentionally run only in GitHub Actions.
+- Python compilation and `git diff --check`: passed.
 
 ### Assumptions
 
+- Cross-session notifications read the existing `.agent_runner` auto-pipeline
+  receipts belonging to the repository from which the local app is running.
+- "Most recently selected" is historical controller evidence and is not
+  presented as proof that a worker process is currently running.
+
 ### Risks / unresolved issues
+
+- Different independent worktrees keep separate Git-ignored controller
+  receipts. A switch made in another worktree will not appear until the app and
+  orchestration use a shared governed execution checkout or a separately
+  approved machine-wide notification contract.
+- Provider balance services remain in the codebase for internal guardrails and
+  compatibility, but their figures are no longer presented on the Dashboard.
 
 ### Decisions required
 
+None for TASK-101 implementation review. Publication must still target
+`projects-lifecycle-recovery`, never `main`.
+
 ### Recommended next step
+
+Obtain independent review, then approve controller-gated publication of the
+feature branch into a PR targeting `projects-lifecycle-recovery`.

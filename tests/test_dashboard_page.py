@@ -9,13 +9,13 @@ from advancore.services.dashboard_preference_service import (
     DashboardPreferences,
 )
 from advancore.services.dashboard_service import DashboardSummary
-from advancore.services.ai_usage_dashboard_service import (
-    AiUsageCard,
-    BalanceState,
-)
 from advancore.services.worker_auth_readiness_service import (
     WorkerAuthReadiness,
     WorkerAuthState,
+)
+from advancore.services.worker_routing_evidence_service import (
+    WorkerHandoffNotification,
+    WorkerSwitchingStatus,
 )
 from advancore.services.platform_readiness_service import (
     PlatformReadinessSummary,
@@ -97,12 +97,12 @@ class FakePreferenceService:
         return DEFAULT_DASHBOARD_PREFERENCES
 
 
-class FakeAiUsageService:
-    def __init__(self, cards):
-        self.cards = cards
+class FakeSwitchingStatusService:
+    def __init__(self, status):
+        self.status = status
 
-    def get_cards(self):
-        return self.cards
+    def get_status(self):
+        return self.status
 
 
 class FakeAuthService:
@@ -128,85 +128,11 @@ def _auth_results(state=WorkerAuthState.AUTHENTICATED):
     )
 
 
-def _usage_cards(
-    *,
-    kimi_state=BalanceState.UNAVAILABLE,
-    kimi_used=None,
-    kimi_runtime=None,
-    gemini_tokens=None,
-):
-    now = datetime(2026, 8, 26, 13, 0, tzinfo=timezone.utc)
-    kimi = AiUsageCard(
-        provider="kimi",
-        label="Kimi",
-        role="Primary worker",
-        routing_status="Kimi-first when budget allows",
-        balance_state=kimi_state,
-        weekly_used_percent=kimi_used,
-        remaining_percent=100 - kimi_used if kimi_used is not None else None,
-        automation_limit_percent=20,
-        automation_remaining_percent=(
-            max(0, 20 - kimi_used) if kimi_used is not None else None
-        ),
-        runtime_seconds=kimi_runtime,
-        runtime_limit_seconds=3600,
-        last_run_tokens=None,
-        checked_at=now if kimi_used is not None else None,
-        reset_at=None,
-        source="owner-verified" if kimi_used is not None else None,
-        authentication_verified=kimi_used is not None,
-        message="test state",
-    )
-    codex = AiUsageCard(
-        provider="codex",
-        label="Codex",
-        role="Final approved fallback",
-        routing_status="Used after Kimi and Gemini",
-        balance_state=BalanceState.UNAVAILABLE,
-        weekly_used_percent=None,
-        remaining_percent=None,
-        automation_limit_percent=None,
-        automation_remaining_percent=None,
-        runtime_seconds=None,
-        runtime_limit_seconds=None,
-        last_run_tokens=None,
-        checked_at=None,
-        reset_at=None,
-        source=None,
-        authentication_verified=False,
-        message="Codex subscription balance has no approved automatic reading.",
-    )
-    gemini = AiUsageCard(
-        provider="gemini",
-        label="Gemini",
-        role="Approved second worker",
-        routing_status="Used after Kimi",
-        balance_state=(
-            BalanceState.OBSERVED_ONLY
-            if gemini_tokens is not None
-            else BalanceState.UNAVAILABLE
-        ),
-        weekly_used_percent=None,
-        remaining_percent=None,
-        automation_limit_percent=None,
-        automation_remaining_percent=None,
-        runtime_seconds=None,
-        runtime_limit_seconds=None,
-        last_run_tokens=gemini_tokens,
-        checked_at=now if gemini_tokens is not None else None,
-        reset_at=None,
-        source="antigravity-cli-json" if gemini_tokens is not None else None,
-        authentication_verified=gemini_tokens is not None,
-        message="Google Pro balance has no approved automatic reading.",
-    )
-    return (kimi, codex, gemini)
-
-
 def _install(
     monkeypatch,
     fake_st,
     service,
-    usage_cards=None,
+    switching_status=None,
     preference_service=None,
     auth_service=None,
 ):
@@ -225,8 +151,10 @@ def _install(
     monkeypatch.setattr(dashboard, "_dashboard_preference_service", preference_scope)
     monkeypatch.setattr(
         dashboard,
-        "_ai_usage_dashboard_service",
-        lambda: FakeAiUsageService(usage_cards or _usage_cards()),
+        "_worker_switching_status_service",
+        lambda: FakeSwitchingStatusService(
+            switching_status or WorkerSwitchingStatus(None, ())
+        ),
     )
     monkeypatch.setattr(
         dashboard,
@@ -249,22 +177,6 @@ def test_dashboard_renders_real_bounded_default_modules(monkeypatch):
 
     assert "Loading overview..." in fake_st.spinner_labels
     assert fake_st.metrics == [
-        ("Kimi role", "Primary worker"),
-        ("Kimi balance", "Unavailable"),
-        ("Kimi weekly used", "Unavailable"),
-        ("Kimi last request", "Unavailable"),
-        ("Kimi automation budget", "Unavailable"),
-        ("Kimi runtime this week", "Unavailable"),
-        ("Codex role", "Final approved fallback"),
-        ("Codex balance", "Unavailable"),
-        ("Codex weekly used", "Unavailable"),
-        ("Codex last request", "Unavailable"),
-        ("Codex authentication", "Not verified"),
-        ("Gemini role", "Approved second worker"),
-        ("Gemini balance", "Unavailable"),
-        ("Gemini weekly used", "Unavailable"),
-        ("Gemini last request", "Unavailable"),
-        ("Gemini authentication", "Not verified"),
         ("Total projects", 4),
         ("Active projects", 2),
         ("Archived projects", 1),
@@ -279,6 +191,8 @@ def test_dashboard_renders_real_bounded_default_modules(monkeypatch):
     ]
     assert "Core application shell operational." in fake_st.text()
     assert "Database connected." in fake_st.text()
+    assert "Automatic worker status" in fake_st.text()
+    assert "No current or selected implementation worker is known" in fake_st.text()
     assert "no placeholder business figures" in fake_st.text()
     assert "Refresh dashboard" in fake_st.button_labels
 
@@ -291,7 +205,7 @@ def test_refresh_control_confirms_fresh_page_run_and_renders_summary(monkeypatch
 
     assert "Dashboard refreshed with the latest available data." in fake_st.text()
     assert ("Total projects", 4) in fake_st.metrics
-    assert ("Kimi role", "Primary worker") in fake_st.metrics
+    assert "Automatic worker status" in fake_st.text()
 
 
 def test_hidden_modules_and_workers_are_not_rendered(monkeypatch):
@@ -301,22 +215,19 @@ def test_hidden_modules_and_workers_are_not_rendered(monkeypatch):
         monkeypatch,
         fake_st,
         FakeService(_summary()),
+        switching_status=WorkerSwitchingStatus("codex", ()),
         preference_service=FakePreferenceService(preferences),
     )
 
     dashboard.render()
 
     assert fake_st.metrics == [
-        ("Codex role", "Final approved fallback"),
-        ("Codex balance", "Unavailable"),
-        ("Codex weekly used", "Unavailable"),
-        ("Codex last request", "Unavailable"),
-        ("Codex authentication", "Not verified"),
         ("Total projects", 4),
         ("Active projects", 2),
         ("Archived projects", 1),
         ("Other project statuses", 1),
     ]
+    assert "Most recently selected worker: Codex" in fake_st.text()
     assert "Knowledge overview" not in fake_st.text()
     assert "Activity overview" not in fake_st.text()
 
@@ -381,54 +292,45 @@ def test_dashboard_failure_is_generic_and_does_not_leak(monkeypatch):
     assert "Operational overview is unavailable" in fake_st.text()
     for secret in ("secret", "password", "SQL", "traceback"):
         assert secret not in fake_st.text()
-    assert fake_st.metrics[:7] == [
-        ("Kimi role", "Primary worker"),
-        ("Kimi balance", "Unavailable"),
-        ("Kimi weekly used", "Unavailable"),
-        ("Kimi last request", "Unavailable"),
-        ("Kimi automation budget", "Unavailable"),
-        ("Kimi runtime this week", "Unavailable"),
-        ("Codex role", "Final approved fallback"),
-    ]
+    assert fake_st.metrics == []
 
 
-def test_dashboard_shows_allowed_and_paused_kimi_states(monkeypatch):
-    for state, used, expected in (
-        (BalanceState.CURRENT, 10, "current provider percentage reading"),
-        (BalanceState.CURRENT, 44, "paused at the owner-approved automation limit"),
-    ):
-        fake_st = FakeStreamlit()
-        _install(
-            monkeypatch,
-            fake_st,
-            FakeService(_summary()),
-            _usage_cards(
-                kimi_state=state,
-                kimi_used=used,
-                kimi_runtime=120,
+def test_dashboard_removes_usage_details_and_shows_safe_switches(monkeypatch):
+    occurred_at = datetime(2026, 8, 26, 13, 0, tzinfo=timezone.utc)
+    status = WorkerSwitchingStatus(
+        "codex",
+        (
+            WorkerHandoffNotification(
+                "gemini", "codex", "authentication", occurred_at
             ),
-        )
-        dashboard.render()
-        assert ("Kimi weekly used", f"{used}%") in fake_st.metrics
-        assert ("Kimi runtime this week", "2 / 60 min") in fake_st.metrics
-        assert expected in fake_st.text()
-
-
-def test_dashboard_labels_gemini_tokens_as_observed_not_balance(monkeypatch):
+            WorkerHandoffNotification(
+                "kimi-swarm", "gemini", "limit_or_quota", occurred_at
+            ),
+        ),
+    )
     fake_st = FakeStreamlit()
     _install(
         monkeypatch,
         fake_st,
         FakeService(_summary()),
-        _usage_cards(gemini_tokens=31_142),
+        switching_status=status,
     )
 
     dashboard.render()
 
-    assert ("Gemini balance", "Unavailable") in fake_st.metrics
-    assert ("Gemini last request", "31,142 tokens") in fake_st.metrics
-    assert ("Gemini authentication", "Verified") in fake_st.metrics
-    assert "measured request usage" in fake_st.text()
+    rendered = fake_st.text()
+    for removed in (
+        "AI usage balance",
+        "balance",
+        "weekly used",
+        "last request",
+        "token",
+        "usage evidence",
+    ):
+        assert removed.lower() not in rendered.lower()
+    assert "Most recently selected worker: Codex" in rendered
+    assert "Gemini → Codex: authentication was unavailable" in rendered
+    assert "Kimi / Kimi-Swarm → Gemini: a provider limit or quota" in rendered
 
 
 def test_start_of_day_auth_check_runs_once_per_session_and_requests_login(monkeypatch):

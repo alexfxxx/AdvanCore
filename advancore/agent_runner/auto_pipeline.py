@@ -11,8 +11,8 @@ from __future__ import annotations
 
 import json
 import re
-import shutil
 import subprocess
+import sys
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from enum import Enum
@@ -82,6 +82,7 @@ class ProviderFailure(str, Enum):
 
     EXECUTABLE_UNAVAILABLE = "EXECUTABLE_UNAVAILABLE"
     QUOTA_OR_CAPACITY = "QUOTA_OR_CAPACITY"
+    CAPACITY = "CAPACITY"
     AUTHENTICATION_UNAVAILABLE = "AUTHENTICATION_UNAVAILABLE"
     UNKNOWN = "UNKNOWN"
 
@@ -435,10 +436,8 @@ _SUMMARY_RE = re.compile(r"=+\s+([\w\s,]+)\s+=+")
 
 def default_pytest_command(repo_root: Path) -> list[str]:
     """Return the default pytest command for *repo_root*."""
-    python = shutil.which("python") or "python"
     venv_python = repo_root / ".venv" / "bin" / "python"
-    if venv_python.exists():
-        python = str(venv_python)
+    python = str(venv_python) if venv_python.is_file() else sys.executable
     return [python, "-m", "pytest", "tests/", "-v"]
 
 
@@ -532,8 +531,13 @@ def classify_provider_failure(result: WorkerResult | None) -> ProviderFailure:
     if "not found in path" in evidence or "no such file or directory" in evidence:
         return ProviderFailure.EXECUTABLE_UNAVAILABLE
     if any(token in evidence for token in (
-        "quota", "rate limit", "rate-limit", "capacity", "overloaded",
-        "resource exhausted", "too many requests",
+        "provider capacity unavailable", "provider capacity exhausted",
+        "provider is overloaded",
+    )):
+        return ProviderFailure.CAPACITY
+    if any(token in evidence for token in (
+        "quota", "rate limit", "rate-limit", "resource exhausted",
+        "too many requests",
     )):
         return ProviderFailure.QUOTA_OR_CAPACITY
     if any(token in evidence for token in (
@@ -600,6 +604,25 @@ def build_auto_artifact_payload(result: AutoPipelineResult) -> dict[str, Any]:
             }
         )
 
+    reason_names = {
+        ProviderFailure.EXECUTABLE_UNAVAILABLE: "executable",
+        ProviderFailure.QUOTA_OR_CAPACITY: "limit_or_quota",
+        ProviderFailure.CAPACITY: "capacity",
+        ProviderFailure.AUTHENTICATION_UNAVAILABLE: "authentication",
+    }
+    automatic_handoffs = [
+        {
+            "previous_worker": attempt.primary_worker,
+            "next_worker": attempt.terminal_worker,
+            "reason": reason_names[attempt.failure],
+        }
+        for attempt in result.fallback_attempts
+        if attempt.integrity_ok
+        and attempt.failure in reason_names
+        and attempt.fallback_worker == attempt.terminal_worker
+        and attempt.primary_worker != attempt.terminal_worker
+    ]
+
     return {
         "timestamp": datetime.now(timezone.utc).isoformat(),
         "task_id": result.task.task_id if result.task else None,
@@ -633,6 +656,7 @@ def build_auto_artifact_payload(result: AutoPipelineResult) -> dict[str, Any]:
             }
             for attempt in result.fallback_attempts
         ],
+        "automatic_handoffs": automatic_handoffs,
         "worker_success": result.worker_result.success if result.worker_result else None,
         "worker_timeout_seconds": result.worker_timeout_seconds,
         "terminal_reason": result.terminal_reason,

@@ -1,46 +1,40 @@
-# AI Usage Dashboard Runbook
+# AI Worker Status Dashboard Runbook
 
 ## Purpose
 
-The Dashboard gives the owner one truthful view of Kimi, Codex, and Gemini
-capacity evidence. It never converts chat history into a balance and never
-probes a provider account from the Streamlit process.
+The Dashboard gives the owner a simple operational view: bounded authentication
+readiness for Kimi, Gemini, and Codex; the most recently selected worker when a
+controller-owned receipt makes it known; and recent genuine automatic switches.
+It does not display provider balances, percentages, token counts, evidence age,
+or usage-availability details.
 
-## What each card means
+## Authentication readiness
 
-- **Kimi** uses the existing controller-owned weekly percentage, reset time,
-  20% automation cap, and local runtime ledger.
-- **Codex** shows an exact balance only if an approved export is recorded.
-  OpenAI's organization Usage API is not treated as a Codex desktop
-  subscription feed.
-- **Gemini** can show a measured Antigravity request token count. This is a
-  historical observation, not the remaining Google Pro allowance. An exact
-  percentage remains unavailable until Google exposes or the owner supplies a
-  supported reading.
+Each Dashboard session uses fixed, non-generative local CLI status commands.
+The result is presented only as authenticated, login required, or readiness not
+confirmed. Raw command output, credentials, tokens, account identifiers, and
+provider error details are never rendered. Refreshing the Dashboard reruns these
+bounded checks but does not launch a worker or create a switch notification.
 
-`Unavailable` is an expected safe result. It means AdvanCore has no current,
-approved evidence; it does not mean the subscription has no capacity.
+## Worker and switch status
 
-## Controller observation command
+The worker label comes only from existing local auto-pipeline receipts. When no
+receipt supplies a known selection, the Dashboard says so and does not guess.
+At most five genuine transitions from the preceding seven days are shown, newest
+first. Each identifies the previous worker, next worker, UTC time, and one safe
+reason: limit or quota, authentication, executable, or capacity.
 
-An approved local controller can record a bounded, non-secret observation:
-
-```bash
-.venv/bin/python -m advancore.services.ai_usage_dashboard_service record \
-  --provider gemini \
-  --observed-at 2026-08-26T13:00:00Z \
-  --source antigravity-cli-json \
-  --last-run-tokens 31142
-```
-
-The receipt stores only provider name, source label, observation time, optional
-last-run tokens, and an optional owner-verified percentage/reset pair. It stores
-no credential, account identity, prompt, response, transcript, or customer data.
+Route previews and failed or blocked fallback decisions are not transitions.
+Receipts older than seven days and malformed, unsafe, unknown, or non-adjacent
+route entries are ignored. The status reader does not expose prompts, responses,
+transcripts, raw errors, environment values, credentials, account identifiers,
+customer data, or repository paths.
 
 ## Governance boundary
 
-Dashboard evidence is read-only and advisory. It cannot approve or activate a
-worker, alter routing, purchase credits, enable billing, or weaken
-`agent_runner`. Gemini remains candidate-only until a separate governed
-activation decision.
-
+Missing, stale, malformed, unreadable, or unavailable balance and usage-display
+evidence is not shown and by itself cannot block selection, launch, or
+continuation. Existing runner-owned Kimi usage guardrails remain separate and
+unchanged. Dashboard evidence is read-only: it cannot approve or activate a
+worker, consume authority, alter routing, buy credits, enable billing, deploy,
+or weaken agent-runner protections.

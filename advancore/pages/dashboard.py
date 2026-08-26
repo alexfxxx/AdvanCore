@@ -22,12 +22,6 @@ from advancore.services.dashboard_preference_service import (
     DashboardPreferences,
 )
 from advancore.services.dashboard_service import DashboardService
-from advancore.services.ai_usage_dashboard_service import (
-    AiUsageCard,
-    AiUsageDashboardService,
-    BalanceState,
-    ProviderUsageObservationStore,
-)
 from advancore.services.local_backup_service import LocalBackupService
 from advancore.services.platform_readiness_service import (
     PlatformReadinessService,
@@ -35,10 +29,12 @@ from advancore.services.platform_readiness_service import (
 )
 from advancore.services.readiness_service import ReadinessService
 from advancore.services.recovery_evidence_service import RecoveryEvidenceService
-from advancore.services.worker_usage_service import WorkerUsageService
 from advancore.services.worker_auth_readiness_service import (
     WorkerAuthReadinessService,
     WorkerAuthState,
+)
+from advancore.services.worker_routing_evidence_service import (
+    WorkerSwitchingStatusService,
 )
 from advancore.ui.custom_components import render_fuel_status_component
 from advancore.ui.fuel_trends import ALLOWED_FUEL_WINDOWS, build_fuel_trend_figure
@@ -85,20 +81,12 @@ def _dashboard_preference_service() -> Iterator[DashboardPreferenceService]:
         yield DashboardPreferenceService(SystemSettingRepository(session))
 
 
-def _worker_usage_service() -> WorkerUsageService:
-    return WorkerUsageService(Path(__file__).resolve().parents[2])
-
-
-def _ai_usage_dashboard_service() -> AiUsageDashboardService:
-    root = Path(__file__).resolve().parents[2]
-    return AiUsageDashboardService(
-        _worker_usage_service(),
-        ProviderUsageObservationStore(root),
-    )
-
-
 def _worker_auth_readiness_service() -> WorkerAuthReadinessService:
     return WorkerAuthReadinessService()
+
+
+def _worker_switching_status_service() -> WorkerSwitchingStatusService:
+    return WorkerSwitchingStatusService(Path(__file__).resolve().parents[2])
 
 
 def _render_start_of_day_ai_readiness() -> None:
@@ -106,9 +94,9 @@ def _render_start_of_day_ai_readiness() -> None:
     if _AI_AUTH_SESSION_KEY not in st.session_state:
         try:
             with st.spinner("Checking AI logins without sending a model request..."):
-                st.session_state[_AI_AUTH_SESSION_KEY] = (
-                    _worker_auth_readiness_service().check_all()
-                )
+                st.session_state[
+                    _AI_AUTH_SESSION_KEY
+                ] = _worker_auth_readiness_service().check_all()
         except Exception:
             st.session_state[_AI_AUTH_SESSION_KEY] = ()
     results = st.session_state[_AI_AUTH_SESSION_KEY]
@@ -238,107 +226,49 @@ def _render_customizer(preferences: DashboardPreferences) -> None:
                 st.rerun()
 
 
-def _percent(value: float | None) -> str:
-    return f"{value:g}%" if value is not None else "Unavailable"
-
-
-def _render_usage_card(card: AiUsageCard) -> None:
-    balance = (
-        f"{card.remaining_percent:g}% remaining"
-        if card.remaining_percent is not None
-        else "Unavailable"
-    )
-    last_request = (
-        f"{card.last_run_tokens:,} tokens"
-        if card.last_run_tokens is not None
-        else "Unavailable"
-    )
-    metrics = [
-        (f"{card.label} role", card.role),
-        (f"{card.label} balance", balance),
-        (f"{card.label} weekly used", _percent(card.weekly_used_percent)),
-        (f"{card.label} last request", last_request),
-    ]
-    if card.provider == "kimi":
-        automation = (
-            f"{card.automation_remaining_percent:g}% left to "
-            f"{card.automation_limit_percent:g}% cap"
-            if card.automation_remaining_percent is not None
-            and card.automation_limit_percent is not None
-            else "Unavailable"
-        )
-        runtime = (
-            f"{card.runtime_seconds // 60} / {card.runtime_limit_seconds // 60} min"
-            if card.runtime_seconds is not None
-            and card.runtime_limit_seconds is not None
-            else "Unavailable"
-        )
-        metrics.extend(
-            [
-                ("Kimi automation budget", automation),
-                ("Kimi runtime this week", runtime),
-            ]
-        )
-    else:
-        metrics.append(
-            (
-                f"{card.label} authentication",
-                "Verified" if card.authentication_verified else "Not verified",
-            )
-        )
-    _metric_grid(metrics)
-
-    if card.provider == "kimi" and card.automation_remaining_percent == 0:
-        st.error("Kimi is paused at the owner-approved automation limit.")
-    elif card.balance_state == BalanceState.CURRENT:
-        st.success(f"{card.label} has a current provider percentage reading.")
-    elif card.balance_state == BalanceState.OBSERVED_ONLY:
-        st.info(
-            f"{card.label} has measured request usage, but the remaining balance "
-            "is not exposed by an approved feed."
-        )
-    elif card.balance_state == BalanceState.STALE:
-        st.warning(f"{card.label} usage evidence is stale; refresh it before long work.")
-    else:
-        st.warning(f"{card.label} balance is unavailable. AdvanCore will not estimate it.")
-    st.caption(f"Routing: {card.routing_status}. {card.message}")
-    if card.checked_at:
-        checked = card.checked_at.strftime("%Y-%m-%d %H:%M UTC")
-        reset = (
-            card.reset_at.strftime("%Y-%m-%d %H:%M UTC")
-            if card.reset_at
-            else "not supplied"
-        )
-        st.caption(
-            f"Evidence checked: {checked}. Reset: {reset}. "
-            f"Source: {card.source or 'unavailable'}."
-        )
-
-
 def _render_ai_workforce(workers: tuple[str, ...]) -> None:
-    st.subheader("AI usage balance")
+    st.subheader("Automatic worker status")
     st.caption(
-        "Real provider readings only. A measured request is not the remaining quota, "
-        "and dashboard visibility never grants worker authority."
+        "Governed implementation follows Kimi-Swarm → Gemini → Codex. "
+        "Dashboard visibility never grants worker authority."
     )
     if not workers:
-        st.info("No AI worker cards are visible. Add them from Customize command center.")
+        st.info(
+            "No AI worker cards are visible. Add them from Customize command center."
+        )
         return
-    visible_providers = {
-        "kimi" if worker == "kimi-swarm" else worker for worker in workers
-    }
     try:
-        cards = _ai_usage_dashboard_service().get_cards()
+        status = _worker_switching_status_service().get_status()
     except Exception:
-        st.error("AI usage evidence is unavailable. No provider balance was inferred.")
+        status = None
+    if status is not None and status.selected_worker in workers:
+        st.success(
+            f"Most recently selected worker: {_WORKER_LABELS[status.selected_worker]}."
+        )
+    elif status is not None and status.selected_worker:
+        st.info("The most recently selected worker is hidden by dashboard preferences.")
+    else:
+        st.info("No current or selected implementation worker is known.")
+
+    st.write("Recent automatic worker switches")
+    if status is None or not status.handoffs:
+        st.caption(
+            "No automatic worker switches were recorded in the preceding seven days."
+        )
         return
-    for card in cards:
-        if card.provider in visible_providers:
-            _render_usage_card(card)
-    st.caption(
-        "Kimi policy: maximum 20% provider-reported weekly use and 60 minutes "
-        "of governed local runtime per provider week."
-    )
+    reasons = {
+        "limit_or_quota": "a provider limit or quota prevented continuation",
+        "authentication": "authentication was unavailable",
+        "executable": "the worker executable was unavailable",
+        "capacity": "provider capacity was unavailable",
+    }
+    for handoff in status.handoffs:
+        when = handoff.occurred_at.strftime("%Y-%m-%d %H:%M UTC")
+        st.info(
+            f"{_WORKER_LABELS[handoff.previous_worker]} → "
+            f"{_WORKER_LABELS[handoff.next_worker]}: {reasons[handoff.reason]} "
+            f"({when})."
+        )
 
 
 def _active_fuel_window() -> int | None:
@@ -412,9 +342,7 @@ def _render_fuel_visual_foundation() -> None:
             "modeBarButtonsToRemove": ["select2d", "lasso2d"],
         },
     )
-    st.info(
-        "Fuel data connection is intentionally pending a separate governed task."
-    )
+    st.info("Fuel data connection is intentionally pending a separate governed task.")
 
 
 def render():
@@ -490,4 +418,6 @@ def render():
                 ("Other activity events", summary.other_activity),
             ]
         )
-    st.caption("Use the navigation menu to manage Projects or capture Knowledge drafts.")
+    st.caption(
+        "Use the navigation menu to manage Projects or capture Knowledge drafts."
+    )
