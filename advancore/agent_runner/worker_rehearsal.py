@@ -58,6 +58,7 @@ def run_multi_worker_governance_rehearsal(
 
     healthy = (
         _evidence("kimi-swarm", WorkerAvailability.AVAILABLE),
+        _evidence("gemini", WorkerAvailability.AVAILABLE),
         _evidence("codex", WorkerAvailability.AVAILABLE),
     )
     primary = select_governed_worker(WorkerRole.IMPLEMENTATION, healthy)
@@ -65,7 +66,7 @@ def run_multi_worker_governance_rehearsal(
         _check(
             "kimi_primary",
             primary.selected_worker == "kimi-swarm",
-            "healthy Kimi-Swarm is selected before Codex",
+            "healthy Kimi-Swarm is selected before Gemini and Codex",
         )
     )
 
@@ -73,31 +74,28 @@ def run_multi_worker_governance_rehearsal(
         WorkerRole.IMPLEMENTATION,
         (
             _evidence("kimi-swarm", WorkerAvailability.PAUSED),
+            _evidence("gemini", WorkerAvailability.AVAILABLE),
             _evidence("codex", WorkerAvailability.AVAILABLE),
         ),
     )
     checks.append(
         _check(
-            "codex_fallback",
-            paused.selected_worker == "codex",
-            "explicitly paused Kimi-Swarm selects approved Codex fallback",
+            "gemini_second",
+            paused.selected_worker == "gemini",
+            "explicitly paused Kimi-Swarm selects approved Gemini second",
         )
     )
 
-    try:
-        select_governed_worker(
-            WorkerRole.IMPLEMENTATION,
-            (_evidence("gemini", WorkerAvailability.AVAILABLE),),
-        )
-    except WorkerSelectionError:
-        route_pending = True
-    else:
-        route_pending = False
+    gemini_selection = select_governed_worker(
+        WorkerRole.IMPLEMENTATION,
+        (_evidence("gemini", WorkerAvailability.AVAILABLE),),
+    )
     checks.append(
         _check(
-            "gemini_activation_route_separation",
-            route_pending and get_worker_profile("gemini").launchable,
-            "Gemini is activated but remains outside runtime routing until TASK-099",
+            "gemini_is_routable",
+            gemini_selection.selected_worker == "gemini"
+            and get_worker_profile("gemini").launchable,
+            "Gemini is the approved second implementation worker",
         )
     )
 
@@ -123,7 +121,7 @@ def run_multi_worker_governance_rehearsal(
         repository_fingerprint=REHEARSAL_FINGERPRINT,
         evidence=healthy,
     )
-    fallback = advance_failover_checkpoint(
+    gemini_fallback = advance_failover_checkpoint(
         checkpoint,
         failed_worker="kimi-swarm",
         failure=ProviderFailure.QUOTA_OR_CAPACITY,
@@ -132,10 +130,26 @@ def run_multi_worker_governance_rehearsal(
     )
     checks.append(
         _check(
-            "eligible_single_failover",
-            fallback.selected_worker == "codex"
-            and fallback.attempted_workers == ("kimi-swarm",),
-            "eligible primary failure advances once to an unattempted Codex",
+            "eligible_first_failover",
+            gemini_fallback.selected_worker == "gemini"
+            and gemini_fallback.attempted_workers == ("kimi-swarm",),
+            "eligible primary failure advances to unattempted Gemini",
+        )
+    )
+
+    codex_fallback = advance_failover_checkpoint(
+        gemini_fallback,
+        failed_worker="gemini",
+        failure=ProviderFailure.AUTHENTICATION_UNAVAILABLE,
+        repository_fingerprint=REHEARSAL_FINGERPRINT,
+        evidence=healthy,
+    )
+    checks.append(
+        _check(
+            "eligible_second_failover",
+            codex_fallback.selected_worker == "codex"
+            and codex_fallback.attempted_workers == ("kimi-swarm", "gemini"),
+            "eligible Gemini failure advances to final unattempted Codex",
         )
     )
 
@@ -181,7 +195,7 @@ def run_multi_worker_governance_rehearsal(
 
     try:
         advance_failover_checkpoint(
-            fallback,
+            codex_fallback,
             failed_worker="codex",
             failure=ProviderFailure.AUTHENTICATION_UNAVAILABLE,
             repository_fingerprint=REHEARSAL_FINGERPRINT,
@@ -195,7 +209,7 @@ def run_multi_worker_governance_rehearsal(
         _check(
             "fallback_is_bounded",
             exhausted,
-            "a second provider failure stops instead of cycling workers",
+            "a third provider failure stops instead of cycling workers",
         )
     )
 

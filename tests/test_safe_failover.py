@@ -32,11 +32,11 @@ def started():
         branch="task-084-safe-failover-resume",
         role=WorkerRole.IMPLEMENTATION,
         repository_fingerprint=FINGERPRINT,
-        evidence=(available("kimi-swarm"), available("codex")),
+        evidence=(available("kimi-swarm"), available("gemini"), available("codex")),
     )
 
 
-def test_start_selects_primary_and_advance_selects_one_distinct_fallback():
+def test_start_and_advance_follow_fixed_distinct_order():
     first = started()
     assert first.selected_worker == "kimi-swarm"
     second = advance_failover_checkpoint(
@@ -44,9 +44,9 @@ def test_start_selects_primary_and_advance_selects_one_distinct_fallback():
         failed_worker="kimi-swarm",
         failure=ProviderFailure.QUOTA_OR_CAPACITY,
         repository_fingerprint=FINGERPRINT,
-        evidence=(available("kimi-swarm"), available("codex")),
+        evidence=(available("kimi-swarm"), available("gemini"), available("codex")),
     )
-    assert second.selected_worker == "codex"
+    assert second.selected_worker == "gemini"
     assert second.attempted_workers == ("kimi-swarm",)
     assert second.last_failure == ProviderFailure.QUOTA_OR_CAPACITY
 
@@ -71,17 +71,24 @@ def test_unknown_failure_changed_fingerprint_and_wrong_worker_block():
         )
 
 
-def test_second_failure_exhausts_bounded_route_without_repeat():
+def test_third_failure_exhausts_bounded_route_without_repeat():
     second = advance_failover_checkpoint(
         started(),
         failed_worker="kimi-swarm",
         failure=ProviderFailure.EXECUTABLE_UNAVAILABLE,
         repository_fingerprint=FINGERPRINT,
+        evidence=(available("gemini"), available("codex")),
+    )
+    third = advance_failover_checkpoint(
+        second,
+        failed_worker="gemini",
+        failure=ProviderFailure.AUTHENTICATION_UNAVAILABLE,
+        repository_fingerprint=FINGERPRINT,
         evidence=(available("codex"),),
     )
     with pytest.raises(FailoverError, match="limit is exhausted"):
         advance_failover_checkpoint(
-            second,
+            third,
             failed_worker="codex",
             failure=ProviderFailure.AUTHENTICATION_UNAVAILABLE,
             repository_fingerprint=FINGERPRINT,
@@ -89,16 +96,16 @@ def test_second_failure_exhausts_bounded_route_without_repeat():
         )
 
 
-def test_candidate_cannot_start_or_become_fallback():
-    with pytest.raises(FailoverError, match="No safe initial"):
-        start_failover_checkpoint(
-            run_id="FAILOVER-gemini",
-            task_id="TASK-084",
-            branch="feature",
-            role="implementation",
-            repository_fingerprint=FINGERPRINT,
-            evidence=(available("gemini"),),
-        )
+def test_approved_gemini_can_start_when_kimi_has_no_evidence():
+    checkpoint = start_failover_checkpoint(
+        run_id="FAILOVER-gemini",
+        task_id="TASK-084",
+        branch="feature",
+        role="implementation",
+        repository_fingerprint=FINGERPRINT,
+        evidence=(available("gemini"),),
+    )
+    assert checkpoint.selected_worker == "gemini"
 
 
 def test_checkpoint_round_trip_is_strict_bounded_and_secret_free(tmp_path):
@@ -107,7 +114,7 @@ def test_checkpoint_round_trip_is_strict_bounded_and_secret_free(tmp_path):
         failed_worker="kimi-swarm",
         failure=ProviderFailure.QUOTA_OR_CAPACITY,
         repository_fingerprint=FINGERPRINT,
-        evidence=(available("codex"),),
+        evidence=(available("gemini"), available("codex")),
     )
     path = save_failover_checkpoint(checkpoint, tmp_path / "state")
     assert load_failover_checkpoint(checkpoint.run_id, path.parent) == checkpoint

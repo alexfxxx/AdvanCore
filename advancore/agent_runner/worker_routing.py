@@ -69,7 +69,12 @@ class AuthorizedWorkerAdapter(WorkerAdapter):
 @dataclass(frozen=True)
 class KimiFirstWorkerRoute:
     primary: AuthorizedWorkerAdapter
-    fallback: AuthorizedWorkerAdapter
+    fallbacks: tuple[AuthorizedWorkerAdapter, ...]
+
+    @property
+    def fallback(self) -> AuthorizedWorkerAdapter:
+        """Backward-compatible first fallback accessor."""
+        return self.fallbacks[0]
 
 
 class WorkerSelectionError(RuntimeError):
@@ -103,10 +108,10 @@ class WorkerSelection:
 
 
 _ROLE_PREFERENCES: dict[WorkerRole, tuple[str, ...]] = {
-    WorkerRole.IMPLEMENTATION: ("kimi-swarm", "codex"),
+    WorkerRole.IMPLEMENTATION: ("kimi-swarm", "gemini", "codex"),
     WorkerRole.PLANNING: ("kimi", "codex"),
     WorkerRole.REVIEW: ("kimi-swarm",),
-    WorkerRole.FALLBACK: ("codex",),
+    WorkerRole.FALLBACK: ("gemini", "codex"),
 }
 
 
@@ -168,7 +173,7 @@ def build_kimi_first_worker_route(
     allowed_scope: list[str] | None = None,
     timeout_seconds: int = DEFAULT_WORKER_TIMEOUT_SECONDS,
 ) -> KimiFirstWorkerRoute:
-    """Build the fixed Kimi-Swarm -> Codex route with no caller argv."""
+    """Build the fixed Kimi-Swarm -> Gemini -> Codex route with no caller argv."""
     scope = list(allowed_scope or [])
     primary = AuthorizedWorkerAdapter(
         build_worker_adapter("kimi-swarm", scope, timeout_seconds),
@@ -177,11 +182,14 @@ def build_kimi_first_worker_route(
         branch,
         (RoutineAction.RUN_WORKER,),
     )
-    fallback = AuthorizedWorkerAdapter(
-        build_worker_adapter("codex", scope, timeout_seconds),
-        authority,
-        task_id,
-        branch,
-        (RoutineAction.APPROVED_FALLBACK, RoutineAction.RUN_WORKER),
+    fallbacks = tuple(
+        AuthorizedWorkerAdapter(
+            build_worker_adapter(name, scope, timeout_seconds),
+            authority,
+            task_id,
+            branch,
+            (RoutineAction.APPROVED_FALLBACK, RoutineAction.RUN_WORKER),
+        )
+        for name in ("gemini", "codex")
     )
-    return KimiFirstWorkerRoute(primary, fallback)
+    return KimiFirstWorkerRoute(primary, fallbacks)

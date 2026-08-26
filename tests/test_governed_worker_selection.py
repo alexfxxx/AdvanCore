@@ -19,6 +19,7 @@ def test_implementation_prefers_available_kimi_swarm():
         WorkerRole.IMPLEMENTATION,
         (
             evidence("kimi-swarm", WorkerAvailability.AVAILABLE),
+            evidence("gemini", WorkerAvailability.AVAILABLE),
             evidence("codex", WorkerAvailability.AVAILABLE),
         ),
     )
@@ -35,16 +36,17 @@ def test_implementation_prefers_available_kimi_swarm():
         WorkerAvailability.SETUP_REQUIRED,
     ],
 )
-def test_codex_is_selected_when_kimi_swarm_is_not_available(state):
+def test_gemini_is_selected_when_kimi_swarm_is_not_available(state):
     result = select_governed_worker(
         "implementation",
         (
             evidence("kimi-swarm", state),
+            evidence("gemini", WorkerAvailability.AVAILABLE),
             evidence("codex", WorkerAvailability.AVAILABLE),
         ),
     )
-    assert result.selected_worker == "codex"
-    assert result.considered[-1] == ("codex", "SELECTED")
+    assert result.selected_worker == "gemini"
+    assert result.considered[-1] == ("gemini", "SELECTED")
 
 
 def test_missing_evidence_is_unavailable_not_assumed_healthy():
@@ -56,12 +58,12 @@ def test_missing_evidence_is_unavailable_not_assumed_healthy():
     assert result.considered[0] == ("kimi-swarm", "UNAVAILABLE")
 
 
-def test_candidate_evidence_cannot_make_gemini_routable():
-    with pytest.raises(WorkerSelectionError, match="No approved worker"):
-        select_governed_worker(
-            WorkerRole.IMPLEMENTATION,
-            (evidence("gemini", WorkerAvailability.AVAILABLE),),
-        )
+def test_approved_gemini_evidence_makes_it_routable():
+    result = select_governed_worker(
+        WorkerRole.IMPLEMENTATION,
+        (evidence("gemini", WorkerAvailability.AVAILABLE),),
+    )
+    assert result.selected_worker == "gemini"
 
 
 def test_no_available_worker_fails_closed():

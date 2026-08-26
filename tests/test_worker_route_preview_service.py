@@ -35,7 +35,7 @@ def test_preview_uses_code_owned_kimi_first_preferences():
         }
     )
     result = WorkerRoutePreviewService(evidence).preview(WorkerRole.IMPLEMENTATION)
-    assert evidence.calls == [("kimi-swarm", "codex")]
+    assert evidence.calls == [("kimi-swarm", "gemini", "codex")]
     assert result.state == WorkerRoutePreviewState.SELECTED
     assert result.selected_worker == "kimi-swarm"
     assert result.workers_launched == 0
@@ -49,9 +49,11 @@ def test_preview_fails_closed_when_no_worker_is_proven_available():
     assert "launch-time checks" in result.message
 
 
-def test_candidate_is_absent_from_all_production_preferences():
-    for role in ("implementation", "planning", "review", "fallback"):
-        assert "gemini" not in governed_worker_preferences(role)
+def test_gemini_is_bounded_to_implementation_and_fallback_preferences():
+    assert "gemini" in governed_worker_preferences("implementation")
+    assert "gemini" in governed_worker_preferences("fallback")
+    assert "gemini" not in governed_worker_preferences("planning")
+    assert "gemini" not in governed_worker_preferences("review")
 
 
 def test_unroutable_role_is_rejected():

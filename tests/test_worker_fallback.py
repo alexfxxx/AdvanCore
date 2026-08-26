@@ -165,6 +165,42 @@ def test_clean_provider_failure_invokes_explicit_fallback_and_verification(tmp_p
     assert any("kimi -> codex" in message for message in result.messages)
 
 
+def test_three_worker_route_continues_kimi_to_gemini_to_codex(tmp_path: Path):
+    tasks = _task_dir(tmp_path)
+    kimi = _runner(tmp_path, "kimi-swarm", False, "quota exhausted")
+    gemini = _runner(tmp_path, "gemini", False, "authentication unavailable")
+    codex = _runner(tmp_path, "codex", True, "ok")
+    with patch(
+        "advancore.agent_runner.auto_pipeline.execute",
+        side_effect=[kimi, gemini, codex],
+    ) as execute_mock, patch(
+        "advancore.agent_runner.auto_pipeline._remote_fingerprint",
+        return_value=("origin x",),
+    ), patch(
+        "advancore.agent_runner.auto_pipeline.detect_staged_paths",
+        return_value=[],
+    ), patch(
+        "advancore.agent_runner.auto_pipeline._run_verification_sequence",
+        side_effect=lambda result, *args: result,
+    ):
+        result = run_auto_pipeline(
+            tasks,
+            "TASK-022",
+            _Worker("kimi-swarm"),
+            fallback_workers=(_Worker("gemini"), _Worker("codex")),
+        )
+
+    assert execute_mock.call_count == 3
+    assert result.fallback_workers == ("gemini", "codex")
+    assert result.terminal_worker == "codex"
+    assert [item.primary_worker for item in result.fallback_attempts] == [
+        "kimi-swarm",
+        "gemini",
+    ]
+    assert any("kimi-swarm -> gemini" in item for item in result.messages)
+    assert any("gemini -> codex" in item for item in result.messages)
+
+
 @pytest.mark.parametrize("message", ["unexpected worker crash", "malformed output"])
 def test_unknown_failure_never_falls_back(tmp_path: Path, message: str):
     tasks = _task_dir(tmp_path)

@@ -153,7 +153,7 @@ def _usage_cards(
         provider="gemini",
         label="Gemini",
         role="Approved second worker",
-        routing_status="Used after Kimi when TASK-099 is active",
+        routing_status="Used after Kimi",
         balance_state=(
             BalanceState.OBSERVED_ONLY
             if gemini_tokens is not None
