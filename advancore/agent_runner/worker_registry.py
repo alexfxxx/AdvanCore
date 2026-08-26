@@ -102,11 +102,11 @@ _PROFILES: Mapping[str, WorkerProfile] = MappingProxyType(
             name="gemini",
             label="Gemini",
             provider="google",
-            approval_state=WorkerApprovalState.CANDIDATE,
-            authorised_roles=(),
-            launchable=False,
-            requires_owner_setup=True,
-            requires_fresh_usage_evidence=True,
+            approval_state=WorkerApprovalState.APPROVED,
+            authorised_roles=(WorkerRole.IMPLEMENTATION, WorkerRole.FALLBACK),
+            launchable=True,
+            requires_owner_setup=False,
+            requires_fresh_usage_evidence=False,
         ),
     }
 )
@@ -151,8 +151,17 @@ def validate_worker_registry() -> None:
     }
     if planners != set(APPROVED_PLANNER_NAMES) - {"dry-run"}:
         raise WorkerError("Worker registry planner roles do not match adapter policy")
-    if _PROFILES["dry-run"].launchable or _PROFILES["gemini"].authorised_roles:
-        raise WorkerError("Non-production worker registry entry is unsafe")
+    if _PROFILES["dry-run"].launchable:
+        raise WorkerError("Simulation worker registry entry is unsafe")
+    gemini = _PROFILES["gemini"]
+    if (
+        gemini.authorised_roles
+        != (WorkerRole.IMPLEMENTATION, WorkerRole.FALLBACK)
+        or not gemini.launchable
+        or gemini.requires_owner_setup
+        or gemini.requires_fresh_usage_evidence
+    ):
+        raise WorkerError("Gemini activation policy is unsafe")
 
 
 validate_worker_registry()

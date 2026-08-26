@@ -133,8 +133,8 @@ def _usage_cards(
     codex = AiUsageCard(
         provider="codex",
         label="Codex",
-        role="Approved fallback",
-        routing_status="Available only through governed routing",
+        role="Final approved fallback",
+        routing_status="Used after Kimi and Gemini",
         balance_state=BalanceState.UNAVAILABLE,
         weekly_used_percent=None,
         remaining_percent=None,
@@ -152,8 +152,8 @@ def _usage_cards(
     gemini = AiUsageCard(
         provider="gemini",
         label="Gemini",
-        role="Candidate — not active",
-        routing_status="Not eligible for automatic routing",
+        role="Approved second worker",
+        routing_status="Used after Kimi when TASK-099 is active",
         balance_state=(
             BalanceState.OBSERVED_ONLY
             if gemini_tokens is not None
@@ -222,12 +222,12 @@ def test_dashboard_renders_real_bounded_default_modules(monkeypatch):
         ("Kimi last request", "Unavailable"),
         ("Kimi automation budget", "Unavailable"),
         ("Kimi runtime this week", "Unavailable"),
-        ("Codex role", "Approved fallback"),
+        ("Codex role", "Final approved fallback"),
         ("Codex balance", "Unavailable"),
         ("Codex weekly used", "Unavailable"),
         ("Codex last request", "Unavailable"),
         ("Codex authentication", "Not verified"),
-        ("Gemini role", "Candidate — not active"),
+        ("Gemini role", "Approved second worker"),
         ("Gemini balance", "Unavailable"),
         ("Gemini weekly used", "Unavailable"),
         ("Gemini last request", "Unavailable"),
@@ -274,7 +274,7 @@ def test_hidden_modules_and_workers_are_not_rendered(monkeypatch):
     dashboard.render()
 
     assert fake_st.metrics == [
-        ("Codex role", "Approved fallback"),
+        ("Codex role", "Final approved fallback"),
         ("Codex balance", "Unavailable"),
         ("Codex weekly used", "Unavailable"),
         ("Codex last request", "Unavailable"),
@@ -353,7 +353,7 @@ def test_dashboard_failure_is_generic_and_does_not_leak(monkeypatch):
         ("Kimi last request", "Unavailable"),
         ("Kimi automation budget", "Unavailable"),
         ("Kimi runtime this week", "Unavailable"),
-        ("Codex role", "Approved fallback"),
+        ("Codex role", "Final approved fallback"),
     ]
 
 

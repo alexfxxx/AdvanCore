@@ -11,7 +11,7 @@ from advancore.agent_runner.failover import (
     advance_failover_checkpoint,
     start_failover_checkpoint,
 )
-from advancore.agent_runner.worker import WorkerError, build_candidate_worker_adapter
+from advancore.agent_runner.worker import build_worker_adapter
 from advancore.agent_runner.worker_registry import WorkerRole, get_worker_profile
 from advancore.agent_runner.worker_routing import (
     WorkerAvailability,
@@ -90,14 +90,14 @@ def run_multi_worker_governance_rehearsal(
             (_evidence("gemini", WorkerAvailability.AVAILABLE),),
         )
     except WorkerSelectionError:
-        candidate_blocked = True
+        route_pending = True
     else:
-        candidate_blocked = False
+        route_pending = False
     checks.append(
         _check(
-            "gemini_not_routable",
-            candidate_blocked and not get_worker_profile("gemini").launchable,
-            "Gemini remains a non-launchable candidate outside production routing",
+            "gemini_activation_route_separation",
+            route_pending and get_worker_profile("gemini").launchable,
+            "Gemini is activated but remains outside runtime routing until TASK-099",
         )
     )
 
@@ -199,21 +199,16 @@ def run_multi_worker_governance_rehearsal(
         )
     )
 
-    candidate = build_candidate_worker_adapter("gemini")
-    try:
-        candidate.build_command("offline rehearsal", root)
-    except WorkerError:
-        no_command = True
-    else:
-        no_command = False
-    candidate_result = candidate.run("offline rehearsal", root)
+    gemini = build_worker_adapter("gemini")
+    command = gemini.build_command("offline rehearsal", root)
     checks.append(
         _check(
-            "candidate_requires_owner",
-            no_command
-            and not candidate_result.success
-            and candidate_result.terminal_reason == "owner_action_required",
-            "Gemini owns no command or credential path and requests owner setup",
+            "gemini_command_is_bounded",
+            command[0] == "agy"
+            and "--sandbox" in command
+            and "--disable-slash-commands" in command
+            and "--dangerously-skip-permissions" not in command,
+            "Gemini has a fixed sandboxed command and the rehearsal launches nothing",
         )
     )
 

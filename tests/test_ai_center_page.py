@@ -131,7 +131,7 @@ ai_center._render_worker_governance(Path.cwd())
     assert any("zero workers launched" in item.value for item in app.success)
 
 
-def test_gemini_readiness_panel_requires_owner_and_remains_inactive():
+def test_gemini_readiness_panel_shows_owner_approved_activation():
     script = """
 from advancore.pages import ai_center
 ai_center._render_candidate_readiness()
@@ -139,10 +139,10 @@ ai_center._render_candidate_readiness()
     app = AppTest.from_string(script).run()
     assert not app.exception
     rendered = " ".join(
-        item.value for item in (*app.markdown, *app.warning, *app.caption)
+        item.value for item in (*app.markdown, *app.success, *app.caption)
     )
-    assert "not authenticated or active" in rendered
-    assert "choose the Gemini access surface" in rendered
-    assert "Accounts probed: 0" in rendered
-    assert "Processes launched: 0" in rendered
-    assert CandidateReadinessService().get_summary("gemini").activation_allowed is False
+    assert "authenticated and owner-approved" in rendered
+    assert "TASK-099" in rendered
+    assert "Accounts probed by this view: 0" in rendered
+    assert "Processes launched by this view: 0" in rendered
+    assert CandidateReadinessService().get_summary("gemini").activation_allowed is True

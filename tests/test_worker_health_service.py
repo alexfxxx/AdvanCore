@@ -58,12 +58,12 @@ def test_missing_or_failed_kimi_evidence_is_unavailable():
     assert result.weekly_used_percent is None
 
 
-def test_codex_and_gemini_never_infer_usage_or_activation():
+def test_codex_and_gemini_are_checked_at_launch_without_inferred_usage():
     service = WorkerHealthService(Usage(error=AssertionError("must not probe")))
     codex = service.get_status("codex")
     gemini = service.get_status("gemini")
     assert codex.state == WorkerHealthState.CHECKED_AT_LAUNCH
     assert codex.weekly_used_percent is None
-    assert gemini.state == WorkerHealthState.SETUP_REQUIRED
-    assert gemini.approval_state == WorkerApprovalState.CANDIDATE
+    assert gemini.state == WorkerHealthState.CHECKED_AT_LAUNCH
+    assert gemini.approval_state == WorkerApprovalState.APPROVED
     assert gemini.weekly_used_percent is None

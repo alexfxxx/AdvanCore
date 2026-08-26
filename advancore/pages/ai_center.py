@@ -51,8 +51,8 @@ def _render_worker_governance(root: Path) -> None:
             for item in preview.evidence:
                 st.write(f"{item.worker}: {item.state.value.replace('_', ' ').title()}")
             st.caption(
-                "Codex readiness is checked at actual launch. Gemini remains outside "
-                "production routing."
+                "Gemini and Codex readiness are checked at actual launch. TASK-099 "
+                "will connect the approved three-worker continuation route."
             )
 
     st.subheader("Offline governance self-check")
@@ -74,15 +74,18 @@ def _render_worker_governance(root: Path) -> None:
 
 
 def _render_candidate_readiness() -> None:
-    st.subheader("Gemini setup readiness")
+    st.subheader("Gemini worker readiness")
     try:
         summary = CandidateReadinessService().get_summary("gemini")
     except Exception:
-        st.error("Gemini candidate readiness is unavailable. Gemini remains inactive.")
+        st.error("Gemini readiness is unavailable. No availability was assumed.")
         return
-    st.warning("Gemini is safely registered but not authenticated or active.")
+    if summary.activation_allowed:
+        st.success("Gemini is authenticated and owner-approved for governed implementation.")
+    else:
+        st.warning("Gemini is safely registered but not authenticated or active.")
     st.write(summary.next_owner_action)
-    with st.expander("Gemini pre-authentication checklist"):
+    with st.expander("Gemini governance checklist"):
         for check in summary.checks:
             label = check.state.value.replace("_", " ").title()
             st.write(f"{check.label} — {label}: {check.message}")
@@ -92,7 +95,8 @@ def _render_candidate_readiness() -> None:
     )
     st.caption(
         f"Owner-required checks: {owner}. Blocked follow-on checks: {blocked}. "
-        "Accounts probed: 0. Processes launched: 0."
+        f"Accounts probed by this view: {summary.accounts_probed}. "
+        f"Processes launched by this view: {summary.processes_launched}."
     )
 
 
