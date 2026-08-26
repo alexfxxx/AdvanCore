@@ -5,7 +5,7 @@ from contextlib import contextmanager
 
 import streamlit as st
 
-from advancore.repositories import ActivityLogRepository, VehicleRepository
+from advancore.repositories import ActivityLogRepository, DriverRepository, VehicleRepository
 from advancore.services.activity_service import ActivityLogService
 from advancore.services.vehicle_service import (
     DuplicateVehicleError,
@@ -13,6 +13,13 @@ from advancore.services.vehicle_service import (
     VehicleNotFoundError,
     VehicleService,
     VehicleValidationError,
+)
+from advancore.services.driver_service import (
+    DRIVER_STATUSES,
+    DriverNotFoundError,
+    DriverService,
+    DriverValidationError,
+    DuplicateDriverReferenceError,
 )
 
 
@@ -23,6 +30,17 @@ def _vehicle_service() -> Iterator[VehicleService]:
     with session_scope() as session:
         yield VehicleService(
             VehicleRepository(session),
+            ActivityLogService(ActivityLogRepository(session)),
+        )
+
+
+@contextmanager
+def _driver_service() -> Iterator[DriverService]:
+    from advancore.services.database import session_scope
+
+    with session_scope() as session:
+        yield DriverService(
+            DriverRepository(session),
             ActivityLogService(ActivityLogRepository(session)),
         )
 
@@ -110,3 +128,40 @@ def render() -> None:
     st.header("Transport Operations")
     st.write("Build the operational records from real information you enter.")
     _render_vehicle_register()
+    st.divider()
+    _render_driver_register()
+
+
+def _render_driver_register() -> None:
+    st.subheader("Driver register")
+    st.caption("Stores only a name, optional internal reference, and manual status.")
+    with st.form("create_driver"):
+        name = st.text_input("Driver name", max_chars=120)
+        reference = st.text_input("Employee reference (optional)", max_chars=40)
+        submitted = st.form_submit_button("Add driver")
+    if submitted:
+        try:
+            with _driver_service() as service: service.create_driver(name, reference)
+        except (DriverValidationError, DuplicateDriverReferenceError) as exc: st.warning(str(exc))
+        except Exception: st.error("Driver could not be saved. Please try again.")
+        else: st.success("Driver added."); st.rerun()
+    try:
+        with _driver_service() as service: drivers = list(service.list_drivers())
+    except Exception: st.error("Driver register could not be loaded."); return
+    if not drivers: st.info("No drivers registered yet."); return
+    st.dataframe([
+        {"Name": item.name, "Employee reference": item.employee_reference or "Not provided", "Status": item.status.title()}
+        for item in drivers
+    ], use_container_width=True, hide_index=True)
+    by_id = {item.id: item for item in drivers}
+    with st.form("driver_status"):
+        driver_id = st.selectbox("Driver", list(by_id), format_func=lambda key: by_id[key].name)
+        current = by_id[driver_id].status
+        status = st.selectbox("Driver status", list(DRIVER_STATUSES), index=DRIVER_STATUSES.index(current), format_func=str.title)
+        changed = st.form_submit_button("Update driver status")
+    if changed:
+        try:
+            with _driver_service() as service: service.set_status(driver_id, status)
+        except (DriverValidationError, DriverNotFoundError) as exc: st.warning(str(exc))
+        except Exception: st.error("Driver status could not be updated.")
+        else: st.success("Driver status updated."); st.rerun()
