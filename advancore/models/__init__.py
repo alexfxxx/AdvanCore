@@ -7,6 +7,7 @@ from advancore.models.project import Project
 from advancore.models.route import Route
 from advancore.models.setting import SystemSetting
 from advancore.models.vehicle import Vehicle
+from advancore.models.trip import Trip
 
 __all__ = [
     "Base",
@@ -18,4 +19,5 @@ __all__ = [
     "ActivityLog",
     "SystemSetting",
     "Vehicle",
+    "Trip",
 ]
