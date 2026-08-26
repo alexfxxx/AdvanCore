@@ -30,3 +30,16 @@ Selection does not consume standing authority or start a process. The selected
 adapter must still pass the established credential, usage, isolation,
 repository-integrity, timeout, and launch checks. Gemini remains absent from
 all fixed preferences while it is a candidate.
+
+## Safe failover checkpoint
+
+Provider-neutral failover state contains only bounded identifiers, the fixed
+role, selected/attempted worker names, an eligible provider-failure class, and
+a repository fingerprint. It stores no prompt, worker output, environment,
+credential, or raw provider error.
+
+Advancement requires the exact selected worker, an eligible classified failure,
+an unchanged fingerprint, and a different available approved worker from the
+fixed selection policy. The run is limited to a primary plus one fallback.
+Checkpoint selection and persistence do not launch workers or consume standing
+authority; runtime pipeline integrity checks still apply.

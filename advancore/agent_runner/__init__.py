@@ -61,6 +61,16 @@ from advancore.agent_runner.finalize import (
     format_finalization_result,
     run_finalization,
 )
+from advancore.agent_runner.failover import (
+    FAILOVER_SCHEMA_VERSION,
+    MAX_FAILOVER_WORKERS,
+    FailoverCheckpoint,
+    FailoverError,
+    advance_failover_checkpoint,
+    load_failover_checkpoint,
+    save_failover_checkpoint,
+    start_failover_checkpoint,
+)
 from advancore.agent_runner.git_info import GitInfo, get_git_info
 from advancore.agent_runner.goal_task import (
     GoalTaskError,
@@ -234,6 +244,10 @@ __all__ = [
     "ActorRole",
     "AutoPipelineResult",
     "AutoPipelineStatus",
+    "FAILOVER_SCHEMA_VERSION",
+    "MAX_FAILOVER_WORKERS",
+    "FailoverCheckpoint",
+    "FailoverError",
     "APPROVED_WORKER_NAMES",
     "APPROVED_PLANNER_NAMES",
     "CANDIDATE_WORKER_NAMES",
@@ -338,6 +352,7 @@ __all__ = [
     "ReviewBundleWriteError",
     "ScopeResult",
     "apply_controller_decision",
+    "advance_failover_checkpoint",
     "build_controller_decision",
     "build_controller_handoff",
     "build_kimi_swarm_instruction",
@@ -362,6 +377,7 @@ __all__ = [
     "format_finalization_result",
     "format_handoff_summary",
     "load_controller_decision",
+    "load_failover_checkpoint",
     "load_controller_handoff",
     "load_driver_request_by_id",
     "load_review_bundle",
@@ -369,6 +385,8 @@ __all__ = [
     "reconcile_controller_handoff",
     "run_auto_pipeline",
     "run_finalization",
+    "save_failover_checkpoint",
+    "start_failover_checkpoint",
     "run_git_diff_check",
     "run_pytest",
     "write_controller_decision",
