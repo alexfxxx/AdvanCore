@@ -200,6 +200,7 @@ class WorkerSwitchingStatusService:
             worker = payload.get("terminal_worker")
             if (
                 occurred_at is not None
+                and occurred_at >= cutoff
                 and occurred_at <= now + timedelta(minutes=5)
                 and worker in _FIXED_ROUTE
                 and (selected_at is None or occurred_at > selected_at)

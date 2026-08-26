@@ -18,7 +18,7 @@ import sys
 import pwd
 import stat
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from enum import Enum
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Callable
@@ -586,6 +586,8 @@ def _fallback_integrity_ok(
 AUTO_SUBDIR = "auto"
 AUTO_ARTIFACT_FILENAME = "auto_pipeline.jsonl"
 SWITCHING_STATUS_MAX_BYTES = 2_000_000
+SWITCHING_STATUS_MAX_RECORDS = 1_000
+SWITCHING_STATUS_RETENTION_DAYS = 7
 _SWITCHING_ROUTE = ("kimi-swarm", "gemini", "codex")
 _SWITCHING_REASONS = {
     "executable",
@@ -623,28 +625,26 @@ def _path_has_symlink(path: Path) -> bool:
     return False
 
 
-def write_switching_status_projection(
-    payload: dict[str, Any],
-    repo_root: Path,
-    destination: Path | None = None,
-) -> Path:
-    """Append only the bounded safe switching projection outside workspaces."""
-    path = Path(destination or default_switching_status_path())
-    if not path.is_absolute():
-        path = Path.cwd() / path
-    resolved_repo = repo_root.resolve()
-    if _path_has_symlink(path):
-        raise AutoArtifactWriteError("worker switching evidence location is unsafe")
-    resolved = path.resolve()
-    if resolved == resolved_repo or resolved_repo in resolved.parents:
-        raise AutoArtifactWriteError(
-            "worker switching evidence must be outside the worker workspace"
-        )
-
+def _validated_switching_projection(
+    payload: object,
+) -> tuple[dict[str, object], datetime]:
+    """Return one canonical, secret-free projection or fail closed."""
+    if not isinstance(payload, dict) or set(payload) != {
+        "timestamp",
+        "terminal_worker",
+        "automatic_handoffs",
+    }:
+        raise AutoArtifactWriteError("worker switching projection is invalid")
     timestamp = payload.get("timestamp")
     terminal_worker = payload.get("terminal_worker")
     raw_handoffs = payload.get("automatic_handoffs")
     if not isinstance(timestamp, str) or len(timestamp) > 40:
+        raise AutoArtifactWriteError("worker switching timestamp is invalid")
+    try:
+        occurred_at = datetime.fromisoformat(timestamp.replace("Z", "+00:00"))
+    except ValueError as exc:
+        raise AutoArtifactWriteError("worker switching timestamp is invalid") from exc
+    if occurred_at.tzinfo is None:
         raise AutoArtifactWriteError("worker switching timestamp is invalid")
     if terminal_worker not in _SWITCHING_ROUTE:
         raise AutoArtifactWriteError("worker switching terminal worker is invalid")
@@ -677,12 +677,49 @@ def write_switching_status_projection(
                 "reason": reason,
             }
         )
+    if handoffs:
+        if handoffs[-1]["next_worker"] != terminal_worker:
+            raise AutoArtifactWriteError("worker switching handoff chain is invalid")
+        for earlier, later in zip(handoffs, handoffs[1:]):
+            if earlier["next_worker"] != later["previous_worker"]:
+                raise AutoArtifactWriteError(
+                    "worker switching handoff chain is invalid"
+                )
+    return (
+        {
+            "timestamp": timestamp,
+            "terminal_worker": terminal_worker,
+            "automatic_handoffs": handoffs,
+        },
+        occurred_at.astimezone(timezone.utc),
+    )
 
-    projection = {
-        "timestamp": timestamp,
-        "terminal_worker": terminal_worker,
-        "automatic_handoffs": handoffs,
-    }
+
+def write_switching_status_projection(
+    payload: dict[str, Any],
+    repo_root: Path,
+    destination: Path | None = None,
+) -> Path:
+    """Append only the bounded safe switching projection outside workspaces."""
+    path = Path(destination or default_switching_status_path())
+    if not path.is_absolute():
+        path = Path.cwd() / path
+    resolved_repo = repo_root.resolve()
+    if _path_has_symlink(path):
+        raise AutoArtifactWriteError("worker switching evidence location is unsafe")
+    resolved = path.resolve()
+    if resolved == resolved_repo or resolved_repo in resolved.parents:
+        raise AutoArtifactWriteError(
+            "worker switching evidence must be outside the worker workspace"
+        )
+
+    projection, occurred_at = _validated_switching_projection(
+        {
+            "timestamp": payload.get("timestamp"),
+            "terminal_worker": payload.get("terminal_worker"),
+            "automatic_handoffs": payload.get("automatic_handoffs"),
+        }
+    )
     encoded = (
         json.dumps(projection, separators=(",", ":"), sort_keys=True) + "\n"
     ).encode("utf-8")
@@ -698,23 +735,62 @@ def write_switching_status_projection(
                 "worker switching evidence location is unsafe"
             )
         os.chmod(resolved.parent, 0o700)
-        flags = os.O_WRONLY | os.O_APPEND | os.O_CREAT
+        flags = os.O_RDWR | os.O_CREAT
         if hasattr(os, "O_NOFOLLOW"):
             flags |= os.O_NOFOLLOW
         descriptor = os.open(resolved, flags, 0o600)
-        with os.fdopen(descriptor, "ab", closefd=True) as handle:
+        with os.fdopen(descriptor, "r+b", closefd=True) as handle:
             fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
             details = os.fstat(handle.fileno())
             if (
                 details.st_uid != os.getuid()
                 or stat.S_IMODE(details.st_mode) & 0o077
                 or details.st_nlink != 1
-                or details.st_size + len(encoded) > SWITCHING_STATUS_MAX_BYTES
+                or details.st_size > SWITCHING_STATUS_MAX_BYTES
             ):
                 raise AutoArtifactWriteError(
                     "worker switching evidence path is unsafe"
                 )
-            handle.write(encoded)
+            cutoff = occurred_at.astimezone(timezone.utc) - timedelta(
+                days=SWITCHING_STATUS_RETENTION_DAYS
+            )
+            retained_records: list[tuple[datetime, bytes]] = []
+            for raw_line in handle.read().splitlines():
+                try:
+                    existing = json.loads(raw_line)
+                    canonical, existing_timestamp = _validated_switching_projection(
+                        existing
+                    )
+                except (AutoArtifactWriteError, TypeError, ValueError, UnicodeError):
+                    continue
+                if (
+                    existing_timestamp >= cutoff
+                    and existing_timestamp <= occurred_at + timedelta(minutes=5)
+                ):
+                    retained_records.append(
+                        (
+                            existing_timestamp,
+                            (
+                                json.dumps(
+                                    canonical, separators=(",", ":"), sort_keys=True
+                                )
+                                + "\n"
+                            ).encode("utf-8"),
+                        )
+                    )
+            retained_records.sort(key=lambda item: item[0])
+            retained = [
+                raw_line
+                for _, raw_line in retained_records[-(SWITCHING_STATUS_MAX_RECORDS - 1):]
+            ]
+            compacted = b"".join(retained) + encoded
+            if len(compacted) > SWITCHING_STATUS_MAX_BYTES:
+                raise AutoArtifactWriteError(
+                    "worker switching evidence path is unsafe"
+                )
+            handle.seek(0)
+            handle.truncate()
+            handle.write(compacted)
             handle.flush()
             os.fsync(handle.fileno())
             fcntl.flock(handle.fileno(), fcntl.LOCK_UN)

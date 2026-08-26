@@ -30,6 +30,12 @@ route entries are ignored. The status reader does not expose prompts, responses,
 transcripts, raw errors, environment values, credentials, account identifiers,
 customer data, or repository paths.
 
+The controller projection is compacted whenever a new receipt is written. It
+retains only the most recent 1,000 records from the seven-day window and remains
+under a two-megabyte hard limit. An expired worker selection is not presented as
+current. Unsafe ownership, permissions, links, paths, or oversized evidence fail
+closed and produce no Dashboard status.
+
 ## Governance boundary
 
 Missing, stale, malformed, unreadable, or unavailable balance and usage-display

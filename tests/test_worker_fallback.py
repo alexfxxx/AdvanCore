@@ -164,6 +164,108 @@ def test_switching_projection_is_bounded_and_outside_worker_workspace(tmp_path: 
         )
 
 
+def test_switching_projection_compacts_expired_and_malformed_records(tmp_path: Path):
+    from advancore.agent_runner.auto_pipeline import write_switching_status_projection
+
+    repo_root = tmp_path / "repo"
+    repo_root.mkdir()
+    destination = tmp_path / "controller" / "worker-switches.jsonl"
+    destination.parent.mkdir()
+    destination.write_text(
+        json.dumps(
+            {
+                "timestamp": "2026-08-25T15:00:00+00:00",
+                "terminal_worker": "gemini",
+                "automatic_handoffs": [],
+            }
+        )
+        + "\n"
+        + ("not-json\n" * 1_000)
+        + json.dumps({"timestamp": None})
+        + "\n"
+        + json.dumps(
+            {
+                "timestamp": "2026-08-25T16:00:00+00:00",
+                "terminal_worker": "unapproved-worker",
+                "automatic_handoffs": [],
+            }
+        )
+        + "\n"
+        + json.dumps(
+            {
+                "timestamp": "2026-08-25T17:00:00+00:00",
+                "terminal_worker": "codex",
+                "automatic_handoffs": [
+                    {
+                        "previous_worker": "kimi-swarm",
+                        "next_worker": "codex",
+                        "reason": "capacity",
+                    }
+                ],
+            }
+        )
+        + "\n"
+        + json.dumps(
+            {
+                "timestamp": "2026-08-25T18:00:00+00:00",
+                "terminal_worker": "codex",
+                "automatic_handoffs": [
+                    {
+                        "previous_worker": "gemini",
+                        "next_worker": "codex",
+                        "reason": "capacity",
+                    },
+                    {
+                        "previous_worker": "kimi-swarm",
+                        "next_worker": "gemini",
+                        "reason": "authentication",
+                    },
+                ],
+            }
+        )
+        + "\n"
+        + json.dumps(
+            {
+                "timestamp": "2036-08-25T15:00:00+00:00",
+                "terminal_worker": "codex",
+                "automatic_handoffs": [],
+            }
+        )
+        + "\n"
+        + json.dumps(
+            {
+                "timestamp": "2026-08-18T15:00:00+00:00",
+                "terminal_worker": "kimi-swarm",
+                "automatic_handoffs": [],
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    destination.chmod(0o600)
+
+    write_switching_status_projection(
+        {
+            "timestamp": "2026-08-26T15:00:00+00:00",
+            "terminal_worker": "codex",
+            "automatic_handoffs": [
+                {
+                    "previous_worker": "gemini",
+                    "next_worker": "codex",
+                    "reason": "capacity",
+                }
+            ],
+        },
+        repo_root,
+        destination,
+    )
+
+    records = [
+        json.loads(line) for line in destination.read_text(encoding="utf-8").splitlines()
+    ]
+    assert [record["terminal_worker"] for record in records] == ["gemini", "codex"]
+
+
 def test_default_has_no_fallback():
     assert OrchestrationConfig().fallback_worker is None
 
