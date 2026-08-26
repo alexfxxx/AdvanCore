@@ -16,6 +16,10 @@ from advancore.services.worker_routing_evidence_service import (
     WorkerRoutingEvidenceService,
 )
 from advancore.services.worker_usage_service import WorkerUsageService
+from advancore.services.candidate_readiness_service import (
+    CandidateCheckState,
+    CandidateReadinessService,
+)
 
 
 def _worker_route_preview_service(root: Path) -> WorkerRoutePreviewService:
@@ -69,6 +73,29 @@ def _render_worker_governance(root: Path) -> None:
         )
 
 
+def _render_candidate_readiness() -> None:
+    st.subheader("Gemini setup readiness")
+    try:
+        summary = CandidateReadinessService().get_summary("gemini")
+    except Exception:
+        st.error("Gemini candidate readiness is unavailable. Gemini remains inactive.")
+        return
+    st.warning("Gemini is safely registered but not authenticated or active.")
+    st.write(summary.next_owner_action)
+    with st.expander("Gemini pre-authentication checklist"):
+        for check in summary.checks:
+            label = check.state.value.replace("_", " ").title()
+            st.write(f"{check.label} — {label}: {check.message}")
+    blocked = sum(check.state == CandidateCheckState.BLOCKED for check in summary.checks)
+    owner = sum(
+        check.state == CandidateCheckState.OWNER_REQUIRED for check in summary.checks
+    )
+    st.caption(
+        f"Owner-required checks: {owner}. Blocked follow-on checks: {blocked}. "
+        "Accounts probed: 0. Processes launched: 0."
+    )
+
+
 def render(repo_root: Path | None = None):
     st.header("AI Center")
     st.caption("Automation runs independently and pauses only when attention is required.")
@@ -96,3 +123,4 @@ def render(repo_root: Path | None = None):
                 else:
                     st.info("The local controller must investigate this item.")
     _render_worker_governance(root)
+    _render_candidate_readiness()

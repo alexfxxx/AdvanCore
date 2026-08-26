@@ -19,6 +19,7 @@ from advancore.agent_runner.worker_routing import (
     WorkerAvailability,
     WorkerAvailabilityEvidence,
 )
+from advancore.services.candidate_readiness_service import CandidateReadinessService
 
 
 def _run(inbox):
@@ -128,3 +129,20 @@ ai_center._render_worker_governance(Path.cwd())
     assert not app.exception
     assert any("No approved worker" in item.value for item in app.warning)
     assert any("zero workers launched" in item.value for item in app.success)
+
+
+def test_gemini_readiness_panel_requires_owner_and_remains_inactive():
+    script = """
+from advancore.pages import ai_center
+ai_center._render_candidate_readiness()
+"""
+    app = AppTest.from_string(script).run()
+    assert not app.exception
+    rendered = " ".join(
+        item.value for item in (*app.markdown, *app.warning, *app.caption)
+    )
+    assert "not authenticated or active" in rendered
+    assert "choose the Gemini access surface" in rendered
+    assert "Accounts probed: 0" in rendered
+    assert "Processes launched: 0" in rendered
+    assert CandidateReadinessService().get_summary("gemini").activation_allowed is False
