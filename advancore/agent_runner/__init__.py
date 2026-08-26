@@ -140,6 +140,7 @@ from advancore.agent_runner.worker_routing import (
     WorkerSelection,
     WorkerSelectionError,
     build_kimi_first_worker_route,
+    governed_worker_preferences,
     select_governed_worker,
 )
 from advancore.agent_runner.worker_rehearsal import (
@@ -314,6 +315,7 @@ __all__ = [
     "WorkerSelection",
     "WorkerSelectionError",
     "build_kimi_first_worker_route",
+    "governed_worker_preferences",
     "select_governed_worker",
     "MultiWorkerRehearsalReport",
     "RehearsalCheck",

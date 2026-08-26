@@ -110,6 +110,17 @@ _ROLE_PREFERENCES: dict[WorkerRole, tuple[str, ...]] = {
 }
 
 
+def governed_worker_preferences(role: WorkerRole | str) -> tuple[str, ...]:
+    """Return the immutable code-owned preference order for one routable role."""
+    try:
+        resolved_role = role if isinstance(role, WorkerRole) else WorkerRole(role)
+    except (TypeError, ValueError) as exc:
+        raise WorkerSelectionError("Worker role is not routable") from exc
+    if resolved_role not in _ROLE_PREFERENCES:
+        raise WorkerSelectionError("Worker role is not routable")
+    return _ROLE_PREFERENCES[resolved_role]
+
+
 def select_governed_worker(
     role: WorkerRole | str,
     evidence: tuple[WorkerAvailabilityEvidence, ...],
@@ -117,10 +128,9 @@ def select_governed_worker(
     """Select from fixed preferences using explicit controller evidence only."""
     try:
         resolved_role = role if isinstance(role, WorkerRole) else WorkerRole(role)
-    except (TypeError, ValueError) as exc:
+        preferences = governed_worker_preferences(resolved_role)
+    except (TypeError, ValueError, WorkerSelectionError) as exc:
         raise WorkerSelectionError("Worker role is not routable") from exc
-    if resolved_role not in _ROLE_PREFERENCES:
-        raise WorkerSelectionError("Worker role is not routable")
     if not isinstance(evidence, tuple):
         raise WorkerSelectionError("Worker availability evidence is invalid")
     by_worker: dict[str, WorkerAvailability] = {}
@@ -132,7 +142,7 @@ def select_governed_worker(
         by_worker[item.worker] = item.state
 
     considered: list[tuple[str, str]] = []
-    for name in _ROLE_PREFERENCES[resolved_role]:
+    for name in preferences:
         profile = get_worker_profile(name)
         state = by_worker.get(name, WorkerAvailability.UNAVAILABLE)
         if not profile.is_eligible(resolved_role):
