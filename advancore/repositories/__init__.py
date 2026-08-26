@@ -13,6 +13,7 @@ from advancore.repositories.route import RouteRepository
 from advancore.repositories.setting import SystemSettingRepository
 from advancore.repositories.vehicle import VehicleRepository
 from advancore.repositories.trip import TripRepository
+from advancore.repositories.trip_assignment import TripAssignmentRepository
 
 __all__ = [
     "ActivityLogRepository",
@@ -24,4 +25,5 @@ __all__ = [
     "SystemSettingRepository",
     "VehicleRepository",
     "TripRepository",
+    "TripAssignmentRepository",
 ]
