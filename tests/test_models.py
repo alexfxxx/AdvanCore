@@ -19,12 +19,14 @@ def test_model_package_imports():
         Base,
         KnowledgeItem,
         Project,
+        Route,
         SystemSetting,
         Vehicle,
     )
 
     assert Base is not None
     assert Project is not None
+    assert Route is not None
     assert KnowledgeItem is not None
     assert ActivityLog is not None
     assert Customer is not None
@@ -46,6 +48,7 @@ def test_expected_model_tables_registered():
     assert "vehicles" in table_names
     assert "drivers" in table_names
     assert "customers" in table_names
+    assert "routes" in table_names
 
 
 def test_knowledge_model_registers_bounded_approval_metadata():
