@@ -199,6 +199,7 @@ def test_three_worker_route_continues_kimi_to_gemini_to_codex(tmp_path: Path):
     ]
     assert any("kimi-swarm -> gemini" in item for item in result.messages)
     assert any("gemini -> codex" in item for item in result.messages)
+    assert any("Owner login required for gemini" in item for item in result.messages)
 
 
 @pytest.mark.parametrize("message", ["unexpected worker crash", "malformed output"])
