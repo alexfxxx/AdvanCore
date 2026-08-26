@@ -62,6 +62,8 @@ def test_list_and_get_delegate_to_repository():
         ("knowledge_replacement_created", "knowledge"),
         ("knowledge_superseded", "knowledge"),
         ("knowledge_archived", "knowledge"),
+        ("vehicle_created", "vehicle"),
+        ("vehicle_status_changed", "vehicle"),
     ],
 )
 def test_record_activity_accepts_only_approved_minimal_values(action, entity_type):

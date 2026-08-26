@@ -8,6 +8,7 @@ from advancore.pages import (
     ai_center,
     activity_log,
     settings,
+    operations,
 )
 from advancore.ui.theme import apply_command_center_theme
 
@@ -28,6 +29,7 @@ page = st.sidebar.radio(
         "Dashboard",
         "Knowledge Hub",
         "Projects",
+        "Transport Operations",
         "AI Center",
         "Activity Log",
         "Settings",
@@ -42,6 +44,9 @@ elif page == "Knowledge Hub":
 
 elif page == "Projects":
     projects.render()
+
+elif page == "Transport Operations":
+    operations.render()
 
 elif page == "AI Center":
     ai_center.render()
