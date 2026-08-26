@@ -164,6 +164,31 @@ def test_missing_malformed_or_preview_evidence_is_neutral(tmp_path):
     assert status.handoffs == ()
 
 
+def test_expired_selection_is_not_presented_as_current(tmp_path):
+    now = datetime(2026, 8, 26, tzinfo=timezone.utc)
+    repo_root = tmp_path / "repo"
+    repo_root.mkdir()
+    path = tmp_path / "controller" / "worker-switches.jsonl"
+    path.parent.mkdir(parents=True)
+    path.write_text(
+        json.dumps(
+            {
+                "timestamp": (now - timedelta(days=8)).isoformat(),
+                "terminal_worker": "codex",
+                "automatic_handoffs": [],
+            }
+        ),
+        encoding="utf-8",
+    )
+    path.chmod(0o600)
+
+    status = WorkerSwitchingStatusService(
+        repo_root, lambda: now, evidence_path=path
+    ).get_status()
+    assert status.selected_worker is None
+    assert status.handoffs == ()
+
+
 def test_workspace_receipt_cannot_forge_controller_switching_status(tmp_path):
     now = datetime(2026, 8, 26, tzinfo=timezone.utc)
     repo_root = tmp_path / "repo"
