@@ -8,6 +8,7 @@ from advancore.models.route import Route
 from advancore.models.setting import SystemSetting
 from advancore.models.vehicle import Vehicle
 from advancore.models.trip import Trip
+from advancore.models.trip_assignment import TripAssignment
 
 __all__ = [
     "Base",
@@ -20,4 +21,5 @@ __all__ = [
     "SystemSetting",
     "Vehicle",
     "Trip",
+    "TripAssignment",
 ]
