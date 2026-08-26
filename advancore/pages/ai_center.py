@@ -51,8 +51,8 @@ def _render_worker_governance(root: Path) -> None:
             for item in preview.evidence:
                 st.write(f"{item.worker}: {item.state.value.replace('_', ' ').title()}")
             st.caption(
-                "Gemini and Codex readiness are checked at actual launch. TASK-099 "
-                "will connect the approved three-worker continuation route."
+                "Gemini and Codex readiness are checked at actual launch. The fixed "
+                "continuation order is Kimi-Swarm, Gemini, then Codex."
             )
 
     st.subheader("Offline governance self-check")

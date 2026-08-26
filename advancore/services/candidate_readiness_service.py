@@ -89,8 +89,8 @@ class CandidateReadinessService:
                 activation_allowed=True,
                 checks=checks,
                 next_owner_action=(
-                    "No account action is required. TASK-099 will connect the "
-                    "Kimi, Gemini, then Codex runtime sequence."
+                    "No account action is required. The governed runtime order is "
+                    "Kimi, Gemini, then Codex."
                 ),
             )
         if profile.approval_state != WorkerApprovalState.CANDIDATE:

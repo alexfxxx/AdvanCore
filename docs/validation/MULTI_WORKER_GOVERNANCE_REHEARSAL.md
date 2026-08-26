@@ -8,8 +8,7 @@ The rehearsal verifies:
 
 - healthy Kimi-Swarm is preferred for implementation;
 - an explicitly paused Kimi-Swarm permits Codex selection;
-- Gemini has a fixed approved adapter but is not inserted into the runtime
-  route until TASK-099;
+- Gemini has a fixed approved adapter and is the second runtime worker;
 - missing evidence, unknown failures, and repository drift fail closed;
 - eligible provider failure permits exactly one Kimi-to-Codex transition; and
 - failure of the fallback stops instead of cycling workers.

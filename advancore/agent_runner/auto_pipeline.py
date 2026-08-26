@@ -200,8 +200,10 @@ class AutoPipelineResult:
     max_repair_attempts: int = 0
     primary_worker: str | None = None
     fallback_worker: str | None = None
+    fallback_workers: tuple[str, ...] = ()
     terminal_worker: str | None = None
     fallback_attempt: FallbackAttempt | None = None
+    fallback_attempts: list[FallbackAttempt] = field(default_factory=list)
     worker_timeout_seconds: int | None = None
     terminal_reason: str | None = None
     recovery_action: str | None = None
@@ -609,6 +611,7 @@ def build_auto_artifact_payload(result: AutoPipelineResult) -> dict[str, Any]:
         "worker_type": result.worker_type,
         "primary_worker": result.primary_worker,
         "fallback_worker": result.fallback_worker,
+        "fallback_workers": list(result.fallback_workers),
         "terminal_worker": result.terminal_worker,
         "fallback_attempt": (
             {
@@ -620,6 +623,16 @@ def build_auto_artifact_payload(result: AutoPipelineResult) -> dict[str, Any]:
             }
             if result.fallback_attempt else None
         ),
+        "fallback_attempts": [
+            {
+                "primary_worker": attempt.primary_worker,
+                "failure": attempt.failure.value,
+                "integrity_ok": attempt.integrity_ok,
+                "fallback_worker": attempt.fallback_worker,
+                "terminal_worker": attempt.terminal_worker,
+            }
+            for attempt in result.fallback_attempts
+        ],
         "worker_success": result.worker_result.success if result.worker_result else None,
         "worker_timeout_seconds": result.worker_timeout_seconds,
         "terminal_reason": result.terminal_reason,
@@ -712,7 +725,8 @@ def format_auto_pipeline_report(result: AutoPipelineResult) -> str:
 
     lines.append(f"Worker type:       {result.worker_type or 'n/a'}")
     lines.append(f"Primary worker:    {result.primary_worker or result.worker_type or 'n/a'}")
-    lines.append(f"Fallback worker:   {result.fallback_worker or 'none'}")
+    route = " -> ".join(result.fallback_workers) or result.fallback_worker or "none"
+    lines.append(f"Fallback route:    {route}")
     lines.append(f"Terminal worker:   {result.terminal_worker or result.worker_type or 'n/a'}")
     if result.fallback_attempt:
         lines.append(f"Primary failure:   {result.fallback_attempt.failure.value}")
@@ -1242,6 +1256,7 @@ def run_auto_pipeline(
     diff_check_runner: Callable[[Path], DiffCheckResult] | None = None,
     max_repair_attempts: int = 0,
     fallback_worker: WorkerAdapter | None = None,
+    fallback_workers: tuple[WorkerAdapter, ...] = (),
     rework_evidence: OwnerReworkEvidence | None = None,
 ) -> AutoPipelineResult:
     """Run the full governed auto-pipeline for *task_id* with optional repair.
@@ -1329,16 +1344,37 @@ def run_auto_pipeline(
                 independent_baseline.messages,
             )
 
-    if fallback_worker is not None:
-        validate_worker_policy(worker.name, fallback_worker.name)
-    for configured_worker in (worker, fallback_worker):
-        if configured_worker is not None and hasattr(configured_worker, "allowed_scope"):
+    if fallback_worker is not None and fallback_workers:
+        return _pre_failure(
+            AutoPipelineStatus.VALIDATION_FAILED,
+            ["FAIL: legacy fallback-worker cannot be mixed with fallback-workers"],
+        )
+    route_workers = fallback_workers or (
+        (fallback_worker,) if fallback_worker is not None else ()
+    )
+    route_names = tuple(item.name for item in route_workers)
+    if len(route_names) > 2 or len(set((worker.name, *route_names))) != 1 + len(route_names):
+        return _pre_failure(
+            AutoPipelineStatus.VALIDATION_FAILED,
+            ["FAIL: worker continuation route is duplicate or exceeds three workers"],
+        )
+    if len(route_names) == 2 and (
+        worker.name != "kimi-swarm" or route_names != ("gemini", "codex")
+    ):
+        return _pre_failure(
+            AutoPipelineStatus.VALIDATION_FAILED,
+            ["FAIL: multi-hop continuation must be kimi-swarm -> gemini -> codex"],
+        )
+    for configured_worker in route_workers:
+        validate_worker_policy(worker.name, configured_worker.name)
+    for configured_worker in (worker, *route_workers):
+        if hasattr(configured_worker, "allowed_scope"):
             configured_worker.allowed_scope = list(safe_allowed)
 
     # Step 3: launch worker via the existing runner execute path.
     # ``execute()`` validates branch/clean/status, captures pre/post Git snapshots,
     # writes an audit record, and produces a review bundle.
-    before_remotes = _remote_fingerprint(repo_root) if fallback_worker else None
+    before_remotes = _remote_fingerprint(repo_root) if route_workers else None
     runner_result = execute(
         tasks_dir,
         task_id,
@@ -1346,25 +1382,26 @@ def run_auto_pipeline(
         rework_evidence=rework_evidence,
     )
     primary_worker_name = worker.name
-    fallback_attempt: FallbackAttempt | None = None
+    fallback_attempts: list[FallbackAttempt] = []
 
-    if (
-        fallback_worker is not None
-        and runner_result.worker_result is not None
-        and not runner_result.worker_result.success
-        and runner_result.worker_result.terminal_reason not in {"timeout", "cancelled"}
-    ):
+    for next_worker in route_workers:
+        if (
+            runner_result.worker_result is None
+            or runner_result.worker_result.success
+            or runner_result.worker_result.terminal_reason in {"timeout", "cancelled"}
+        ):
+            break
         failure = classify_provider_failure(runner_result.worker_result)
         after_remotes = _remote_fingerprint(repo_root)
         integrity_ok, integrity_messages = _fallback_integrity_ok(
             runner_result, before_remotes, after_remotes
         )
-        fallback_attempt = FallbackAttempt(
-            primary_worker=primary_worker_name,
+        attempt = FallbackAttempt(
+            primary_worker=worker.name,
             failure=failure,
             integrity_ok=integrity_ok,
-            fallback_worker=fallback_worker.name if fallback_worker else None,
-            terminal_worker=primary_worker_name,
+            fallback_worker=next_worker.name,
+            terminal_worker=worker.name,
             messages=integrity_messages,
         )
         if failure != ProviderFailure.UNKNOWN and integrity_ok:
@@ -1379,27 +1416,35 @@ def run_auto_pipeline(
                     allowed_scope=safe_allowed,
                 )
             if fallback_baseline is not None and not fallback_baseline:
-                fallback_attempt.integrity_ok = False
-                fallback_attempt.messages.extend(fallback_baseline.messages)
-                fallback_attempt.messages.append(
+                attempt.integrity_ok = False
+                attempt.messages.extend(fallback_baseline.messages)
+                attempt.messages.append(
                     "Fallback blocked: reviewed baseline changed after primary worker"
                 )
+                fallback_attempts.append(attempt)
+                break
             else:
                 runner_result = execute(
                     tasks_dir,
                     task_id,
-                    worker=fallback_worker,
+                    worker=next_worker,
                     rework_evidence=rework_evidence,
                 )
-                worker = fallback_worker
-                fallback_attempt.terminal_worker = fallback_worker.name
-                fallback_attempt.messages.append(
-                    f"Fallback selected explicitly: {primary_worker_name} -> {fallback_worker.name}"
+                previous_worker = worker.name
+                worker = next_worker
+                attempt.terminal_worker = next_worker.name
+                attempt.messages.append(
+                    f"Fallback selected explicitly: {previous_worker} -> {next_worker.name}"
                 )
         else:
-            fallback_attempt.messages.append(
+            attempt.messages.append(
                 "Fallback blocked: failure classification or repository integrity was not eligible"
             )
+            fallback_attempts.append(attempt)
+            break
+        fallback_attempts.append(attempt)
+
+    fallback_attempt = fallback_attempts[-1] if fallback_attempts else None
 
     result = AutoPipelineResult(
         status=AutoPipelineStatus.READY_FOR_APPROVAL,
@@ -1419,9 +1464,11 @@ def run_auto_pipeline(
         messages=list(runner_result.messages or []),
         max_repair_attempts=repair_config.max_attempts,
         primary_worker=primary_worker_name,
-        fallback_worker=fallback_worker.name if fallback_worker else None,
+        fallback_worker=route_names[0] if route_names else None,
+        fallback_workers=route_names,
         terminal_worker=runner_result.worker_type,
         fallback_attempt=fallback_attempt,
+        fallback_attempts=fallback_attempts,
         worker_timeout_seconds=(
             runner_result.worker_result.timeout_seconds
             if runner_result.worker_result else None
@@ -1435,8 +1482,8 @@ def run_auto_pipeline(
             if runner_result.worker_result else None
         ),
     )
-    if fallback_attempt:
-        result.messages.extend(fallback_attempt.messages)
+    for attempt in fallback_attempts:
+        result.messages.extend(attempt.messages)
 
     if rework_evidence is not None:
         independent_terminal = validate_owner_rework_evidence(

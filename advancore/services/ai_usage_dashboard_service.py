@@ -346,7 +346,7 @@ class AiUsageDashboardService:
             return "Kimi", "Primary worker", "Kimi-first when budget allows"
         if provider == "codex":
             return profile.label, "Final approved fallback", "Used after Kimi and Gemini"
-        return profile.label, "Approved second worker", "Used after Kimi when TASK-099 is active"
+        return profile.label, "Approved second worker", "Used after Kimi"
 
     def _kimi(self) -> AiUsageCard:
         label, role, routing = self._role("kimi")

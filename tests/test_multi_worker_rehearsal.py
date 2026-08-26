@@ -13,7 +13,7 @@ def test_multi_worker_rehearsal_passes_without_launch_or_authority(tmp_path, mon
     assert report.passed
     assert report.workers_launched == 0
     assert not report.authority_consumed
-    assert len(report.checks) == 9
+    assert len(report.checks) == 10
     assert all(check.passed for check in report.checks)
 
 

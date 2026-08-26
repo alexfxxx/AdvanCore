@@ -1,9 +1,10 @@
 # Kimi-first worker routing
 
-Unattended implementation uses the fixed registered route Kimi-Swarm first and
-Codex second. Kimi still passes the TASK-044 fresh usage, weekly percentage,
-runtime and isolation checks. The existing auto-pipeline invokes Codex only for
-an eligible one-hop provider failure after repository integrity is unchanged.
+Unattended implementation uses the fixed registered route Kimi-Swarm first,
+Gemini second, and Codex last. Kimi still passes the TASK-044 fresh usage,
+weekly percentage, runtime and isolation checks. The auto-pipeline moves to the
+next worker only for an eligible provider failure after repository integrity is
+proven unchanged.
 
 Standing authority is consumed at actual launch. Fallback consumes a separate
 approved-fallback action. Neither route receives new credentials or approval,
@@ -37,9 +38,9 @@ approval and role eligibility are checked before a name can be selected.
 
 Selection does not consume standing authority or start a process. The selected
 adapter must still pass the established credential, usage, isolation,
-repository-integrity, timeout, and launch checks. TASK-098 activates the Gemini
-adapter but deliberately leaves the current runtime route unchanged. TASK-099
-will replace the one-hop route with Kimi-Swarm, Gemini, then Codex.
+repository-integrity, timeout, and launch checks. An unreadable balance is not
+itself a launch failure; executable, authentication, quota, and capacity facts
+are classified from the bounded launch result.
 
 ## Safe failover checkpoint
 
@@ -50,6 +51,6 @@ credential, or raw provider error.
 
 Advancement requires the exact selected worker, an eligible classified failure,
 an unchanged fingerprint, and a different available approved worker from the
-fixed selection policy. The run is limited to a primary plus one fallback.
+fixed selection policy. The run is limited to a primary plus two fallbacks.
 Checkpoint selection and persistence do not launch workers or consume standing
 authority; runtime pipeline integrity checks still apply.

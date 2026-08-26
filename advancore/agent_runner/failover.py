@@ -21,7 +21,7 @@ from advancore.agent_runner.worker_routing import (
 
 
 FAILOVER_SCHEMA_VERSION = 1
-MAX_FAILOVER_WORKERS = 2
+MAX_FAILOVER_WORKERS = 3
 _RUN_ID = re.compile(r"FAILOVER-[A-Za-z0-9][A-Za-z0-9-]{0,63}")
 _TASK_ID = re.compile(r"TASK-[0-9]{3,6}")
 _BRANCH = re.compile(r"[A-Za-z0-9][A-Za-z0-9._/-]{0,199}")

@@ -1705,7 +1705,8 @@ def _phase_task_execution(
             timeout_seconds=config.worker_timeout_seconds,
         )
         worker = route.primary
-        fallback_worker = route.fallback
+        fallback_worker = None
+        fallback_workers = route.fallbacks
     else:
         worker = build_worker_adapter(
             config.worker, allowed_scope=allowed_scope,
@@ -1718,6 +1719,7 @@ def _phase_task_execution(
             )
             if config.fallback_worker else None
         )
+        fallback_workers = ()
 
     if not config.apply:
         return _build_result(
@@ -1767,6 +1769,7 @@ def _phase_task_execution(
         checkpoint.task_id,
         worker=worker,
         fallback_worker=fallback_worker,
+        fallback_workers=fallback_workers,
         max_repair_attempts=config.repair_attempts,
         rework_evidence=rework_evidence,
     )

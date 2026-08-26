@@ -18,7 +18,7 @@ def test_gemini_activation_summary_records_completed_owner_gates():
     checks = {check.key: check for check in summary.checks}
     assert "Antigravity CLI" in checks["provider_surface"].message
     assert "authentication" in checks["authentication"].message
-    assert "TASK-099" in summary.next_owner_action
+    assert "Kimi, Gemini, then Codex" in summary.next_owner_action
 
 
 def test_activation_does_not_infer_subscription_balance_or_api_billing():

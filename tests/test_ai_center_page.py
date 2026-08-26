@@ -142,7 +142,7 @@ ai_center._render_candidate_readiness()
         item.value for item in (*app.markdown, *app.success, *app.caption)
     )
     assert "authenticated and owner-approved" in rendered
-    assert "TASK-099" in rendered
+    assert "Kimi, Gemini, then Codex" in rendered
     assert "Accounts probed by this view: 0" in rendered
     assert "Processes launched by this view: 0" in rendered
     assert CandidateReadinessService().get_summary("gemini").activation_allowed is True
