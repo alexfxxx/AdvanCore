@@ -367,7 +367,10 @@ def test_recovery_status_distinguishes_latest_older_and_missing(monkeypatch, tmp
         "_recovery_evidence_service",
         lambda: FakeEvidenceService(_recovery_evidence(record.backup_id)),
     )
-    settings._render_recovery_evidence(inventory)
+    settings._render_recovery_evidence(
+        inventory,
+        now_provider=lambda: datetime(2026, 8, 27, tzinfo=timezone.utc),
+    )
     assert "Latest valid backup passed" in latest_st.text()
     assert "4 required tables" in latest_st.text()
 
@@ -380,7 +383,10 @@ def test_recovery_status_distinguishes_latest_older_and_missing(monkeypatch, tmp
             _recovery_evidence("advancore-20260825T010203Z-00000000")
         ),
     )
-    settings._render_recovery_evidence(inventory)
+    settings._render_recovery_evidence(
+        inventory,
+        now_provider=lambda: datetime(2026, 8, 27, tzinfo=timezone.utc),
+    )
     assert "does not prove the latest" in older_st.text()
 
     missing_st = FakeStreamlit()
@@ -388,8 +394,31 @@ def test_recovery_status_distinguishes_latest_older_and_missing(monkeypatch, tmp
     monkeypatch.setattr(
         settings, "_recovery_evidence_service", lambda: FakeEvidenceService()
     )
-    settings._render_recovery_evidence(inventory)
+    settings._render_recovery_evidence(
+        inventory,
+        now_provider=lambda: datetime(2026, 8, 27, tzinfo=timezone.utc),
+    )
     assert "No saved disposable" in missing_st.text()
+
+
+def test_recovery_status_marks_expired_evidence_as_not_current(monkeypatch, tmp_path):
+    record = _backup_record(tmp_path)
+    inventory = BackupInventory((record,), 0, record.size_bytes)
+    fake_st = FakeStreamlit()
+    monkeypatch.setattr(settings, "st", fake_st)
+    monkeypatch.setattr(
+        settings,
+        "_recovery_evidence_service",
+        lambda: FakeEvidenceService(_recovery_evidence(record.backup_id)),
+    )
+
+    settings._render_recovery_evidence(
+        inventory,
+        now_provider=lambda: datetime(2026, 9, 26, tzinfo=timezone.utc),
+    )
+
+    assert "more than 30 days old" in fake_st.text()
+    assert "Latest valid backup passed" not in fake_st.text()
 
 
 def test_invalid_recovery_evidence_is_secret_safe(monkeypatch):

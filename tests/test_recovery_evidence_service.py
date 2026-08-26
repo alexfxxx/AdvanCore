@@ -5,7 +5,9 @@ import pytest
 
 from advancore.services.recovery_evidence_service import (
     RecoveryEvidenceError,
+    RecoveryEvidence,
     RecoveryEvidenceService,
+    recovery_evidence_is_fresh,
 )
 
 
@@ -42,6 +44,51 @@ def test_record_and_load_strict_secret_free_receipt(tmp_path):
 
 def test_missing_receipt_is_truthfully_absent(tmp_path):
     assert service(tmp_path).load() is None
+
+
+def test_freshness_is_bounded_to_thirty_days_and_rejects_future_dates():
+    current = RecoveryEvidence(
+        1,
+        RECOVERY_REFERENCE,
+        NOW - timedelta(days=30),
+        MIGRATION_REFERENCE,
+        4,
+        True,
+    )
+    assert recovery_evidence_is_fresh(current, NOW)
+    assert not recovery_evidence_is_fresh(
+        RecoveryEvidence(
+            1,
+            RECOVERY_REFERENCE,
+            NOW - timedelta(days=30, seconds=1),
+            MIGRATION_REFERENCE,
+            4,
+            True,
+        ),
+        NOW,
+    )
+    assert not recovery_evidence_is_fresh(
+        RecoveryEvidence(
+            1,
+            RECOVERY_REFERENCE,
+            None,
+            MIGRATION_REFERENCE,
+            4,
+            True,
+        ),
+        NOW,
+    )
+    assert not recovery_evidence_is_fresh(
+        RecoveryEvidence(
+            1,
+            RECOVERY_REFERENCE,
+            NOW + timedelta(seconds=1),
+            MIGRATION_REFERENCE,
+            4,
+            True,
+        ),
+        NOW,
+    )
 
 
 @pytest.mark.parametrize(
