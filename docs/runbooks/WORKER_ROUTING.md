@@ -10,6 +10,21 @@ Standing authority is consumed at actual launch. Fallback consumes a separate
 approved-fallback action. Neither route receives new credentials or approval,
 merge, `main`, deployment, business or compliance authority.
 
+## Start-of-day authentication readiness
+
+Each new local Dashboard session runs fixed non-generative CLI checks for Kimi,
+Gemini, and Codex. The checks use provider/configuration listing or login-status
+commands, never a model prompt. Results are retained only in the Streamlit
+session and can be rerun with **Refresh dashboard**. Raw output is discarded;
+credentials, tokens, account identifiers, and provider error details are not
+shown or stored.
+
+When login is required, the Dashboard tells the owner which local CLI login
+command to run. AdvanCore never accepts the password, OAuth code, or token.
+Authentication failure during work is also labelled as owner-login-required;
+after repository integrity passes, the workflow may continue to the next worker
+in the fixed Kimi, Gemini, Codex order.
+
 ## Activated Gemini implementation worker
 
 Gemini uses the fixed local `agy` Antigravity CLI after owner-present Google
@@ -32,8 +47,8 @@ classified at launch.
 
 Selection is separate from launch. For each bounded role, AdvanCore owns a
 fixed preference order and accepts only explicit controller availability
-evidence. Implementation prefers Kimi-Swarm and then Codex; planning prefers
-Kimi and then Codex. Missing or stale evidence is unavailable. Registry
+evidence. Implementation prefers Kimi-Swarm, Gemini, and then Codex; planning
+prefers Kimi and then Codex. Missing or stale evidence is unavailable. Registry
 approval and role eligibility are checked before a name can be selected.
 
 Selection does not consume standing authority or start a process. The selected

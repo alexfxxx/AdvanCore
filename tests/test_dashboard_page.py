@@ -13,6 +13,10 @@ from advancore.services.ai_usage_dashboard_service import (
     AiUsageCard,
     BalanceState,
 )
+from advancore.services.worker_auth_readiness_service import (
+    WorkerAuthReadiness,
+    WorkerAuthState,
+)
 from advancore.services.platform_readiness_service import (
     PlatformReadinessSummary,
     ReadinessItem,
@@ -101,6 +105,29 @@ class FakeAiUsageService:
         return self.cards
 
 
+class FakeAuthService:
+    def __init__(self, results):
+        self.results = results
+        self.calls = 0
+
+    def check_all(self):
+        self.calls += 1
+        return self.results
+
+
+def _auth_results(state=WorkerAuthState.AUTHENTICATED):
+    return tuple(
+        WorkerAuthReadiness(
+            worker,
+            label,
+            state,
+            "bounded",
+            None if state == WorkerAuthState.AUTHENTICATED else f"Log in to {label}",
+        )
+        for worker, label in (("kimi", "Kimi"), ("gemini", "Gemini"), ("codex", "Codex"))
+    )
+
+
 def _usage_cards(
     *,
     kimi_state=BalanceState.UNAVAILABLE,
@@ -181,6 +208,7 @@ def _install(
     service,
     usage_cards=None,
     preference_service=None,
+    auth_service=None,
 ):
     preferences = preference_service or FakePreferenceService()
 
@@ -199,6 +227,11 @@ def _install(
         dashboard,
         "_ai_usage_dashboard_service",
         lambda: FakeAiUsageService(usage_cards or _usage_cards()),
+    )
+    monkeypatch.setattr(
+        dashboard,
+        "_worker_auth_readiness_service",
+        lambda: auth_service or FakeAuthService(_auth_results()),
     )
     monkeypatch.setattr(dashboard, "_render_fuel_visual_foundation", lambda: None)
     monkeypatch.setattr(dashboard, "_render_platform_readiness", lambda: None)
@@ -298,7 +331,9 @@ def test_no_visible_modules_has_recovery_message_and_skips_data_load(monkeypatch
     )
     dashboard.render()
     assert "No dashboard functions are visible" in fake_st.text()
-    assert not fake_st.spinner_labels
+    assert fake_st.spinner_labels == [
+        "Checking AI logins without sending a model request..."
+    ]
 
 
 def test_save_and_reset_controls_use_bounded_preference_service(monkeypatch):
@@ -394,6 +429,41 @@ def test_dashboard_labels_gemini_tokens_as_observed_not_balance(monkeypatch):
     assert ("Gemini last request", "31,142 tokens") in fake_st.metrics
     assert ("Gemini authentication", "Verified") in fake_st.metrics
     assert "measured request usage" in fake_st.text()
+
+
+def test_start_of_day_auth_check_runs_once_per_session_and_requests_login(monkeypatch):
+    fake_st = FakeStreamlit()
+    auth = FakeAuthService(_auth_results(WorkerAuthState.LOGIN_REQUIRED))
+    _install(
+        monkeypatch,
+        fake_st,
+        FakeService(_summary()),
+        auth_service=auth,
+    )
+
+    dashboard.render()
+    dashboard.render()
+
+    assert auth.calls == 1
+    assert "Kimi: please log in before planning begins" in fake_st.text()
+    assert "Log in to Gemini" in fake_st.text()
+
+
+def test_dashboard_refresh_rechecks_ai_authentication(monkeypatch):
+    fake_st = FakeStreamlit(buttons={"Refresh dashboard": True})
+    auth = FakeAuthService(_auth_results())
+    _install(
+        monkeypatch,
+        fake_st,
+        FakeService(_summary()),
+        auth_service=auth,
+    )
+    fake_st.session_state[dashboard._AI_AUTH_SESSION_KEY] = _auth_results()
+
+    dashboard.render()
+
+    assert auth.calls == 1
+    assert "Kimi: authenticated" in fake_st.text()
 
 
 def test_preference_load_failure_shows_defaults_without_leak(monkeypatch):

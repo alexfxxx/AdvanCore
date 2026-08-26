@@ -36,6 +36,10 @@ from advancore.services.platform_readiness_service import (
 from advancore.services.readiness_service import ReadinessService
 from advancore.services.recovery_evidence_service import RecoveryEvidenceService
 from advancore.services.worker_usage_service import WorkerUsageService
+from advancore.services.worker_auth_readiness_service import (
+    WorkerAuthReadinessService,
+    WorkerAuthState,
+)
 from advancore.ui.custom_components import render_fuel_status_component
 from advancore.ui.fuel_trends import ALLOWED_FUEL_WINDOWS, build_fuel_trend_figure
 
@@ -58,6 +62,7 @@ _FUEL_WINDOW_LABELS = {
     None: "All available readings",
 }
 _FUEL_WINDOW_STATE_KEY = "dashboard_fuel_window"
+_AI_AUTH_SESSION_KEY = "dashboard_ai_auth_readiness"
 
 
 @contextmanager
@@ -89,6 +94,41 @@ def _ai_usage_dashboard_service() -> AiUsageDashboardService:
     return AiUsageDashboardService(
         _worker_usage_service(),
         ProviderUsageObservationStore(root),
+    )
+
+
+def _worker_auth_readiness_service() -> WorkerAuthReadinessService:
+    return WorkerAuthReadinessService()
+
+
+def _render_start_of_day_ai_readiness() -> None:
+    st.subheader("Start-of-day AI readiness")
+    if _AI_AUTH_SESSION_KEY not in st.session_state:
+        try:
+            with st.spinner("Checking AI logins without sending a model request..."):
+                st.session_state[_AI_AUTH_SESSION_KEY] = (
+                    _worker_auth_readiness_service().check_all()
+                )
+        except Exception:
+            st.session_state[_AI_AUTH_SESSION_KEY] = ()
+    results = st.session_state[_AI_AUTH_SESSION_KEY]
+    if not results:
+        st.warning("AI login readiness could not be checked safely.")
+        return
+    for result in results:
+        if result.state == WorkerAuthState.AUTHENTICATED:
+            st.success(f"{result.label}: authenticated.")
+        elif result.state == WorkerAuthState.LOGIN_REQUIRED:
+            st.warning(f"{result.label}: please log in before planning begins.")
+            if result.login_instruction:
+                st.write(result.login_instruction)
+        else:
+            st.warning(f"{result.label}: readiness could not be confirmed.")
+            if result.login_instruction:
+                st.write(result.login_instruction)
+    st.caption(
+        "These checks do not send a model prompt, collect credentials, or change "
+        "the Kimi → Gemini → Codex routing order."
     )
 
 
@@ -380,12 +420,15 @@ def _render_fuel_visual_foundation() -> None:
 def render():
     st.header("Executive Command Center")
     st.caption("Real AdvanCore status only — no placeholder business figures.")
-    if st.button(
+    refresh_requested = st.button(
         "Refresh dashboard",
         key="dashboard_refresh",
         help="Reload the latest available dashboard data and local status.",
-    ):
+    )
+    if refresh_requested:
+        st.session_state.pop(_AI_AUTH_SESSION_KEY, None)
         st.success("Dashboard refreshed with the latest available data.")
+    _render_start_of_day_ai_readiness()
     preferences = _load_preferences()
     _render_customizer(preferences)
     visible = set(preferences.modules)

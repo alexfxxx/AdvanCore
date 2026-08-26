@@ -1404,6 +1404,11 @@ def run_auto_pipeline(
             terminal_worker=worker.name,
             messages=integrity_messages,
         )
+        if failure == ProviderFailure.AUTHENTICATION_UNAVAILABLE:
+            attempt.messages.append(
+                f"Owner login required for {worker.name}; continuing to the next "
+                "approved worker after integrity checks."
+            )
         if failure != ProviderFailure.UNKNOWN and integrity_ok:
             fallback_baseline = None
             if rework_evidence is not None:
@@ -1484,6 +1489,16 @@ def run_auto_pipeline(
     )
     for attempt in fallback_attempts:
         result.messages.extend(attempt.messages)
+    if (
+        result.worker_result is not None
+        and not result.worker_result.success
+        and classify_provider_failure(result.worker_result)
+        == ProviderFailure.AUTHENTICATION_UNAVAILABLE
+    ):
+        result.messages.append(
+            f"Owner login required for {result.terminal_worker or 'the AI worker'} "
+            "before its next use."
+        )
 
     if rework_evidence is not None:
         independent_terminal = validate_owner_rework_evidence(
