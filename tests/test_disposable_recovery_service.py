@@ -76,6 +76,20 @@ def service(tmp_path: Path, runner: Runner, url: str = "postgresql://user:secret
     )
 
 
+class EvidenceRecorder:
+    def __init__(self, runner, fails=False):
+        self.runner = runner
+        self.fails = fails
+        self.calls = []
+
+    def record(self, **kwargs):
+        from advancore.services.recovery_evidence_service import RecoveryEvidenceError
+
+        self.calls.append((kwargs, Path(self.runner.calls[-1][0][0]).name))
+        if self.fails:
+            raise RecoveryEvidenceError("secret local detail")
+
+
 def test_rehearsal_restores_verifies_and_drops_only_generated_database(tmp_path):
     runner = Runner()
     result = service(tmp_path, runner).rehearse_latest()
@@ -173,3 +187,64 @@ def test_raw_subprocess_error_is_never_exposed(tmp_path):
     with pytest.raises(DisposableRecoveryError) as caught:
         service(tmp_path, runner).rehearse_latest()
     assert "secret-error" not in str(caught.value)
+
+
+def test_evidence_is_recorded_only_after_cleanup(tmp_path):
+    runner = Runner()
+    archive = tmp_path / "backup.dump"
+    archive.write_bytes(b"PGDMP-test")
+    backup = BackupService(archive)
+    backup.verify_latest = lambda: SimpleNamespace(
+        backup_id="advancore-20260826T010203Z-00000000",
+        archive_path=archive,
+    )
+    evidence = EvidenceRecorder(runner)
+    instance = DisposableRecoveryService(
+        tmp_path,
+        "postgresql://user:secret@localhost/live",
+        backup,
+        evidence,
+        clock=lambda: datetime(2026, 8, 26, 1, 2, 3, tzinfo=timezone.utc),
+        token_factory=lambda: "deadbeef",
+        tool_finder=tools,
+        command_runner=runner,
+    )
+
+    instance.rehearse_latest()
+
+    assert evidence.calls == [
+        (
+            {
+                "backup_id": "advancore-20260826T010203Z-00000000",
+                "migration_head": "a94f8b17d6e2",
+                "required_table_count": 4,
+                "cleanup_confirmed": True,
+            },
+            "dropdb",
+        )
+    ]
+
+
+def test_failed_rehearsal_never_records_evidence(tmp_path):
+    runner = Runner(fail_tool="pg_restore")
+    evidence = EvidenceRecorder(runner)
+    instance = service(tmp_path, runner)
+    instance._evidence_service = evidence
+    with pytest.raises(DisposableRecoveryError):
+        instance.rehearse_latest()
+    assert evidence.calls == []
+
+
+def test_evidence_failure_is_bounded_after_confirmed_cleanup(tmp_path):
+    runner = Runner()
+    evidence = EvidenceRecorder(runner, fails=True)
+    instance = service(tmp_path, runner)
+    instance._backup_service.verify_latest = lambda: SimpleNamespace(
+        backup_id="advancore-20260826T010203Z-00000000",
+        archive_path=instance._backup_service.archive,
+    )
+    instance._evidence_service = evidence
+    with pytest.raises(DisposableRecoveryError, match="evidence could not be recorded") as caught:
+        instance.rehearse_latest()
+    assert "secret" not in str(caught.value)
+    assert evidence.calls[0][1] == "dropdb"

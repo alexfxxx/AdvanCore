@@ -78,6 +78,12 @@ the exact disposable database it generated. Every post-creation failure still
 attempts that exact cleanup. An ambiguous container or unconfirmed cleanup
 fails closed.
 
+After cleanup is confirmed, the command records one strict local receipt under
+the Git-ignored controller state directory. The receipt contains only the
+backup identity, completion time, migration head, number of required tables,
+and cleanup confirmation. A failed rehearsal or unconfirmed cleanup never
+creates success evidence.
+
 If an actual recovery is needed:
 
 1. Stop business changes and preserve the current volume and backup folder.

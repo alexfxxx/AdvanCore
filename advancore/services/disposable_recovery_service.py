@@ -20,6 +20,10 @@ from advancore.services.local_backup_service import (
     LocalBackupError,
     LocalBackupService,
 )
+from advancore.services.recovery_evidence_service import (
+    RecoveryEvidenceError,
+    RecoveryEvidenceService,
+)
 
 
 _LOOPBACK_HOSTS = {"localhost", "127.0.0.1", "::1"}
@@ -55,6 +59,7 @@ class DisposableRecoveryService:
         repository_root: Path,
         database_url: str,
         backup_service: LocalBackupService,
+        evidence_service: RecoveryEvidenceService | None = None,
         *,
         clock: Callable[[], datetime] | None = None,
         token_factory: Callable[[], str] | None = None,
@@ -70,6 +75,7 @@ class DisposableRecoveryService:
             database_url
         )
         self._backup_service = backup_service
+        self._evidence_service = evidence_service
         self._clock = clock or (lambda: datetime.now(timezone.utc))
         self._token_factory = token_factory or (lambda: secrets.token_hex(4))
         self._tool_finder = tool_finder
@@ -328,9 +334,22 @@ class DisposableRecoveryService:
             raise DisposableRecoveryError(
                 "Disposable recovery rehearsal did not pass."
             ) from rehearsal_error
-        return DisposableRecoveryResult(
+        result = DisposableRecoveryResult(
             backup_id=backup.backup_id,
             migration_head=migration,
             table_counts=counts,
             cleanup_confirmed=True,
         )
+        if self._evidence_service is not None:
+            try:
+                self._evidence_service.record(
+                    backup_id=result.backup_id,
+                    migration_head=result.migration_head,
+                    required_table_count=len(result.table_counts),
+                    cleanup_confirmed=result.cleanup_confirmed,
+                )
+            except RecoveryEvidenceError as exc:
+                raise DisposableRecoveryError(
+                    "Recovery rehearsal passed, but its local evidence could not be recorded."
+                ) from exc
+        return result

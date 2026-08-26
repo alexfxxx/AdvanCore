@@ -16,6 +16,7 @@ if str(REPOSITORY_ROOT) not in sys.path:
 
 from advancore.services.disposable_recovery_service import DisposableRecoveryService
 from advancore.services.local_backup_service import LocalBackupService
+from advancore.services.recovery_evidence_service import RecoveryEvidenceService
 
 
 def _service_from_environment() -> DisposableRecoveryService:
@@ -27,7 +28,10 @@ def _service_from_environment() -> DisposableRecoveryService:
         REPOSITORY_ROOT, database_url, backup_directory
     )
     return DisposableRecoveryService(
-        REPOSITORY_ROOT, database_url, backup_service
+        REPOSITORY_ROOT,
+        database_url,
+        backup_service,
+        RecoveryEvidenceService(REPOSITORY_ROOT),
     )
 
 
