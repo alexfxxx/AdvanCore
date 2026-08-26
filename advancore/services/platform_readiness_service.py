@@ -4,11 +4,15 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from enum import Enum
 
 from advancore.services.local_backup_service import BackupInventory
 from advancore.services.readiness_service import ReadinessSummary
-from advancore.services.recovery_evidence_service import RecoveryEvidence
+from advancore.services.recovery_evidence_service import (
+    RecoveryEvidence,
+    recovery_evidence_is_fresh,
+)
 
 
 class ReadinessLevel(str, Enum):
@@ -39,10 +43,12 @@ class PlatformReadinessService:
         database_summary: Callable[[], ReadinessSummary],
         backup_inventory: Callable[[], BackupInventory],
         recovery_evidence: Callable[[], RecoveryEvidence | None],
+        now_provider: Callable[[], datetime] = lambda: datetime.now(timezone.utc),
     ):
         self._database_summary = database_summary
         self._backup_inventory = backup_inventory
         self._recovery_evidence = recovery_evidence
+        self._now_provider = now_provider
 
     def _database_item(self) -> ReadinessItem:
         try:
@@ -131,6 +137,13 @@ class PlatformReadinessService:
                 "Recovery proof",
                 ReadinessLevel.ATTENTION,
                 "No disposable recovery evidence is available.",
+            )
+        elif not recovery_evidence_is_fresh(evidence, self._now_provider()):
+            recovery = ReadinessItem(
+                "recovery",
+                "Recovery proof",
+                ReadinessLevel.ATTENTION,
+                "Disposable recovery proof is more than 30 days old.",
             )
         elif not inventory.records or evidence.backup_id != inventory.records[0].backup_id:
             recovery = ReadinessItem(

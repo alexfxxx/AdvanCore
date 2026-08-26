@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import asdict, dataclass
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 import json
 import os
 from pathlib import Path
@@ -16,6 +16,7 @@ RECOVERY_EVIDENCE_SCHEMA_VERSION = 1
 _BACKUP_ID = re.compile(r"advancore-\d{8}T\d{6}Z-[0-9a-f]{8}")
 _MIGRATION_HEAD = re.compile(r"[A-Za-z0-9_]{1,64}")
 _MAX_EVIDENCE_BYTES = 16_384
+RECOVERY_EVIDENCE_MAX_AGE = timedelta(days=30)
 _EVIDENCE_KEYS = {
     "schema_version",
     "backup_id",
@@ -38,6 +39,27 @@ class RecoveryEvidence:
     migration_head: str
     required_table_count: int
     cleanup_confirmed: bool
+
+
+def recovery_evidence_is_fresh(
+    evidence: RecoveryEvidence,
+    now: datetime,
+    *,
+    max_age: timedelta = RECOVERY_EVIDENCE_MAX_AGE,
+) -> bool:
+    """Return true only for bounded, past-or-present recovery evidence."""
+    if (
+        not isinstance(evidence, RecoveryEvidence)
+        or not isinstance(now, datetime)
+        or not isinstance(evidence.completed_at, datetime)
+        or evidence.completed_at.tzinfo is None
+        or now.tzinfo is None
+        or not isinstance(max_age, timedelta)
+        or max_age <= timedelta(0)
+    ):
+        return False
+    age = now.astimezone(timezone.utc) - evidence.completed_at.astimezone(timezone.utc)
+    return timedelta(0) <= age <= max_age
 
 
 class RecoveryEvidenceService:

@@ -1,7 +1,9 @@
 """Local application readiness and owner-triggered backup controls."""
 
+from datetime import datetime, timezone
 import os
 from pathlib import Path
+from typing import Callable
 
 import streamlit as st
 from dotenv import load_dotenv
@@ -13,7 +15,10 @@ from advancore.services.local_backup_service import (
 )
 from advancore.services.disposable_recovery_service import DisposableRecoveryService
 from advancore.services.readiness_service import ReadinessService
-from advancore.services.recovery_evidence_service import RecoveryEvidenceService
+from advancore.services.recovery_evidence_service import (
+    RecoveryEvidenceService,
+    recovery_evidence_is_fresh,
+)
 
 
 def _readiness_service() -> ReadinessService:
@@ -86,7 +91,10 @@ def _render_backup_inventory(inventory: BackupInventory) -> None:
         )
 
 
-def _render_recovery_evidence(inventory: BackupInventory) -> None:
+def _render_recovery_evidence(
+    inventory: BackupInventory,
+    now_provider: Callable[[], datetime] = lambda: datetime.now(timezone.utc),
+) -> None:
     try:
         evidence = _recovery_evidence_service().load()
     except Exception:
@@ -100,7 +108,12 @@ def _render_recovery_evidence(inventory: BackupInventory) -> None:
         return
     completed = evidence.completed_at.strftime("%Y-%m-%d %H:%M UTC")
     latest = inventory.records[0] if inventory.records else None
-    if latest is not None and latest.backup_id == evidence.backup_id:
+    if not recovery_evidence_is_fresh(evidence, now_provider()):
+        st.warning(
+            "The last disposable recovery rehearsal is more than 30 days old. "
+            "Run a new rehearsal before treating recovery as current."
+        )
+    elif latest is not None and latest.backup_id == evidence.backup_id:
         st.success(
             "Latest valid backup passed a disposable recovery rehearsal at "
             f"{completed}; cleanup was confirmed."

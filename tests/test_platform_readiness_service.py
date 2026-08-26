@@ -27,6 +27,7 @@ def build(database, inventory, recovery):
         lambda: database,
         lambda: inventory,
         lambda: recovery,
+        lambda: NOW,
     ).get_summary()
 
 
@@ -77,3 +78,22 @@ def test_invalid_backup_entries_are_visible_attention():
     assert summary.overall == ReadinessLevel.ATTENTION
     assert summary.items[1].level == ReadinessLevel.ATTENTION
     assert summary.items[2].level == ReadinessLevel.READY
+
+
+def test_expired_recovery_proof_needs_attention():
+    expired = RecoveryEvidence(
+        1,
+        RECOVERY_REFERENCE,
+        NOW.replace(year=2025),
+        "migration_head_fixture",
+        4,
+        True,
+    )
+    summary = build(
+        ReadinessSummary(True, True),
+        BackupInventory((record(),), 0, 10),
+        expired,
+    )
+    assert summary.overall == ReadinessLevel.ATTENTION
+    assert summary.items[2].level == ReadinessLevel.ATTENTION
+    assert "30 days" in summary.items[2].message
