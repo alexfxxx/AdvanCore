@@ -20,6 +20,8 @@ _APPROVED_ACTION_ENTITIES = {
     "knowledge_replacement_created": "knowledge",
     "knowledge_superseded": "knowledge",
     "knowledge_archived": "knowledge",
+    "vehicle_created": "vehicle",
+    "vehicle_status_changed": "vehicle",
 }
 
 
