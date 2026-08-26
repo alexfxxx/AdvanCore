@@ -1,4 +1,5 @@
 from advancore.models.activity import ActivityLog
+from advancore.models.driver import Driver
 from advancore.models.base import Base
 from advancore.models.knowledge import KnowledgeItem
 from advancore.models.project import Project
@@ -7,6 +8,7 @@ from advancore.models.vehicle import Vehicle
 
 __all__ = [
     "Base",
+    "Driver",
     "Project",
     "KnowledgeItem",
     "ActivityLog",
