@@ -47,6 +47,15 @@ from advancore.agent_runner.worker import build_kimi_swarm_instruction
 from advancore.agent_runner.git_info import GitInfo
 
 
+@pytest.fixture(autouse=True)
+def _isolate_switching_status_projection(monkeypatch, tmp_path):
+    destination = tmp_path / "controller" / "worker-switches.jsonl"
+    monkeypatch.setattr(
+        "advancore.agent_runner.auto_pipeline.default_switching_status_path",
+        lambda: destination,
+    )
+
+
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------

@@ -69,7 +69,9 @@ The current Dashboard exposes provider balance, weekly percentage, token-count, 
 - `tests/test_worker_route_preview_service.py`
 - `tests/test_worker_routing_evidence_service.py`
 - `tests/test_ai_usage_dashboard_service.py`
+- `tests/test_auto_pipeline.py`
 - `tests/test_worker_fallback.py`
+- `tests/test_worker_fallback_integration.py`
 
 ## Database impact
 
@@ -163,6 +165,9 @@ None
   boundaries unchanged.
 - Made the runner's pytest launcher use the active Python interpreter when a
   worktree-local virtual environment is absent.
+- Repaired Bugbot findings by projecting switch evidence into OS-account-wide,
+  worker-inaccessible controller state and preserving genuine fallback
+  metadata through autonomous repair.
 
 ### Files changed
 
@@ -172,7 +177,9 @@ None
 - `docs/runbooks/AI_USAGE_DASHBOARD.md`
 - `docs/runbooks/WORKER_ROUTING.md`
 - `tests/test_dashboard_page.py`
+- `tests/test_auto_pipeline.py`
 - `tests/test_worker_fallback.py`
+- `tests/test_worker_fallback_integration.py`
 - `tests/test_worker_routing_evidence_service.py`
 - `tasks/TASK-101-simplify-automatic-worker-switching-status.md`
 
@@ -188,20 +195,21 @@ deployment, production, or `main` change was made.
 - Full suite against an in-memory test database: 1,127 passed and 2 skipped.
   The two PostgreSQL migration tests intentionally run only in GitHub Actions.
 - Python compilation and `git diff --check`: passed.
+- Bugbot repair verification: 123 focused tests passed; the repaired full suite
+  passed 1,132 tests with the same 2 GitHub-Actions-only PostgreSQL tests
+  skipped.
+- Final Bugbot rerun: clean; both P2 findings resolved with no new correctness,
+  security, or governance issue.
 
 ### Assumptions
 
-- Cross-session notifications read the existing `.agent_runner` auto-pipeline
-  receipts belonging to the repository from which the local app is running.
+- Cross-session notifications read a bounded safe projection written by the
+  controller outside every implementation workspace.
 - "Most recently selected" is historical controller evidence and is not
   presented as proof that a worker process is currently running.
 
 ### Risks / unresolved issues
 
-- Different independent worktrees keep separate Git-ignored controller
-  receipts. A switch made in another worktree will not appear until the app and
-  orchestration use a shared governed execution checkout or a separately
-  approved machine-wide notification contract.
 - Provider balance services remain in the codebase for internal guardrails and
   compatibility, but their figures are no longer presented on the Dashboard.
 

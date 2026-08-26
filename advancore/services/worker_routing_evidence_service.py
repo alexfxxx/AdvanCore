@@ -5,7 +5,11 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 import json
+import os
 from pathlib import Path
+import pwd
+import stat
+import sys
 from typing import Callable
 
 from advancore.agent_runner.worker_registry import (
@@ -42,6 +46,29 @@ _SAFE_FAILURES = {
     "AUTHENTICATION_UNAVAILABLE": "authentication",
 }
 _MAX_RECEIPT_BYTES = 2_000_000
+
+
+def default_worker_switching_status_path() -> Path:
+    """Return controller-owned status evidence shared by every checkout."""
+    account_home = Path(pwd.getpwuid(os.getuid()).pw_dir).resolve()
+    if sys.platform == "darwin":
+        root = account_home / "Library" / "Application Support" / "AdvanCore"
+    else:
+        root = account_home / ".local" / "state" / "advancore"
+    return root / "agent_runner" / "switching-status" / "worker-switches.jsonl"
+
+
+def _has_symlink_component(path: Path) -> bool:
+    current = Path(path.anchor)
+    for part in path.parts[1:]:
+        current /= part
+        try:
+            details = os.lstat(current)
+        except FileNotFoundError:
+            break
+        if stat.S_ISLNK(details.st_mode):
+            return True
+    return False
 
 
 @dataclass(frozen=True)
@@ -107,14 +134,23 @@ class WorkerRoutingEvidenceService:
 
 
 class WorkerSwitchingStatusService:
-    """Read safe status from bounded local auto-pipeline audit receipts."""
+    """Read a safe controller projection shared across app sessions/checkouts."""
 
     def __init__(
         self,
         repo_root: Path,
         now_provider: Callable[[], datetime] = lambda: datetime.now(timezone.utc),
+        evidence_path: Path | None = None,
     ):
-        self._path = repo_root / ".agent_runner" / "auto" / "auto_pipeline.jsonl"
+        self._repo_root = Path(repo_root).resolve()
+        proposed = Path(evidence_path or default_worker_switching_status_path())
+        if not proposed.is_absolute():
+            proposed = Path.cwd() / proposed
+        if _has_symlink_component(proposed):
+            raise ValueError("worker switching evidence location is unsafe")
+        self._path = proposed.resolve()
+        if self._path == self._repo_root or self._repo_root in self._path.parents:
+            raise ValueError("worker switching evidence must be outside the workspace")
         self._now_provider = now_provider
 
     @staticmethod
@@ -134,7 +170,14 @@ class WorkerSwitchingStatusService:
             if (
                 not self._path.is_file()
                 or self._path.is_symlink()
-                or self._path.stat().st_size > _MAX_RECEIPT_BYTES
+            ):
+                return WorkerSwitchingStatus(None, ())
+            details = self._path.stat()
+            if (
+                details.st_uid != os.getuid()
+                or stat.S_IMODE(details.st_mode) & 0o077
+                or details.st_nlink != 1
+                or details.st_size > _MAX_RECEIPT_BYTES
             ):
                 return WorkerSwitchingStatus(None, ())
             lines = self._path.read_text(encoding="utf-8").splitlines()
