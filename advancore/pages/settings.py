@@ -11,6 +11,7 @@ from advancore.services.local_backup_service import (
     BackupInventory,
     LocalBackupService,
 )
+from advancore.services.disposable_recovery_service import DisposableRecoveryService
 from advancore.services.readiness_service import ReadinessService
 from advancore.services.recovery_evidence_service import RecoveryEvidenceService
 
@@ -42,6 +43,21 @@ def _local_backup_service() -> LocalBackupService | None:
 
 def _recovery_evidence_service() -> RecoveryEvidenceService:
     return RecoveryEvidenceService(Path(__file__).resolve().parents[2])
+
+
+def _disposable_recovery_service() -> DisposableRecoveryService | None:
+    load_dotenv()
+    database_url = os.getenv("DATABASE_URL")
+    backup_service = _local_backup_service()
+    if not database_url or backup_service is None:
+        return None
+    repository_root = Path(__file__).resolve().parents[2]
+    return DisposableRecoveryService(
+        repository_root,
+        database_url,
+        backup_service,
+        _recovery_evidence_service(),
+    )
 
 
 def _format_bytes(value: int) -> str:
@@ -155,6 +171,36 @@ def _render_local_backups() -> None:
                 "Latest local backup verified at "
                 f"{record.created_at.strftime('%Y-%m-%d %H:%M UTC')}."
             )
+
+    st.write("Disposable recovery proof")
+    st.caption(
+        "This creates one generated temporary database, restores and checks the "
+        "latest backup, then removes that temporary database. It cannot select "
+        "or overwrite the saved operational database."
+    )
+    rehearse_requested = st.button(
+        "Run disposable recovery rehearsal",
+        key="settings_run_disposable_recovery",
+        disabled=not inventory.records,
+    )
+    if rehearse_requested:
+        try:
+            rehearsal_service = _disposable_recovery_service()
+            if rehearsal_service is None:
+                raise RuntimeError("unavailable")
+            with st.spinner("Restoring and checking the backup safely..."):
+                result = rehearsal_service.rehearse_latest()
+        except Exception:
+            st.error(
+                "Disposable recovery rehearsal could not be completed safely. "
+                "The operational database was not selected as a restore target."
+            )
+        else:
+            st.success(
+                "Disposable recovery rehearsal passed for "
+                f"{len(result.table_counts)} required tables; cleanup was confirmed."
+            )
+            st.rerun()
     st.caption(
         "Backups stay local. Only a cleanup-confirmed disposable rehearsal for "
         "the same backup counts as recovery evidence."
