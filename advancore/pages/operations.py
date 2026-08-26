@@ -5,7 +5,14 @@ from contextlib import contextmanager
 
 import streamlit as st
 
-from advancore.repositories import ActivityLogRepository, DriverRepository, VehicleRepository
+from advancore.repositories import ActivityLogRepository, CustomerRepository, DriverRepository, VehicleRepository
+from advancore.services.customer_service import (
+    CUSTOMER_STATUSES,
+    CustomerNotFoundError,
+    CustomerService,
+    CustomerValidationError,
+    DuplicateCustomerReferenceError,
+)
 from advancore.services.activity_service import ActivityLogService
 from advancore.services.vehicle_service import (
     DuplicateVehicleError,
@@ -43,6 +50,12 @@ def _driver_service() -> Iterator[DriverService]:
             DriverRepository(session),
             ActivityLogService(ActivityLogRepository(session)),
         )
+
+@contextmanager
+def _customer_service() -> Iterator[CustomerService]:
+    from advancore.services.database import session_scope
+    with session_scope() as session:
+        yield CustomerService(CustomerRepository(session), ActivityLogService(ActivityLogRepository(session)))
 
 
 def _create_vehicle(registration: str, make_model: str) -> bool:
@@ -130,6 +143,8 @@ def render() -> None:
     _render_vehicle_register()
     st.divider()
     _render_driver_register()
+    st.divider()
+    _render_customer_register()
 
 
 def _render_driver_register() -> None:
@@ -165,3 +180,34 @@ def _render_driver_register() -> None:
         except (DriverValidationError, DriverNotFoundError) as exc: st.warning(str(exc))
         except Exception: st.error("Driver status could not be updated.")
         else: st.success("Driver status updated."); st.rerun()
+
+def _render_customer_register() -> None:
+    st.subheader("Customer register")
+    st.caption("Stores only a business/customer name, optional internal reference, and status.")
+    with st.form("create_customer"):
+        name = st.text_input("Customer name", max_chars=160)
+        reference = st.text_input("Customer reference (optional)", max_chars=40)
+        submitted = st.form_submit_button("Add customer")
+    if submitted:
+        try:
+            with _customer_service() as service: service.create_customer(name, reference)
+        except (CustomerValidationError, DuplicateCustomerReferenceError) as exc: st.warning(str(exc))
+        except Exception: st.error("Customer could not be saved.")
+        else: st.success("Customer added."); st.rerun()
+    try:
+        with _customer_service() as service: customers = list(service.list_customers())
+    except Exception: st.error("Customer register could not be loaded."); return
+    if not customers: st.info("No customers registered yet."); return
+    st.dataframe([{"Customer": item.name, "Reference": item.customer_reference or "Not provided", "Status": item.status.title()} for item in customers], use_container_width=True, hide_index=True)
+    by_id = {item.id: item for item in customers}
+    with st.form("customer_status"):
+        customer_id = st.selectbox("Customer", list(by_id), format_func=lambda key: by_id[key].name)
+        current = by_id[customer_id].status
+        status = st.selectbox("Customer status", list(CUSTOMER_STATUSES), index=CUSTOMER_STATUSES.index(current), format_func=str.title)
+        changed = st.form_submit_button("Update customer status")
+    if changed:
+        try:
+            with _customer_service() as service: service.set_status(customer_id, status)
+        except (CustomerValidationError, CustomerNotFoundError) as exc: st.warning(str(exc))
+        except Exception: st.error("Customer status could not be updated.")
+        else: st.success("Customer status updated."); st.rerun()

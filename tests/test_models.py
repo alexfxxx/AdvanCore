@@ -14,6 +14,7 @@ def test_model_package_imports():
     """All public models and Base import successfully from advancore.models."""
     from advancore.models import (
         ActivityLog,
+        Customer,
         Driver,
         Base,
         KnowledgeItem,
@@ -26,6 +27,7 @@ def test_model_package_imports():
     assert Project is not None
     assert KnowledgeItem is not None
     assert ActivityLog is not None
+    assert Customer is not None
     assert Driver is not None
     assert SystemSetting is not None
     assert Vehicle is not None
@@ -43,6 +45,7 @@ def test_expected_model_tables_registered():
     assert "system_settings" in table_names
     assert "vehicles" in table_names
     assert "drivers" in table_names
+    assert "customers" in table_names
 
 
 def test_knowledge_model_registers_bounded_approval_metadata():

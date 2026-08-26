@@ -66,6 +66,8 @@ def test_list_and_get_delegate_to_repository():
         ("vehicle_status_changed", "vehicle"),
         ("driver_created", "driver"),
         ("driver_status_changed", "driver"),
+        ("customer_created", "customer"),
+        ("customer_status_changed", "customer"),
     ],
 )
 def test_record_activity_accepts_only_approved_minimal_values(action, entity_type):
