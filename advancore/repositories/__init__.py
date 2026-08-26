@@ -7,6 +7,7 @@ Business orchestration belongs in services; presentation belongs in pages.
 from advancore.repositories.activity import ActivityLogRepository
 from advancore.repositories.customer import CustomerRepository
 from advancore.repositories.driver import DriverRepository
+from advancore.repositories.fuel_entry import FuelEntryRepository
 from advancore.repositories.knowledge import KnowledgeItemRepository
 from advancore.repositories.project import ProjectRepository
 from advancore.repositories.route import RouteRepository
@@ -19,6 +20,7 @@ __all__ = [
     "ActivityLogRepository",
     "CustomerRepository",
     "DriverRepository",
+    "FuelEntryRepository",
     "KnowledgeItemRepository",
     "ProjectRepository",
     "RouteRepository",
