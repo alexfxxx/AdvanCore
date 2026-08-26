@@ -22,6 +22,12 @@ from advancore.services.dashboard_preference_service import (
     DashboardPreferences,
 )
 from advancore.services.dashboard_service import DashboardService
+from advancore.services.ai_usage_dashboard_service import (
+    AiUsageCard,
+    AiUsageDashboardService,
+    BalanceState,
+    ProviderUsageObservationStore,
+)
 from advancore.services.local_backup_service import LocalBackupService
 from advancore.services.platform_readiness_service import (
     PlatformReadinessService,
@@ -29,11 +35,7 @@ from advancore.services.platform_readiness_service import (
 )
 from advancore.services.readiness_service import ReadinessService
 from advancore.services.recovery_evidence_service import RecoveryEvidenceService
-from advancore.services.worker_usage_service import UsageState, WorkerUsageService
-from advancore.services.worker_health_service import (
-    WorkerHealthService,
-    WorkerHealthState,
-)
+from advancore.services.worker_usage_service import WorkerUsageService
 from advancore.ui.custom_components import render_fuel_status_component
 from advancore.ui.fuel_trends import ALLOWED_FUEL_WINDOWS, build_fuel_trend_figure
 
@@ -82,8 +84,12 @@ def _worker_usage_service() -> WorkerUsageService:
     return WorkerUsageService(Path(__file__).resolve().parents[2])
 
 
-def _worker_health_service() -> WorkerHealthService:
-    return WorkerHealthService(_worker_usage_service())
+def _ai_usage_dashboard_service() -> AiUsageDashboardService:
+    root = Path(__file__).resolve().parents[2]
+    return AiUsageDashboardService(
+        _worker_usage_service(),
+        ProviderUsageObservationStore(root),
+    )
 
 
 def _platform_readiness_service() -> PlatformReadinessService:
@@ -192,84 +198,107 @@ def _render_customizer(preferences: DashboardPreferences) -> None:
                 st.rerun()
 
 
-def _render_kimi_usage() -> None:
-    summary = _worker_usage_service().get_summary("kimi")
-    used = (
-        f"{summary.weekly_used_percent:g}%"
-        if summary.weekly_used_percent is not None
-        else "Unavailable"
-    )
-    runtime = (
-        f"{summary.runtime_seconds // 60} / {summary.runtime_limit_seconds // 60} min"
-        if summary.runtime_seconds is not None
-        else "Unavailable"
-    )
-    _metric_grid(
-        [
-            ("Kimi role", "Primary worker"),
-            ("Kimi weekly usage", used),
-            ("Kimi policy limit", f"{summary.weekly_percent_limit:g}%"),
-            ("Kimi runtime this week", runtime),
-        ]
-    )
+def _percent(value: float | None) -> str:
+    return f"{value:g}%" if value is not None else "Unavailable"
 
-    if summary.state == UsageState.AVAILABLE:
-        st.success("Kimi is within the approved weekly budget.")
-    elif summary.state == UsageState.PAUSED:
-        st.error("Kimi is paused by the weekly usage policy. Use an approved fallback.")
-    else:
-        st.warning(
-            "Kimi usage status is unavailable or stale. Kimi launches are paused "
-            "unless the approved local controller probe can refresh the reading; "
-            "an approved fallback may be used."
-        )
-    if summary.checked_at and summary.reset_at:
-        checked = summary.checked_at.strftime("%Y-%m-%d %H:%M UTC")
-        reset = summary.reset_at.strftime("%Y-%m-%d %H:%M UTC")
-        st.caption(f"Last checked: {checked}. Provider reset: {reset}.")
-    st.caption(
-        "Policy: maximum 20% provider-reported weekly usage and 60 minutes "
-        "of local Kimi runtime per provider week."
+
+def _render_usage_card(card: AiUsageCard) -> None:
+    balance = (
+        f"{card.remaining_percent:g}% remaining"
+        if card.remaining_percent is not None
+        else "Unavailable"
     )
+    last_request = (
+        f"{card.last_run_tokens:,} tokens"
+        if card.last_run_tokens is not None
+        else "Unavailable"
+    )
+    metrics = [
+        (f"{card.label} role", card.role),
+        (f"{card.label} balance", balance),
+        (f"{card.label} weekly used", _percent(card.weekly_used_percent)),
+        (f"{card.label} last request", last_request),
+    ]
+    if card.provider == "kimi":
+        automation = (
+            f"{card.automation_remaining_percent:g}% left to "
+            f"{card.automation_limit_percent:g}% cap"
+            if card.automation_remaining_percent is not None
+            and card.automation_limit_percent is not None
+            else "Unavailable"
+        )
+        runtime = (
+            f"{card.runtime_seconds // 60} / {card.runtime_limit_seconds // 60} min"
+            if card.runtime_seconds is not None
+            and card.runtime_limit_seconds is not None
+            else "Unavailable"
+        )
+        metrics.extend(
+            [
+                ("Kimi automation budget", automation),
+                ("Kimi runtime this week", runtime),
+            ]
+        )
+    else:
+        metrics.append(
+            (
+                f"{card.label} authentication",
+                "Verified" if card.authentication_verified else "Not verified",
+            )
+        )
+    _metric_grid(metrics)
+
+    if card.provider == "kimi" and card.automation_remaining_percent == 0:
+        st.error("Kimi is paused at the owner-approved automation limit.")
+    elif card.balance_state == BalanceState.CURRENT:
+        st.success(f"{card.label} has a current provider percentage reading.")
+    elif card.balance_state == BalanceState.OBSERVED_ONLY:
+        st.info(
+            f"{card.label} has measured request usage, but the remaining balance "
+            "is not exposed by an approved feed."
+        )
+    elif card.balance_state == BalanceState.STALE:
+        st.warning(f"{card.label} usage evidence is stale; refresh it before long work.")
+    else:
+        st.warning(f"{card.label} balance is unavailable. AdvanCore will not estimate it.")
+    st.caption(f"Routing: {card.routing_status}. {card.message}")
+    if card.checked_at:
+        checked = card.checked_at.strftime("%Y-%m-%d %H:%M UTC")
+        reset = (
+            card.reset_at.strftime("%Y-%m-%d %H:%M UTC")
+            if card.reset_at
+            else "not supplied"
+        )
+        st.caption(
+            f"Evidence checked: {checked}. Reset: {reset}. "
+            f"Source: {card.source or 'unavailable'}."
+        )
 
 
 def _render_ai_workforce(workers: tuple[str, ...]) -> None:
-    st.subheader("AI workforce")
+    st.subheader("AI usage balance")
     st.caption(
-        "agent_runner controls execution. Dashboard visibility does not grant authority."
+        "Real provider readings only. A measured request is not the remaining quota, "
+        "and dashboard visibility never grants worker authority."
     )
     if not workers:
         st.info("No AI worker cards are visible. Add them from Customize command center.")
         return
-    if "kimi-swarm" in workers:
-        _render_kimi_usage()
-    if "codex" in workers:
-        status = _worker_health_service().get_status("codex")
-        _metric_grid(
-            [
-                ("Codex role", "Approved fallback"),
-                ("Codex usage", "Not available in AdvanCore"),
-            ]
-        )
-        st.caption(
-            "Codex readiness is checked at launch. No quota is inferred from chat "
-            f"history. Status: {status.state.value.replace('_', ' ').title()}."
-        )
-    if "gemini" in workers:
-        status = _worker_health_service().get_status("gemini")
-        _metric_grid(
-            [
-                ("Gemini role", "Candidate — not active"),
-                ("Gemini status", status.state.value.replace("_", " ").title()),
-                ("Gemini usage", "Not connected"),
-            ]
-        )
-        if status.state == WorkerHealthState.SETUP_REQUIRED:
-            st.warning(
-                "Gemini requires owner setup and evaluation before it can become "
-                "an approved worker. A Gemini app subscription does not grant "
-                "agent_runner authority."
-            )
+    visible_providers = {
+        "kimi" if worker == "kimi-swarm" else worker for worker in workers
+    }
+    try:
+        cards = _ai_usage_dashboard_service().get_cards()
+    except Exception:
+        st.error("AI usage evidence is unavailable. No provider balance was inferred.")
+        return
+    for card in cards:
+        if card.provider in visible_providers:
+            _render_usage_card(card)
+    st.caption(
+        "Kimi policy: maximum 20% provider-reported weekly use and 60 minutes "
+        "of governed local runtime per provider week."
+    )
 
 
 def _active_fuel_window() -> int | None:
