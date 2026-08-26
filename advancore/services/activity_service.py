@@ -24,6 +24,8 @@ _APPROVED_ACTION_ENTITIES = {
     "vehicle_status_changed": "vehicle",
     "driver_created": "driver",
     "driver_status_changed": "driver",
+    "customer_created": "customer",
+    "customer_status_changed": "customer",
 }
 
 
