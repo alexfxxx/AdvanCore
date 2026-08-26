@@ -54,7 +54,7 @@ executed by this task's verification.
 - [x] Post-creation rehearsal failures still attempt exact bounded cleanup.
 - [x] Symlinked failover state directories fail closed.
 - [x] Focused and full tests pass.
-- [ ] One approved Bugbot re-review is completed.
+- [x] One approved Bugbot re-review is completed cleanly.
 
 ## Owner decisions
 
@@ -65,4 +65,5 @@ repair cycle or merge still requires a separate decision.
 
 The three approved safety repairs are implemented. Focused verification passed
 47 tests; the full suite passed 1,107 tests with 2 skips. The approved Bugbot
-re-review remains pending.
+re-review confirmed all three findings are resolved and found no new actionable
+correctness, security, or data-safety regression.
