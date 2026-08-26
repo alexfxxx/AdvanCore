@@ -13,6 +13,7 @@ from advancore.services.local_backup_service import (
     LocalBackupError,
 )
 from advancore.services.readiness_service import ReadinessService
+from advancore.services.recovery_evidence_service import RecoveryEvidence
 
 
 class FakeStreamlit:
@@ -132,6 +133,28 @@ class FakeBackupService:
         return self.record
 
 
+class FakeEvidenceService:
+    def __init__(self, evidence=None, error=None):
+        self.evidence = evidence
+        self.error = error
+
+    def load(self):
+        if self.error:
+            raise self.error
+        return self.evidence
+
+
+def _recovery_evidence(backup_id):
+    return RecoveryEvidence(
+        schema_version=1,
+        backup_id=backup_id,
+        completed_at=datetime(2026, 8, 26, 2, 3, 4, tzinfo=timezone.utc),
+        migration_head="migration_head_fixture",
+        required_table_count=4,
+        cleanup_confirmed=True,
+    )
+
+
 def test_backup_settings_show_inventory_and_create_verified_backup(
     monkeypatch, tmp_path
 ):
@@ -140,6 +163,9 @@ def test_backup_settings_show_inventory_and_create_verified_backup(
     service = FakeBackupService(_backup_record(tmp_path))
     monkeypatch.setattr(settings, "st", fake_st)
     monkeypatch.setattr(settings, "_local_backup_service", lambda: service)
+    monkeypatch.setattr(
+        settings, "_recovery_evidence_service", lambda: FakeEvidenceService()
+    )
 
     settings._render_local_backups()
 
@@ -156,6 +182,9 @@ def test_backup_settings_verify_latest_and_disable_when_empty(monkeypatch, tmp_p
     service = FakeBackupService(_backup_record(tmp_path))
     monkeypatch.setattr(settings, "st", fake_st)
     monkeypatch.setattr(settings, "_local_backup_service", lambda: service)
+    monkeypatch.setattr(
+        settings, "_recovery_evidence_service", lambda: FakeEvidenceService()
+    )
 
     settings._render_local_backups()
 
@@ -169,6 +198,9 @@ def test_backup_settings_verify_latest_and_disable_when_empty(monkeypatch, tmp_p
     )
     monkeypatch.setattr(settings, "st", empty_st)
     monkeypatch.setattr(settings, "_local_backup_service", lambda: empty_service)
+    monkeypatch.setattr(
+        settings, "_recovery_evidence_service", lambda: FakeEvidenceService()
+    )
     settings._render_local_backups()
     assert empty_service.calls == ["inventory"]
     verify_call = next(
@@ -189,6 +221,9 @@ def test_backup_settings_invalid_entries_and_failures_are_secret_safe(
     )
     monkeypatch.setattr(settings, "st", fake_st)
     monkeypatch.setattr(settings, "_local_backup_service", lambda: service)
+    monkeypatch.setattr(
+        settings, "_recovery_evidence_service", lambda: FakeEvidenceService()
+    )
 
     settings._render_local_backups()
 
@@ -216,3 +251,52 @@ def test_backup_settings_missing_or_bad_configuration_is_bounded(monkeypatch):
     assert "configuration is unavailable" in bad_st.text()
     for sensitive in ("postgres://", "secret", "trace"):
         assert sensitive not in bad_st.text()
+
+
+def test_recovery_status_distinguishes_latest_older_and_missing(monkeypatch, tmp_path):
+    record = _backup_record(tmp_path)
+    inventory = BackupInventory((record,), 0, record.size_bytes)
+
+    latest_st = FakeStreamlit()
+    monkeypatch.setattr(settings, "st", latest_st)
+    monkeypatch.setattr(
+        settings,
+        "_recovery_evidence_service",
+        lambda: FakeEvidenceService(_recovery_evidence(record.backup_id)),
+    )
+    settings._render_recovery_evidence(inventory)
+    assert "Latest valid backup passed" in latest_st.text()
+    assert "4 required tables" in latest_st.text()
+
+    older_st = FakeStreamlit()
+    monkeypatch.setattr(settings, "st", older_st)
+    monkeypatch.setattr(
+        settings,
+        "_recovery_evidence_service",
+        lambda: FakeEvidenceService(
+            _recovery_evidence("advancore-20260825T010203Z-00000000")
+        ),
+    )
+    settings._render_recovery_evidence(inventory)
+    assert "does not prove the latest" in older_st.text()
+
+    missing_st = FakeStreamlit()
+    monkeypatch.setattr(settings, "st", missing_st)
+    monkeypatch.setattr(
+        settings, "_recovery_evidence_service", lambda: FakeEvidenceService()
+    )
+    settings._render_recovery_evidence(inventory)
+    assert "No saved disposable" in missing_st.text()
+
+
+def test_invalid_recovery_evidence_is_secret_safe(monkeypatch):
+    fake_st = FakeStreamlit()
+    monkeypatch.setattr(settings, "st", fake_st)
+    monkeypatch.setattr(
+        settings,
+        "_recovery_evidence_service",
+        lambda: FakeEvidenceService(error=RuntimeError("sensitive internal detail")),
+    )
+    settings._render_recovery_evidence(BackupInventory((), 0, 0))
+    assert "invalid or unavailable" in fake_st.text()
+    assert "hidden" not in fake_st.text()
