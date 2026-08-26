@@ -1,7 +1,7 @@
 """Isolated tests for the customizable command-center page."""
 
 from contextlib import contextmanager, nullcontext
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 
 from advancore.pages import dashboard
 from advancore.services.dashboard_preference_service import (
@@ -9,12 +9,15 @@ from advancore.services.dashboard_preference_service import (
     DashboardPreferences,
 )
 from advancore.services.dashboard_service import DashboardSummary
+from advancore.services.ai_usage_dashboard_service import (
+    AiUsageCard,
+    BalanceState,
+)
 from advancore.services.platform_readiness_service import (
     PlatformReadinessSummary,
     ReadinessItem,
     ReadinessLevel,
 )
-from advancore.services.worker_usage_service import UsageState, UsageSummary
 
 
 class FakeStreamlit:
@@ -90,32 +93,93 @@ class FakePreferenceService:
         return DEFAULT_DASHBOARD_PREFERENCES
 
 
-class FakeUsageService:
-    def __init__(self, summary): self.summary = summary
-    def get_summary(self, provider): return self.summary
+class FakeAiUsageService:
+    def __init__(self, cards):
+        self.cards = cards
+
+    def get_cards(self):
+        return self.cards
 
 
-def _usage_summary(state=UsageState.UNAVAILABLE, used=None, runtime=None):
-    now = datetime(2026, 8, 23, 12, 0, tzinfo=timezone.utc)
-    return UsageSummary(
+def _usage_cards(
+    *,
+    kimi_state=BalanceState.UNAVAILABLE,
+    kimi_used=None,
+    kimi_runtime=None,
+    gemini_tokens=None,
+):
+    now = datetime(2026, 8, 26, 13, 0, tzinfo=timezone.utc)
+    kimi = AiUsageCard(
         provider="kimi",
-        state=state,
-        weekly_used_percent=used,
-        weekly_percent_limit=20,
-        runtime_seconds=runtime,
+        label="Kimi",
+        role="Primary worker",
+        routing_status="Kimi-first when budget allows",
+        balance_state=kimi_state,
+        weekly_used_percent=kimi_used,
+        remaining_percent=100 - kimi_used if kimi_used is not None else None,
+        automation_limit_percent=20,
+        automation_remaining_percent=(
+            max(0, 20 - kimi_used) if kimi_used is not None else None
+        ),
+        runtime_seconds=kimi_runtime,
         runtime_limit_seconds=3600,
-        checked_at=now if used is not None else None,
-        reset_at=now + timedelta(days=4) if used is not None else None,
-        source="owner-verified" if used is not None else None,
+        last_run_tokens=None,
+        checked_at=now if kimi_used is not None else None,
+        reset_at=None,
+        source="owner-verified" if kimi_used is not None else None,
+        authentication_verified=kimi_used is not None,
         message="test state",
     )
+    codex = AiUsageCard(
+        provider="codex",
+        label="Codex",
+        role="Approved fallback",
+        routing_status="Available only through governed routing",
+        balance_state=BalanceState.UNAVAILABLE,
+        weekly_used_percent=None,
+        remaining_percent=None,
+        automation_limit_percent=None,
+        automation_remaining_percent=None,
+        runtime_seconds=None,
+        runtime_limit_seconds=None,
+        last_run_tokens=None,
+        checked_at=None,
+        reset_at=None,
+        source=None,
+        authentication_verified=False,
+        message="Codex subscription balance has no approved automatic reading.",
+    )
+    gemini = AiUsageCard(
+        provider="gemini",
+        label="Gemini",
+        role="Candidate — not active",
+        routing_status="Not eligible for automatic routing",
+        balance_state=(
+            BalanceState.OBSERVED_ONLY
+            if gemini_tokens is not None
+            else BalanceState.UNAVAILABLE
+        ),
+        weekly_used_percent=None,
+        remaining_percent=None,
+        automation_limit_percent=None,
+        automation_remaining_percent=None,
+        runtime_seconds=None,
+        runtime_limit_seconds=None,
+        last_run_tokens=gemini_tokens,
+        checked_at=now if gemini_tokens is not None else None,
+        reset_at=None,
+        source="antigravity-cli-json" if gemini_tokens is not None else None,
+        authentication_verified=gemini_tokens is not None,
+        message="Google Pro balance has no approved automatic reading.",
+    )
+    return (kimi, codex, gemini)
 
 
 def _install(
     monkeypatch,
     fake_st,
     service,
-    usage_summary=None,
+    usage_cards=None,
     preference_service=None,
 ):
     preferences = preference_service or FakePreferenceService()
@@ -133,8 +197,8 @@ def _install(
     monkeypatch.setattr(dashboard, "_dashboard_preference_service", preference_scope)
     monkeypatch.setattr(
         dashboard,
-        "_worker_usage_service",
-        lambda: FakeUsageService(usage_summary or _usage_summary()),
+        "_ai_usage_dashboard_service",
+        lambda: FakeAiUsageService(usage_cards or _usage_cards()),
     )
     monkeypatch.setattr(dashboard, "_render_fuel_visual_foundation", lambda: None)
     monkeypatch.setattr(dashboard, "_render_platform_readiness", lambda: None)
@@ -153,14 +217,21 @@ def test_dashboard_renders_real_bounded_default_modules(monkeypatch):
     assert "Loading overview..." in fake_st.spinner_labels
     assert fake_st.metrics == [
         ("Kimi role", "Primary worker"),
-        ("Kimi weekly usage", "Unavailable"),
-        ("Kimi policy limit", "20%"),
+        ("Kimi balance", "Unavailable"),
+        ("Kimi weekly used", "Unavailable"),
+        ("Kimi last request", "Unavailable"),
+        ("Kimi automation budget", "Unavailable"),
         ("Kimi runtime this week", "Unavailable"),
         ("Codex role", "Approved fallback"),
-        ("Codex usage", "Not available in AdvanCore"),
+        ("Codex balance", "Unavailable"),
+        ("Codex weekly used", "Unavailable"),
+        ("Codex last request", "Unavailable"),
+        ("Codex authentication", "Not verified"),
         ("Gemini role", "Candidate — not active"),
-        ("Gemini status", "Setup Required"),
-        ("Gemini usage", "Not connected"),
+        ("Gemini balance", "Unavailable"),
+        ("Gemini weekly used", "Unavailable"),
+        ("Gemini last request", "Unavailable"),
+        ("Gemini authentication", "Not verified"),
         ("Total projects", 4),
         ("Active projects", 2),
         ("Archived projects", 1),
@@ -204,7 +275,10 @@ def test_hidden_modules_and_workers_are_not_rendered(monkeypatch):
 
     assert fake_st.metrics == [
         ("Codex role", "Approved fallback"),
-        ("Codex usage", "Not available in AdvanCore"),
+        ("Codex balance", "Unavailable"),
+        ("Codex weekly used", "Unavailable"),
+        ("Codex last request", "Unavailable"),
+        ("Codex authentication", "Not verified"),
         ("Total projects", 4),
         ("Active projects", 2),
         ("Archived projects", 1),
@@ -272,32 +346,54 @@ def test_dashboard_failure_is_generic_and_does_not_leak(monkeypatch):
     assert "Operational overview is unavailable" in fake_st.text()
     for secret in ("secret", "password", "SQL", "traceback"):
         assert secret not in fake_st.text()
-    assert fake_st.metrics[:6] == [
+    assert fake_st.metrics[:7] == [
         ("Kimi role", "Primary worker"),
-        ("Kimi weekly usage", "Unavailable"),
-        ("Kimi policy limit", "20%"),
+        ("Kimi balance", "Unavailable"),
+        ("Kimi weekly used", "Unavailable"),
+        ("Kimi last request", "Unavailable"),
+        ("Kimi automation budget", "Unavailable"),
         ("Kimi runtime this week", "Unavailable"),
         ("Codex role", "Approved fallback"),
-        ("Codex usage", "Not available in AdvanCore"),
     ]
 
 
 def test_dashboard_shows_allowed_and_paused_kimi_states(monkeypatch):
     for state, used, expected in (
-        (UsageState.AVAILABLE, 10, "within the approved weekly budget"),
-        (UsageState.PAUSED, 44, "paused by the weekly usage policy"),
+        (BalanceState.CURRENT, 10, "current provider percentage reading"),
+        (BalanceState.CURRENT, 44, "paused at the owner-approved automation limit"),
     ):
         fake_st = FakeStreamlit()
         _install(
             monkeypatch,
             fake_st,
             FakeService(_summary()),
-            _usage_summary(state, used, 120),
+            _usage_cards(
+                kimi_state=state,
+                kimi_used=used,
+                kimi_runtime=120,
+            ),
         )
         dashboard.render()
-        assert ("Kimi weekly usage", f"{used}%") in fake_st.metrics
+        assert ("Kimi weekly used", f"{used}%") in fake_st.metrics
         assert ("Kimi runtime this week", "2 / 60 min") in fake_st.metrics
         assert expected in fake_st.text()
+
+
+def test_dashboard_labels_gemini_tokens_as_observed_not_balance(monkeypatch):
+    fake_st = FakeStreamlit()
+    _install(
+        monkeypatch,
+        fake_st,
+        FakeService(_summary()),
+        _usage_cards(gemini_tokens=31_142),
+    )
+
+    dashboard.render()
+
+    assert ("Gemini balance", "Unavailable") in fake_st.metrics
+    assert ("Gemini last request", "31,142 tokens") in fake_st.metrics
+    assert ("Gemini authentication", "Verified") in fake_st.metrics
+    assert "measured request usage" in fake_st.text()
 
 
 def test_preference_load_failure_shows_defaults_without_leak(monkeypatch):
