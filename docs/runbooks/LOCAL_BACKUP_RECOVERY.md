@@ -70,13 +70,15 @@ TASK-079 adds one bounded local rehearsal command:
 ```
 
 It accepts no database name or other argument. It verifies the latest archive,
-resolves exactly one running local PostgreSQL Compose service, generates a
-unique `advancore_recovery_` database name, restores with the matching
+resolves only the canonical `advancore-local` PostgreSQL Compose service, and
+proves its expected `postgres:16` image, named data volume, and loopback-only
+port binding before proceeding. It then generates a unique
+`advancore_recovery_` database name, restores with the matching
 container client and `--no-owner --no-privileges --exit-on-error`, checks the
 migration head and bounded row counts for required tables, and then drops only
-the exact disposable database it generated. Every post-creation failure still
-attempts that exact cleanup. An ambiguous container or unconfirmed cleanup
-fails closed.
+the exact disposable database whose creation was confirmed. A failed creation
+never triggers a drop command; every post-creation failure still attempts exact
+cleanup. An ambiguous container or unconfirmed cleanup fails closed.
 
 After cleanup is confirmed, the command records one strict local receipt under
 the Git-ignored controller state directory. The receipt contains only the

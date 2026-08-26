@@ -18,6 +18,10 @@ from typing import Callable
 from sqlalchemy.engine import make_url
 
 from advancore.config import APP_NAME, APP_VERSION
+from advancore.services.local_postgres_container_service import (
+    LocalPostgresContainerError,
+    resolve_local_postgres_container,
+)
 
 
 _BACKUP_ID_PATTERN = re.compile(r"advancore-\d{8}T\d{6}Z-[0-9a-f]{8}")
@@ -39,7 +43,6 @@ _MAX_INVENTORY_FILES = 2_000
 _DUMP_TIMEOUT_SECONDS = 180
 _VERIFY_TIMEOUT_SECONDS = 60
 _LOOPBACK_HOSTS = {"localhost", "127.0.0.1", "::1"}
-_CONTAINER_ID_PATTERN = re.compile(r"[0-9a-f]{12,64}")
 
 
 class LocalBackupError(RuntimeError):
@@ -151,46 +154,18 @@ class LocalBackupService:
         return f"advancore-{timestamp}-{token}", created_at
 
     def _running_postgres_container(self, docker: str) -> str:
-        """Resolve one running Compose PostgreSQL service without caller input."""
+        """Resolve only the canonical AdvanCore local PostgreSQL service."""
         try:
-            result = self._command_runner(
-                [
-                    docker,
-                    "ps",
-                    "--filter",
-                    "label=com.docker.compose.service=postgres",
-                    "--filter",
-                    "status=running",
-                    "--format",
-                    "{{.ID}}",
-                ],
-                cwd=self._repository_root,
-                env={"LC_ALL": "C"},
-                stdin=subprocess.DEVNULL,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                text=True,
-                timeout=10,
-                check=False,
+            return resolve_local_postgres_container(
+                self._repository_root,
+                docker,
+                int(self._database_environment["PGPORT"]),
+                self._command_runner,
             )
-        except (OSError, subprocess.SubprocessError) as exc:
+        except (LocalPostgresContainerError, TypeError, ValueError) as exc:
             raise LocalBackupError(
                 "The local PostgreSQL backup container is unavailable."
             ) from exc
-        candidates = [
-            line.strip()
-            for line in (result.stdout or "").splitlines()
-            if line.strip()
-        ]
-        if (
-            result.returncode != 0
-            or len(candidates) != 1
-            or not _CONTAINER_ID_PATTERN.fullmatch(candidates[0])
-        ):
-            raise LocalBackupError(
-                "The local PostgreSQL backup container is ambiguous or unavailable."
-            )
-        return candidates[0]
 
     @staticmethod
     def _hash_archive(path: Path, expected_size: int | None = None) -> tuple[int, str]:

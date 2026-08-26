@@ -160,3 +160,13 @@ def test_symlink_state_paths_fail_closed(tmp_path):
     path.symlink_to(outside)
     with pytest.raises(FailoverError, match="unavailable"):
         load_failover_checkpoint("FAILOVER-task084", real)
+
+
+def test_symlink_state_directory_is_rejected_before_resolution(tmp_path):
+    real = tmp_path / "real-state"
+    save_failover_checkpoint(started(), real)
+    link = tmp_path / "linked-state"
+    link.symlink_to(real, target_is_directory=True)
+
+    with pytest.raises(FailoverError, match="unavailable"):
+        load_failover_checkpoint("FAILOVER-task084", link)

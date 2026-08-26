@@ -30,10 +30,22 @@ class BackupService:
 
 
 class Runner:
-    def __init__(self, fail_tool: str | None = None, cleanup_fails: bool = False):
+    def __init__(
+        self,
+        fail_tool: str | None = None,
+        cleanup_fails: bool = False,
+        *,
+        identity: str = (
+            "advancore-local|postgres|postgres:16|"
+            "advancore_advancore_postgres_data\n"
+        ),
+        published_port: str = "127.0.0.1:5432\n",
+    ):
         self.calls = []
         self.fail_tool = fail_tool
         self.cleanup_fails = cleanup_fails
+        self.identity = identity
+        self.published_port = published_port
 
     def __call__(self, command, **kwargs):
         self.calls.append((command, kwargs))
@@ -41,6 +53,10 @@ class Runner:
         operation = (
             "docker-ps"
             if tool == "docker" and command[1] == "ps"
+            else "docker-inspect"
+            if tool == "docker" and command[1] == "inspect"
+            else "docker-port"
+            if tool == "docker" and command[1] == "port"
             else "pg_restore"
             if tool == "docker" and command[1] == "exec"
             else tool
@@ -51,6 +67,10 @@ class Runner:
         stdout = (
             "0123456789ab\n"
             if operation == "docker-ps"
+            else self.identity
+            if operation == "docker-inspect"
+            else self.published_port
+            if operation == "docker-port"
             else VERIFICATION_OUTPUT
             if tool == "psql"
             else ""
@@ -96,25 +116,39 @@ def test_rehearsal_restores_verifies_and_drops_only_generated_database(tmp_path)
 
     target = "advancore_recovery_20260826t010203_deadbeef"
     commands = [call[0] for call in runner.calls]
-    assert [Path(command[0]).name for command in commands] == [
-        "docker", "createdb", "docker", "psql", "dropdb"
+    assert [
+        (
+            f"docker-{command[1]}"
+            if Path(command[0]).name == "docker"
+            else Path(command[0]).name
+        )
+        for command in commands
+    ] == [
+        "docker-ps",
+        "docker-inspect",
+        "docker-port",
+        "createdb",
+        "docker-exec",
+        "psql",
+        "dropdb",
     ]
-    assert commands[1][-1] == target
-    assert commands[2][commands[2].index("--dbname") + 1] == target
-    assert commands[2][:7] == [
+    assert commands[3][-1] == target
+    assert commands[4][commands[4].index("--dbname") + 1] == target
+    assert commands[4][:7] == [
         "/usr/local/bin/docker", "exec", "-i", "-u", "postgres",
         "0123456789ab", "pg_restore",
     ]
-    assert "--no-owner" in commands[2]
-    assert "--no-privileges" in commands[2]
-    assert "--exit-on-error" in commands[2]
-    assert hasattr(runner.calls[2][1]["stdin"], "read")
+    assert "--no-owner" in commands[4]
+    assert "--no-privileges" in commands[4]
+    assert "--exit-on-error" in commands[4]
+    assert hasattr(runner.calls[4][1]["stdin"], "read")
     assert commands[-1] == [
         "/usr/local/bin/dropdb", "--maintenance-db=postgres", "--if-exists", target
     ]
     assert all(all("live" not in part for part in command) for command in commands)
     assert all(all("secret" not in part for part in command) for command in commands)
-    assert all(call[1]["env"]["PGPASSWORD"] == "secret" for call in runner.calls)
+    assert all("PGPASSWORD" not in call[1]["env"] for call in runner.calls[:3])
+    assert all(call[1]["env"]["PGPASSWORD"] == "secret" for call in runner.calls[3:])
     assert result.migration_head == "a94f8b17d6e2"
     assert dict(result.table_counts) == {
         "projects": 4,
@@ -125,14 +159,22 @@ def test_rehearsal_restores_verifies_and_drops_only_generated_database(tmp_path)
     assert result.cleanup_confirmed
 
 
-@pytest.mark.parametrize("tool", ["createdb", "pg_restore", "psql"])
-def test_every_creation_or_restore_failure_attempts_exact_cleanup(tmp_path, tool):
+@pytest.mark.parametrize("tool", ["pg_restore", "psql"])
+def test_post_creation_failure_attempts_exact_cleanup(tmp_path, tool):
     runner = Runner(fail_tool=tool)
     with pytest.raises(DisposableRecoveryError):
         service(tmp_path, runner).rehearse_latest()
     commands = [call[0] for call in runner.calls]
     assert Path(commands[-1][0]).name == "dropdb"
     assert commands[-1][-1] == "advancore_recovery_20260826t010203_deadbeef"
+
+
+def test_creation_failure_never_drops_an_unconfirmed_database(tmp_path):
+    runner = Runner(fail_tool="createdb")
+    with pytest.raises(DisposableRecoveryError):
+        service(tmp_path, runner).rehearse_latest()
+    assert Path(runner.calls[-1][0][0]).name == "createdb"
+    assert all(Path(call[0][0]).name != "dropdb" for call in runner.calls)
 
 
 def test_cleanup_failure_is_the_terminal_owner_attention_error(tmp_path):
@@ -179,7 +221,22 @@ def test_target_collision_with_live_database_fails_before_commands(tmp_path):
     )
     with pytest.raises(DisposableRecoveryError, match="unsafe"):
         instance.rehearse_latest()
-    assert [Path(call[0][0]).name for call in runner.calls] == ["docker"]
+    assert [
+        (Path(call[0][0]).name, call[0][1]) for call in runner.calls
+    ] == [("docker", "ps"), ("docker", "inspect"), ("docker", "port")]
+
+
+@pytest.mark.parametrize(
+    "runner",
+    [
+        Runner(identity="other|postgres|postgres:16|advancore_advancore_postgres_data\n"),
+        Runner(published_port="0.0.0.0:5432\n"),
+    ],
+)
+def test_unproven_container_identity_fails_before_database_creation(tmp_path, runner):
+    with pytest.raises(DisposableRecoveryError, match="container"):
+        service(tmp_path, runner).rehearse_latest()
+    assert all(Path(call[0][0]).name != "createdb" for call in runner.calls)
 
 
 def test_raw_subprocess_error_is_never_exposed(tmp_path):

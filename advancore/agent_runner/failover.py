@@ -221,6 +221,8 @@ def load_failover_checkpoint(run_id: str, state_directory: Path) -> FailoverChec
     if not isinstance(run_id, str) or not _RUN_ID.fullmatch(run_id):
         raise FailoverError("Failover run identifier is invalid")
     directory = Path(state_directory)
+    if directory.is_symlink() or not directory.is_dir():
+        raise FailoverError("Failover state directory is unavailable")
     try:
         resolved = directory.resolve(strict=True)
     except OSError as exc:

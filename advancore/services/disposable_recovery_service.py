@@ -24,6 +24,10 @@ from advancore.services.recovery_evidence_service import (
     RecoveryEvidenceError,
     RecoveryEvidenceService,
 )
+from advancore.services.local_postgres_container_service import (
+    LocalPostgresContainerError,
+    resolve_local_postgres_container,
+)
 
 
 _LOOPBACK_HOSTS = {"localhost", "127.0.0.1", "::1"}
@@ -169,30 +173,17 @@ class DisposableRecoveryService:
                 os.close(descriptor)
 
     def _running_postgres_container(self, docker: str) -> str:
-        result = self._run(
-            [
+        try:
+            return resolve_local_postgres_container(
+                self._repository_root,
                 docker,
-                "ps",
-                "--filter",
-                "label=com.docker.compose.service=postgres",
-                "--filter",
-                "status=running",
-                "--format",
-                "{{.ID}}",
-            ],
-            timeout=10,
-            capture_output=True,
-        )
-        if result.returncode != 0:
+                int(self._environment["PGPORT"]),
+                self._command_runner,
+            )
+        except (LocalPostgresContainerError, TypeError, ValueError) as exc:
             raise DisposableRecoveryError(
                 "The local PostgreSQL recovery container is unavailable."
-            )
-        candidates = [line.strip() for line in (result.stdout or "").splitlines() if line.strip()]
-        if len(candidates) != 1 or not re.fullmatch(r"[0-9a-f]{12,64}", candidates[0]):
-            raise DisposableRecoveryError(
-                "The local PostgreSQL recovery container is ambiguous or unavailable."
-            )
-        return candidates[0]
+            ) from exc
 
     @staticmethod
     def _parse_verification(output: str) -> tuple[str, tuple[tuple[str, int], ...]]:
@@ -239,7 +230,7 @@ class DisposableRecoveryService:
         dropdb = self._tool_path(self._tool_finder, "dropdb")
         container_id = self._running_postgres_container(docker)
         target = self._new_database_name()
-        creation_attempted = False
+        creation_confirmed = False
         rehearsal_error: Exception | None = None
         migration = ""
         counts: tuple[tuple[str, int], ...] = ()
@@ -252,7 +243,6 @@ class DisposableRecoveryService:
         ) + ";"
 
         try:
-            creation_attempted = True
             created = self._run(
                 [
                     createdb,
@@ -267,6 +257,7 @@ class DisposableRecoveryService:
                 raise DisposableRecoveryError(
                     "Disposable recovery database could not be created."
                 )
+            creation_confirmed = True
             restored = self._run(
                 [
                     docker,
@@ -313,8 +304,8 @@ class DisposableRecoveryService:
         except Exception as exc:
             rehearsal_error = exc
         finally:
-            cleanup_ok = not creation_attempted
-            if creation_attempted:
+            cleanup_ok = not creation_confirmed
+            if creation_confirmed:
                 try:
                     dropped = self._run(
                         [dropdb, "--maintenance-db=postgres", "--if-exists", target],
