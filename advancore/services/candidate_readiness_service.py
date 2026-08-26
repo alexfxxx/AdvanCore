@@ -21,6 +21,7 @@ class CandidateReadinessState(str, Enum):
     OWNER_SETUP_REQUIRED = "OWNER_SETUP_REQUIRED"
     READY_FOR_EVALUATION = "READY_FOR_EVALUATION"
     ACTIVATION_READY = "ACTIVATION_READY"
+    ACTIVATED = "ACTIVATED"
 
 
 @dataclass(frozen=True)
@@ -47,6 +48,51 @@ class CandidateReadinessService:
 
     def get_summary(self, worker: str) -> CandidateReadinessSummary:
         profile = get_worker_profile(worker)
+        if worker == "gemini" and profile.approval_state == WorkerApprovalState.APPROVED:
+            checks = (
+                CandidateReadinessCheck(
+                    "registry_boundary",
+                    "Governed registry boundary",
+                    CandidateCheckState.PASS,
+                    "Gemini is approved only for implementation and fallback work.",
+                ),
+                CandidateReadinessCheck(
+                    "provider_surface",
+                    "Provider surface",
+                    CandidateCheckState.PASS,
+                    "The fixed local Antigravity CLI is the approved surface.",
+                ),
+                CandidateReadinessCheck(
+                    "authentication",
+                    "Account authentication",
+                    CandidateCheckState.PASS,
+                    "Owner-present Google authentication and a synthetic smoke "
+                    "test passed.",
+                ),
+                CandidateReadinessCheck(
+                    "data_boundary",
+                    "Data boundary",
+                    CandidateCheckState.PASS,
+                    "Credential screening, fixed arguments, and workspace "
+                    "sandboxing remain active.",
+                ),
+                CandidateReadinessCheck(
+                    "activation_approval",
+                    "Production activation",
+                    CandidateCheckState.PASS,
+                    "The owner approved Gemini as the second implementation worker.",
+                ),
+            )
+            return CandidateReadinessSummary(
+                worker=profile.name,
+                state=CandidateReadinessState.ACTIVATED,
+                activation_allowed=True,
+                checks=checks,
+                next_owner_action=(
+                    "No account action is required. TASK-099 will connect the "
+                    "Kimi, Gemini, then Codex runtime sequence."
+                ),
+            )
         if profile.approval_state != WorkerApprovalState.CANDIDATE:
             raise ValueError("Worker is not a candidate")
         checks = (

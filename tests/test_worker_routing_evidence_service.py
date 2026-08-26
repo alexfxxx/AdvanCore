@@ -33,15 +33,11 @@ def test_codex_launch_check_is_not_misreported_as_available():
     assert result.state == WorkerAvailability.UNAVAILABLE
 
 
-def test_gemini_candidate_cannot_become_available_from_health():
+def test_approved_gemini_can_become_available_from_explicit_health():
     result = health_to_routing_evidence(
-        summary(
-            "gemini",
-            WorkerHealthState.AVAILABLE,
-            WorkerApprovalState.CANDIDATE,
-        )
+        summary("gemini", WorkerHealthState.AVAILABLE)
     )
-    assert result.state == WorkerAvailability.SETUP_REQUIRED
+    assert result.state == WorkerAvailability.AVAILABLE
 
 
 def test_health_failure_becomes_bounded_unavailable_evidence():
@@ -51,7 +47,7 @@ def test_health_failure_becomes_bounded_unavailable_evidence():
 
     service = WorkerRoutingEvidenceService(Health())
     assert service.get("kimi-swarm").state == WorkerAvailability.UNAVAILABLE
-    assert service.get("gemini").state == WorkerAvailability.SETUP_REQUIRED
+    assert service.get("gemini").state == WorkerAvailability.UNAVAILABLE
 
 
 def test_many_is_ordered_and_rejects_duplicates():

@@ -75,19 +75,12 @@ class WorkerHealthService:
                 checked_at=(usage.checked_at if usage else None),
                 reset_at=(usage.reset_at if usage else None),
             )
-        if profile.name == "codex":
+        if profile.name in {"codex", "gemini"}:
             return WorkerHealthSummary(
                 worker=profile.name,
                 label=profile.label,
                 approval_state=profile.approval_state,
                 state=WorkerHealthState.CHECKED_AT_LAUNCH,
-            )
-        if profile.name == "gemini":
-            return WorkerHealthSummary(
-                worker=profile.name,
-                label=profile.label,
-                approval_state=profile.approval_state,
-                state=WorkerHealthState.SETUP_REQUIRED,
             )
         return WorkerHealthSummary(
             worker=profile.name,

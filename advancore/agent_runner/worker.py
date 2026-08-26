@@ -51,6 +51,7 @@ WORKER_RECOVERY_ACTION = (
     "Explicitly resume or start a separately reviewed worker invocation."
 )
 KIMI_EXECUTABLE = "kimi"
+GEMINI_EXECUTABLE = "agy"
 KIMI_SANDBOX_EXECUTABLE = Path("/usr/bin/sandbox-exec")
 KIMI_SANDBOX_PROBE_TIMEOUT_SECONDS = 5
 KIMI_SANDBOX_PROBE_PROFILE = (
@@ -229,6 +230,43 @@ def _codex_environment(scratch_dir: Path) -> dict[str, str]:
         "USER": account.pw_name,
         "LOGNAME": account.pw_name,
         "PATH": KIMI_RUNTIME_PATH,
+        "TMPDIR": str(scratch_dir),
+        "TMP": str(scratch_dir),
+        "TEMP": str(scratch_dir),
+        "XDG_CACHE_HOME": str(scratch_dir / "cache"),
+    }
+    for name in KIMI_INHERITED_LOCALE_VARIABLES:
+        value = os.environ.get(name)
+        if value:
+            environment[name] = value
+    return environment
+
+
+def _gemini_environment(scratch_dir: Path, working_dir: Path) -> dict[str, str]:
+    """Return a minimal environment for the authenticated Antigravity CLI.
+
+    ``HOME`` is required so the CLI can use the owner's existing OAuth session.
+    No controller variables, API keys, database URLs, GitHub credentials, proxy
+    settings, or loader options are inherited. The credential remains owned by
+    the CLI and is never copied into the worker instruction or repository.
+    """
+    account = pwd.getpwuid(os.getuid())
+    account_home = Path(account.pw_dir).resolve()
+    runtime_paths = [
+        working_dir.resolve(strict=True) / ".venv" / "bin",
+        account_home / ".local" / "bin",
+        Path("/opt/homebrew/bin"),
+        Path("/usr/local/bin"),
+        Path("/usr/bin"),
+        Path("/bin"),
+        Path("/usr/sbin"),
+        Path("/sbin"),
+    ]
+    environment = {
+        "HOME": str(account_home),
+        "USER": account.pw_name,
+        "LOGNAME": account.pw_name,
+        "PATH": ":".join(str(path) for path in runtime_paths),
         "TMPDIR": str(scratch_dir),
         "TMP": str(scratch_dir),
         "TEMP": str(scratch_dir),
@@ -579,9 +617,15 @@ APPROVED_WORKER_NAMES: tuple[str, ...] = (
     "kimi",
     "kimi-swarm",
     "codex",
+    "gemini",
 )
-CANDIDATE_WORKER_NAMES: tuple[str, ...] = ("gemini",)
-APPROVED_PLANNER_NAMES: tuple[str, ...] = APPROVED_WORKER_NAMES
+CANDIDATE_WORKER_NAMES: tuple[str, ...] = ()
+APPROVED_PLANNER_NAMES: tuple[str, ...] = (
+    "dry-run",
+    "kimi",
+    "kimi-swarm",
+    "codex",
+)
 DEFAULT_PLANNER_TIMEOUT_SECONDS = 10 * 60
 
 
@@ -1002,34 +1046,74 @@ class CodexPlannerAdapter(WorkerAdapter):
             )
 
 
-class GeminiCandidateWorkerAdapter(WorkerAdapter):
-    """Disabled Gemini boundary pending owner authentication and evaluation.
+class GeminiWorkerAdapter(WorkerAdapter):
+    """Bounded local Antigravity CLI implementation-worker adapter."""
 
-    This adapter intentionally owns no executable, argv, API key, endpoint, or
-    authentication mechanism. It exists only so the governed registry and
-    rehearsals can represent Gemini without accidentally activating it.
-    """
+    DEFAULT_EXECUTABLE: ClassVar[str] = GEMINI_EXECUTABLE
+
+    def __init__(
+        self,
+        allowed_scope: list[str] | None = None,
+        timeout_seconds: int = DEFAULT_WORKER_TIMEOUT_SECONDS,
+    ):
+        self.executable = self.DEFAULT_EXECUTABLE
+        self.allowed_scope = allowed_scope or []
+        self.timeout_seconds = validate_worker_timeout(timeout_seconds)
 
     @property
     def name(self) -> str:
         return "gemini"
 
     def build_command(self, instruction: str, working_dir: Path) -> list[str]:
-        raise WorkerError(
-            "Gemini candidate is not activated; owner setup and approval are required"
-        )
+        working_dir.resolve(strict=True)
+        return [
+            self.executable,
+            "--print",
+            "--mode",
+            "accept-edits",
+            "--sandbox",
+            "--disable-slash-commands",
+            "--output-format",
+            "json",
+            "--print-timeout",
+            f"{self.timeout_seconds}s",
+            "--new-project",
+            instruction,
+        ]
 
     def run(self, instruction: str, working_dir: Path) -> WorkerResult:
         if _worker_input_blocked(instruction, working_dir):
-            return _credential_block_result(DEFAULT_WORKER_TIMEOUT_SECONDS)
-        return WorkerResult(
-            success=False,
-            message=(
-                "Gemini worker setup requires owner authentication, evaluation, "
-                "and explicit activation"
-            ),
-            terminal_reason="owner_action_required",
-        )
+            return _credential_block_result(self.timeout_seconds)
+        resolved_executable = shutil.which(self.executable)
+        if not resolved_executable:
+            return WorkerResult(
+                success=False,
+                message=f"Worker executable '{self.executable}' not found in PATH",
+                terminal_reason="launch_failed",
+                timeout_seconds=self.timeout_seconds,
+            )
+        bounded_instruction = _governed_instruction(instruction, self.allowed_scope)
+        with tempfile.TemporaryDirectory(
+            prefix="advancore-gemini-", dir="/tmp"
+        ) as scratch_name:
+            try:
+                command = self.build_command(bounded_instruction, working_dir)
+                command[0] = resolved_executable
+                return run_bounded_worker_process(
+                    command,
+                    working_dir,
+                    self.timeout_seconds,
+                    environment=_gemini_environment(
+                        Path(scratch_name).resolve(strict=True), working_dir
+                    ),
+                )
+            except Exception as exc:  # pragma: no cover - defensive
+                return WorkerResult(
+                    success=False,
+                    message=f"Worker launch failed: {type(exc).__name__}",
+                    terminal_reason="launch_failed",
+                    timeout_seconds=self.timeout_seconds,
+                )
 
 
 def validate_planner_policy(primary: str, fallback: str | None = None) -> None:
@@ -1093,11 +1177,11 @@ def build_worker_adapter(
         return KimiSwarmWorkerAdapter(allowed_scope=scope, timeout_seconds=timeout_seconds)
     if name == "codex":
         return CodexWorkerAdapter(allowed_scope=scope, timeout_seconds=timeout_seconds)
+    if name == "gemini":
+        return GeminiWorkerAdapter(allowed_scope=scope, timeout_seconds=timeout_seconds)
     return DryRunWorkerAdapter()
 
 
 def build_candidate_worker_adapter(name: str) -> WorkerAdapter:
-    """Build a disabled candidate boundary; never grant production authority."""
-    if name not in CANDIDATE_WORKER_NAMES:
-        raise WorkerError(f"Unknown candidate worker adapter: {name!r}")
-    return GeminiCandidateWorkerAdapter()
+    """Reject candidate construction while no worker is candidate-only."""
+    raise WorkerError(f"Unknown candidate worker adapter: {name!r}")

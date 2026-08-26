@@ -9,14 +9,23 @@ Standing authority is consumed at actual launch. Fallback consumes a separate
 approved-fallback action. Neither route receives new credentials or approval,
 merge, `main`, deployment, business or compliance authority.
 
-## Disabled Gemini candidate
+## Activated Gemini implementation worker
 
-Gemini is represented as a candidate only. The candidate has no executable,
-command arguments, API endpoint, credentials, usage claim, or production route.
-It returns an owner-action-required result and remains outside both approved
-worker and planner allowlists. It cannot become active until the owner later
-completes Google authentication, selects an approved provider surface, reviews
-any billing/data terms, and authorises a real bounded evaluation.
+Gemini uses the fixed local `agy` Antigravity CLI after owner-present Google
+authentication and a synthetic smoke evaluation. It is approved only for
+implementation and fallback roles, not planning or review. The adapter owns its
+executable name and arguments, uses print mode, accept-edits mode, workspace
+sandboxing, disabled slash expansion, JSON output, and a bounded timeout. It
+never enables the permission-bypass flag or accepts caller-selected models,
+agents, plugins, endpoints, API keys, or arbitrary command options.
+
+The worker process receives a minimal environment. `HOME` lets the CLI use its
+own existing OAuth session, but controller API keys, database URLs, GitHub
+credentials, proxy variables, and loader settings are not inherited. Input
+credential screening and post-worker repository verification remain mandatory.
+An unavailable Google Pro balance is not treated as proof that Gemini cannot
+run; actual executable, authentication, quota, and capacity failures are
+classified at launch.
 
 ## Governed selection
 
@@ -28,8 +37,9 @@ approval and role eligibility are checked before a name can be selected.
 
 Selection does not consume standing authority or start a process. The selected
 adapter must still pass the established credential, usage, isolation,
-repository-integrity, timeout, and launch checks. Gemini remains absent from
-all fixed preferences while it is a candidate.
+repository-integrity, timeout, and launch checks. TASK-098 activates the Gemini
+adapter but deliberately leaves the current runtime route unchanged. TASK-099
+will replace the one-hop route with Kimi-Swarm, Gemini, then Codex.
 
 ## Safe failover checkpoint
 
