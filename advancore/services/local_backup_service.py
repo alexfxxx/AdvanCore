@@ -18,6 +18,10 @@ from typing import Callable
 from sqlalchemy.engine import make_url
 
 from advancore.config import APP_NAME, APP_VERSION
+from advancore.services.local_postgres_container_service import (
+    LocalPostgresContainerError,
+    resolve_local_postgres_container,
+)
 
 
 _BACKUP_ID_PATTERN = re.compile(r"advancore-\d{8}T\d{6}Z-[0-9a-f]{8}")
@@ -149,6 +153,20 @@ class LocalBackupService:
         timestamp = created_at.strftime("%Y%m%dT%H%M%SZ")
         return f"advancore-{timestamp}-{token}", created_at
 
+    def _running_postgres_container(self, docker: str) -> str:
+        """Resolve only the canonical AdvanCore local PostgreSQL service."""
+        try:
+            return resolve_local_postgres_container(
+                self._repository_root,
+                docker,
+                int(self._database_environment["PGPORT"]),
+                self._command_runner,
+            )
+        except (LocalPostgresContainerError, TypeError, ValueError) as exc:
+            raise LocalBackupError(
+                "The local PostgreSQL backup container is unavailable."
+            ) from exc
+
     @staticmethod
     def _hash_archive(path: Path, expected_size: int | None = None) -> tuple[int, str]:
         flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
@@ -223,9 +241,19 @@ class LocalBackupService:
         if archive_path.exists() or manifest_path.exists() or temporary_path.exists():
             raise LocalBackupError("Backup identifier already exists.")
 
-        pg_dump = self._tool_path(self._tool_finder, "pg_dump")
+        docker = self._tool_path(self._tool_finder, "docker")
+        container_id = self._running_postgres_container(docker)
         command = [
-            pg_dump,
+            docker,
+            "exec",
+            "-u",
+            "postgres",
+            container_id,
+            "pg_dump",
+            "--username",
+            self._database_environment["PGUSER"],
+            "--dbname",
+            self._database_environment["PGDATABASE"],
             "--format=custom",
             "--no-owner",
             "--no-privileges",

@@ -29,7 +29,23 @@ class FakeCommandRunner:
 
     def __call__(self, args, **kwargs):
         self.calls.append((list(args), kwargs))
-        if str(args[0]).endswith("pg_dump"):
+        if str(args[0]).endswith("docker") and args[1] == "ps":
+            return subprocess.CompletedProcess(args, 0, stdout="0123456789ab\n", stderr="")
+        if str(args[0]).endswith("docker") and args[1] == "inspect":
+            return subprocess.CompletedProcess(
+                args,
+                0,
+                stdout=(
+                    "advancore-local|postgres|postgres:16|"
+                    "advancore_advancore_postgres_data\n"
+                ),
+                stderr="",
+            )
+        if str(args[0]).endswith("docker") and args[1] == "port":
+            return subprocess.CompletedProcess(
+                args, 0, stdout="127.0.0.1:5432\n", stderr=""
+            )
+        if str(args[0]).endswith("docker") and args[1] == "exec":
             if self.dump_code == 0:
                 kwargs["stdout"].write(self.archive)
             return subprocess.CompletedProcess(
@@ -98,10 +114,30 @@ def test_create_writes_atomic_owner_only_archive_and_strict_manifest(tmp_path):
     assert "sup3rsecret" not in manifest_text
     assert "advancore:sup3rsecret" not in manifest_text
 
-    dump_args, dump_kwargs = runner.calls[0]
-    restore_args, restore_kwargs = runner.calls[1]
+    discovery_args, discovery_kwargs = runner.calls[0]
+    inspect_args, inspect_kwargs = runner.calls[1]
+    port_args, port_kwargs = runner.calls[2]
+    dump_args, dump_kwargs = runner.calls[3]
+    restore_args, restore_kwargs = runner.calls[4]
+    assert discovery_args[:2] == ["/tools/docker", "ps"]
+    assert "label=com.docker.compose.project=advancore-local" in discovery_args
+    assert "label=com.docker.compose.service=postgres" in discovery_args
+    assert "PGPASSWORD" not in discovery_kwargs["env"]
+    assert inspect_args[:2] == ["/tools/docker", "inspect"]
+    assert port_args == ["/tools/docker", "port", "0123456789ab", "5432/tcp"]
+    assert "PGPASSWORD" not in inspect_kwargs["env"]
+    assert "PGPASSWORD" not in port_kwargs["env"]
     assert dump_args == [
-        "/tools/pg_dump",
+        "/tools/docker",
+        "exec",
+        "-u",
+        "postgres",
+        "0123456789ab",
+        "pg_dump",
+        "--username",
+        "advancore",
+        "--dbname",
+        "advancore",
         "--format=custom",
         "--no-owner",
         "--no-privileges",

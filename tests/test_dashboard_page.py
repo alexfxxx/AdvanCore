@@ -9,6 +9,11 @@ from advancore.services.dashboard_preference_service import (
     DashboardPreferences,
 )
 from advancore.services.dashboard_service import DashboardSummary
+from advancore.services.platform_readiness_service import (
+    PlatformReadinessSummary,
+    ReadinessItem,
+    ReadinessLevel,
+)
 from advancore.services.worker_usage_service import UsageState, UsageSummary
 
 
@@ -33,6 +38,7 @@ class FakeStreamlit:
     def error(self, value): self._record("error", value)
     def info(self, value): self._record("info", value)
     def caption(self, value): self._record("caption", value)
+    def write(self, value): self._record("write", value)
     def metric(self, label, value): self.metrics.append((label, value))
     def spinner(self, label):
         self.spinner_labels.append(label)
@@ -131,6 +137,7 @@ def _install(
         lambda: FakeUsageService(usage_summary or _usage_summary()),
     )
     monkeypatch.setattr(dashboard, "_render_fuel_visual_foundation", lambda: None)
+    monkeypatch.setattr(dashboard, "_render_platform_readiness", lambda: None)
     return preferences
 
 
@@ -151,6 +158,9 @@ def test_dashboard_renders_real_bounded_default_modules(monkeypatch):
         ("Kimi runtime this week", "Unavailable"),
         ("Codex role", "Approved fallback"),
         ("Codex usage", "Not available in AdvanCore"),
+        ("Gemini role", "Candidate — not active"),
+        ("Gemini status", "Setup Required"),
+        ("Gemini usage", "Not connected"),
         ("Total projects", 4),
         ("Active projects", 2),
         ("Archived projects", 1),
@@ -304,3 +314,37 @@ def test_preference_load_failure_shows_defaults_without_leak(monkeypatch):
     assert "safe default layout" in fake_st.text()
     for secret in ("password", "traceback"):
         assert secret not in fake_st.text()
+
+
+def test_platform_readiness_renders_bounded_states(monkeypatch):
+    fake_st = FakeStreamlit()
+    summary = PlatformReadinessSummary(
+        ReadinessLevel.ATTENTION,
+        (
+            ReadinessItem(
+                "database", "Local database", ReadinessLevel.READY, "Database is available."
+            ),
+            ReadinessItem(
+                "backup",
+                "Local backup",
+                ReadinessLevel.ATTENTION,
+                "No valid local backup is available.",
+            ),
+            ReadinessItem(
+                "recovery",
+                "Recovery proof",
+                ReadinessLevel.ATTENTION,
+                "No disposable recovery evidence is available.",
+            ),
+        ),
+    )
+    monkeypatch.setattr(dashboard, "st", fake_st)
+    monkeypatch.setattr(
+        dashboard, "_platform_readiness_service", lambda: FakeService(summary)
+    )
+
+    dashboard._render_platform_readiness()
+
+    assert "platform protection needs attention" in fake_st.text()
+    assert "Local database — Ready" in fake_st.text()
+    assert "No valid local backup" in fake_st.text()

@@ -100,9 +100,10 @@ def test_backup_artifacts_are_ignored_and_runbook_blocks_in_place_restore():
     normalized_runbook = " ".join(runbook.split())
 
     assert "data/backups/" in gitignore
-    assert "no restore button or restore command" in runbook.lower()
+    assert "no in-place restore button or command" in normalized_runbook.lower()
     assert "do not restore into the configured `advancore` database" in (
         normalized_runbook
     )
     assert "--no-owner --no-privileges" in runbook
+    assert "scripts/rehearse-advancore-recovery.py" in runbook
     assert (repository_root / "scripts" / "backup-advancore.py").stat().st_mode & 0o111

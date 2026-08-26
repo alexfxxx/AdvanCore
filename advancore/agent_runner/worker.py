@@ -580,6 +580,7 @@ APPROVED_WORKER_NAMES: tuple[str, ...] = (
     "kimi-swarm",
     "codex",
 )
+CANDIDATE_WORKER_NAMES: tuple[str, ...] = ("gemini",)
 APPROVED_PLANNER_NAMES: tuple[str, ...] = APPROVED_WORKER_NAMES
 DEFAULT_PLANNER_TIMEOUT_SECONDS = 10 * 60
 
@@ -1001,6 +1002,36 @@ class CodexPlannerAdapter(WorkerAdapter):
             )
 
 
+class GeminiCandidateWorkerAdapter(WorkerAdapter):
+    """Disabled Gemini boundary pending owner authentication and evaluation.
+
+    This adapter intentionally owns no executable, argv, API key, endpoint, or
+    authentication mechanism. It exists only so the governed registry and
+    rehearsals can represent Gemini without accidentally activating it.
+    """
+
+    @property
+    def name(self) -> str:
+        return "gemini"
+
+    def build_command(self, instruction: str, working_dir: Path) -> list[str]:
+        raise WorkerError(
+            "Gemini candidate is not activated; owner setup and approval are required"
+        )
+
+    def run(self, instruction: str, working_dir: Path) -> WorkerResult:
+        if _worker_input_blocked(instruction, working_dir):
+            return _credential_block_result(DEFAULT_WORKER_TIMEOUT_SECONDS)
+        return WorkerResult(
+            success=False,
+            message=(
+                "Gemini worker setup requires owner authentication, evaluation, "
+                "and explicit activation"
+            ),
+            terminal_reason="owner_action_required",
+        )
+
+
 def validate_planner_policy(primary: str, fallback: str | None = None) -> None:
     """Validate a fixed, explicit, single-hop proposal planner policy."""
     if primary not in APPROVED_PLANNER_NAMES:
@@ -1063,3 +1094,10 @@ def build_worker_adapter(
     if name == "codex":
         return CodexWorkerAdapter(allowed_scope=scope, timeout_seconds=timeout_seconds)
     return DryRunWorkerAdapter()
+
+
+def build_candidate_worker_adapter(name: str) -> WorkerAdapter:
+    """Build a disabled candidate boundary; never grant production authority."""
+    if name not in CANDIDATE_WORKER_NAMES:
+        raise WorkerError(f"Unknown candidate worker adapter: {name!r}")
+    return GeminiCandidateWorkerAdapter()
