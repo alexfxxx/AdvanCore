@@ -2,9 +2,11 @@
 
 from collections.abc import Iterator
 from contextlib import contextmanager
+import os
 from pathlib import Path
 
 import streamlit as st
+from dotenv import load_dotenv
 
 from advancore.repositories import (
     ActivityLogRepository,
@@ -20,6 +22,13 @@ from advancore.services.dashboard_preference_service import (
     DashboardPreferences,
 )
 from advancore.services.dashboard_service import DashboardService
+from advancore.services.local_backup_service import LocalBackupService
+from advancore.services.platform_readiness_service import (
+    PlatformReadinessService,
+    ReadinessLevel,
+)
+from advancore.services.readiness_service import ReadinessService
+from advancore.services.recovery_evidence_service import RecoveryEvidenceService
 from advancore.services.worker_usage_service import UsageState, WorkerUsageService
 from advancore.services.worker_health_service import (
     WorkerHealthService,
@@ -75,6 +84,44 @@ def _worker_usage_service() -> WorkerUsageService:
 
 def _worker_health_service() -> WorkerHealthService:
     return WorkerHealthService(_worker_usage_service())
+
+
+def _platform_readiness_service() -> PlatformReadinessService:
+    load_dotenv()
+    root = Path(__file__).resolve().parents[2]
+    database_url = os.getenv("DATABASE_URL", "")
+    database_configured = bool(database_url)
+    try:
+        from advancore.services.database import test_database_connection
+    except Exception:
+        database_probe = None
+    else:
+        database_probe = test_database_connection
+    readiness = ReadinessService(database_configured, database_probe)
+    configured_directory = os.getenv("ADVANCORE_BACKUP_DIR")
+    backup_directory = Path(configured_directory) if configured_directory else None
+
+    def inventory():
+        if not database_configured:
+            raise RuntimeError("unavailable")
+        return LocalBackupService(root, database_url, backup_directory).get_inventory()
+
+    evidence = RecoveryEvidenceService(root)
+    return PlatformReadinessService(readiness.get_summary, inventory, evidence.load)
+
+
+def _render_platform_readiness() -> None:
+    summary = _platform_readiness_service().get_summary()
+    if summary.overall == ReadinessLevel.READY:
+        st.success("Local platform protection checks are ready.")
+    elif summary.overall == ReadinessLevel.ATTENTION:
+        st.warning("Local platform protection needs attention.")
+    else:
+        st.error("One or more local platform checks are unavailable.")
+    with st.expander("Platform readiness details"):
+        for item in summary.items:
+            state = item.level.value.title()
+            st.write(f"{item.label} — {state}: {item.message}")
 
 
 def _metric_grid(metrics: list[tuple[str, object]]) -> None:
@@ -323,6 +370,7 @@ def render():
     if "platform" in visible:
         st.subheader("Platform status")
         st.success("Core application shell operational.")
+        _render_platform_readiness()
         _render_fuel_visual_foundation()
 
     if "ai_workforce" in visible:
