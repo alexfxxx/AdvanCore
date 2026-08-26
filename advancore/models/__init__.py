@@ -4,6 +4,7 @@ from advancore.models.driver import Driver
 from advancore.models.base import Base
 from advancore.models.knowledge import KnowledgeItem
 from advancore.models.project import Project
+from advancore.models.route import Route
 from advancore.models.setting import SystemSetting
 from advancore.models.vehicle import Vehicle
 
@@ -12,6 +13,7 @@ __all__ = [
     "Customer",
     "Driver",
     "Project",
+    "Route",
     "KnowledgeItem",
     "ActivityLog",
     "SystemSetting",
