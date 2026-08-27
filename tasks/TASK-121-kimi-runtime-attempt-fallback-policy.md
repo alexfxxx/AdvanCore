@@ -1,6 +1,6 @@
 # TASK-121 — Kimi Runtime Attempt and Fallback Policy
 
-STATUS: READY
+STATUS: APPROVED
 
 ## Objective
 
@@ -73,17 +73,17 @@ None.
 
 ## Acceptance criteria
 
-- [ ] Missing, stale, 20%-plus or unreadable usage evidence does not prevent a
+- [x] Missing, stale, 20%-plus or unreadable usage evidence does not prevent a
       governed Kimi/Kimi-Swarm process attempt.
-- [ ] Kimi retains credential screening, filesystem isolation and the bounded
+- [x] Kimi retains credential screening, filesystem isolation and the bounded
       runner timeout.
-- [ ] Classified Kimi executable, authentication, quota/limit or capacity
+- [x] Classified Kimi executable, authentication, quota/limit or capacity
       failure can notify and continue to Gemini, then Codex, subject to all
       existing authority and integrity checks.
-- [ ] Unknown failures, timeout, cancellation, unsafe input and Git mutation
+- [x] Unknown failures, timeout, cancellation, unsafe input and Git mutation
       still stop without further fallback.
-- [ ] Health evidence does not mark Kimi paused because of usage evidence.
-- [ ] No credentials, account data, operational data, database schema,
+- [x] Health evidence does not mark Kimi paused because of usage evidence.
+- [x] No credentials, account data, operational data, database schema,
       deployment or `main` behavior changes.
 - [ ] Focused tests, full tests and `git diff --check` pass.
 
@@ -113,4 +113,60 @@ None.
 
 ## Completion report
 
-Pending implementation.
+Implemented:
+
+- Removed legacy Kimi usage refresh, percentage/runtime preflight, timeout
+  reduction, launch-deadline, and runtime-accounting calls from both production
+  Kimi adapters.
+- Preserved credential screening, executable resolution, macOS filesystem
+  isolation, minimal environment, configured runner timeout, fixed fallback
+  order, failure classification, and repository-integrity checks.
+- Changed Kimi health to `CHECKED_AT_LAUNCH` without reading legacy usage
+  evidence.
+- Added deterministic missing, stale, 20%-plus, and unreadable-evidence launch
+  tests and updated routing documentation.
+
+Files changed:
+
+- `tasks/TASK-121-kimi-runtime-attempt-fallback-policy.md`
+- `advancore/agent_runner/worker.py`
+- `advancore/services/worker_health_service.py`
+- `tests/test_agent_runner.py`
+- `tests/test_auto_pipeline.py`
+- `tests/test_worker_health_service.py`
+- `tests/test_worker_usage_guardrail.py`
+- `tests/test_worker_fallback_integration.py`
+- `docs/runbooks/WORKER_ROUTING.md`
+
+Database changes: None.
+
+Tests executed and results:
+
+- Focused task suite: 152 passed.
+- Python compilation of changed Python files: passed.
+- `git diff --check`: passed.
+- Full `python -m pytest -q`: blocked during collection by the local environment:
+  missing `streamlit`, `python-dotenv`, and functional Alembic packages, plus an
+  installed SQLAlchemy version without `sqlalchemy.orm.mapped_column`. No test
+  cases ran in that invocation.
+
+Assumptions:
+
+- The legacy usage-evidence service remains available for informational or
+  separately scoped consumers but is not part of production Kimi launch or
+  Kimi health gating.
+
+Risks / unresolved issues:
+
+- Full-suite success remains unverified until the repository's complete local
+  test dependencies are available.
+
+Decisions required:
+
+- Independent reviewer/owner approval remains required. This implementation
+  does not approve or finalize the task.
+
+Recommended next step:
+
+- Run the full suite in the approved project environment with its declared
+  dependencies, then conduct independent review of the bounded patch.

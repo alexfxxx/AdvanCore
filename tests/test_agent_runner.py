@@ -591,15 +591,15 @@ class TestWorkerAdapterBoundary:
         adapter = KimiWorkerAdapter(implementation_worker=False)
         with patch(
             "advancore.agent_runner.worker.shutil.which", return_value="/bin/kimi"
-        ), patch("advancore.agent_runner.worker._kimi_usage_preflight") as preflight, patch(
+        ), patch("advancore.agent_runner.worker._kimi_isolation_available", return_value=True), patch(
             "advancore.agent_runner.worker.subprocess.run"
         ) as launched:
-            preflight.return_value = (None, None, None)
             launched.return_value = subprocess.CompletedProcess([], 0, "", "")
             result = adapter.run("instruction", tmp_path)
 
         assert result.success is True
-        assert launched.call_args.args[0][0] == "/bin/kimi"
+        assert launched.call_args.args[0][0] == "/usr/bin/sandbox-exec"
+        assert launched.call_args.args[0][3] == "/bin/kimi"
 
     def test_kimi_adapter_uses_fixed_owner_home_fallback(self, tmp_path: Path):
         owner_home = tmp_path / "owner"
@@ -612,16 +612,16 @@ class TestWorkerAdapterBoundary:
             "advancore.agent_runner.worker.shutil.which", return_value=None
         ), patch(
             "advancore.agent_runner.worker.pwd.getpwuid",
-            return_value=SimpleNamespace(pw_dir=str(owner_home)),
-        ), patch("advancore.agent_runner.worker._kimi_usage_preflight") as preflight, patch(
+            return_value=SimpleNamespace(pw_dir=str(owner_home), pw_name="owner"),
+        ), patch("advancore.agent_runner.worker._kimi_isolation_available", return_value=True), patch(
             "advancore.agent_runner.worker.subprocess.run"
         ) as launched:
-            preflight.return_value = (None, None, None)
             launched.return_value = subprocess.CompletedProcess([], 0, "", "")
             result = adapter.run("instruction", tmp_path)
 
         assert result.success is True
-        assert launched.call_args.args[0][0] == str(fixed_kimi)
+        assert launched.call_args.args[0][0] == "/usr/bin/sandbox-exec"
+        assert launched.call_args.args[0][3] == str(fixed_kimi)
 
     def test_kimi_adapter_rejects_unsafe_fixed_fallback(self, tmp_path: Path):
         owner_home = tmp_path / "owner"

@@ -12,7 +12,6 @@ import os
 import shlex
 import shutil
 import subprocess
-from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from unittest.mock import patch
 
@@ -29,7 +28,6 @@ from advancore.agent_runner import (
 from advancore.agent_runner.__main__ import main
 from advancore.agent_runner.auto_pipeline import DiffCheckResult, PytestResult
 from advancore.agent_runner.git_info import GitInfo
-from advancore.services.worker_usage_service import WorkerUsageService
 
 
 @pytest.fixture(autouse=True)
@@ -139,17 +137,8 @@ def _run_pipeline(
     isolation_available: bool = True,
 ):
     repo, tasks, fake_bin = _repo(tmp_path)
-    now = datetime.now(timezone.utc)
-    usage_dir = tmp_path / "controller-state" / "usage"
-    WorkerUsageService(repo, usage_dir=usage_dir).record_snapshot(
-        "kimi", 1, now, now + timedelta(days=4), "owner-verified"
-    )
     log = _install_workers(fake_bin, primary_mode, fallback_mode)
     monkeypatch.setenv("PATH", str(fake_bin))
-    monkeypatch.setattr(
-        "advancore.services.worker_usage_service._default_usage_dir",
-        lambda _repo: usage_dir,
-    )
     monkeypatch.setattr(
         "advancore.agent_runner.worker._kimi_isolation_available",
         lambda: isolation_available,
@@ -195,10 +184,10 @@ def test_clean_availability_failure_uses_codex_once_then_verifies(
     assert result.fallback_worker == result.terminal_worker == "codex"
 
 
-def test_nested_sandbox_unavailable_uses_codex_without_launching_or_reserving_kimi(
+def test_nested_sandbox_unavailable_uses_codex_without_launching_kimi(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ):
-    repo, result, invocations = _run_pipeline(
+    _, result, invocations = _run_pipeline(
         tmp_path, monkeypatch, isolation_available=False
     )
 
@@ -208,8 +197,6 @@ def test_nested_sandbox_unavailable_uses_codex_without_launching_or_reserving_ki
     assert result.fallback_attempt.failure == ProviderFailure.QUOTA_OR_CAPACITY
     assert result.fallback_attempt.integrity_ok
     assert result.terminal_worker == "codex"
-    usage_dir = tmp_path / "controller-state" / "usage"
-    assert WorkerUsageService(repo, usage_dir=usage_dir).get_summary().runtime_seconds == 0
 
 
 @pytest.mark.parametrize("primary_mode", ["unknown", "worktree", "index", "branch", "head", "remote"])
