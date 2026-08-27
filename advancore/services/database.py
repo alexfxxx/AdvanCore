@@ -20,7 +20,7 @@ engine = create_engine(
     pool_pre_ping=True,
 )
 
-SessionLocal = sessionmaker(bind=engine)
+SessionLocal = sessionmaker(bind=engine, expire_on_commit=False)
 
 
 def create_session_factory(bind_engine):
@@ -29,7 +29,7 @@ def create_session_factory(bind_engine):
     This helper is intended for tests and isolated database contexts that must
     not use the module-level production engine.
     """
-    return sessionmaker(bind=bind_engine)
+    return sessionmaker(bind=bind_engine, expire_on_commit=False)
 
 
 @contextmanager

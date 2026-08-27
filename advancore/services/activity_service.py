@@ -22,6 +22,7 @@ _APPROVED_ACTION_ENTITIES = {
     "knowledge_archived": "knowledge",
     "vehicle_created": "vehicle",
     "vehicle_status_changed": "vehicle",
+    "vehicle_details_updated": "vehicle",
     "driver_created": "driver",
     "driver_status_changed": "driver",
     "customer_created": "customer",

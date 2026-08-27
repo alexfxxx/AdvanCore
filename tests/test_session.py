@@ -3,7 +3,7 @@
 import pytest
 from sqlalchemy import create_engine, text
 
-from advancore.models import Base
+from advancore.models import Base, Vehicle
 from advancore.services.database import create_session_factory, session_scope
 
 
@@ -34,6 +34,19 @@ def test_session_scope_commits_and_closes_on_success(
     with sqlite_engine.connect() as connection:
         result = connection.execute(text("SELECT name FROM sqlite_master WHERE type='table' AND name='test_scope'"))
         assert result.scalar() == "test_scope"
+
+
+def test_committed_loaded_values_remain_available_for_read_only_rendering(
+    sqlite_session_factory,
+):
+    """Page renderers can safely use loaded scalar values after the session closes."""
+    with session_scope(sqlite_session_factory) as session:
+        vehicle = Vehicle(registration_number="VIEW-1", status="active")
+        session.add(vehicle)
+        session.flush()
+
+    assert vehicle.id == 1
+    assert vehicle.registration_number == "VIEW-1"
 
 
 def test_session_scope_rolls_back_and_closes_on_exception(
