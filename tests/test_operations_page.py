@@ -13,6 +13,7 @@ class FakeStreamlit:
         self.inputs = inputs or {}
         self.rerun_calls = 0
         self.downloads = []
+        self.widget_keys = []
 
     def _record(self, kind, value): self.messages.append((kind, str(value)))
     def header(self, value): self._record("header", value)
@@ -23,12 +24,16 @@ class FakeStreamlit:
     def warning(self, value): self._record("warning", value)
     def error(self, value): self._record("error", value)
     def success(self, value): self._record("success", value)
-    def text_input(self, label, **kwargs): return self.inputs.get(label, kwargs.get("value", ""))
+    def text_input(self, label, **kwargs):
+        if kwargs.get("key"): self.widget_keys.append(kwargs["key"])
+        return self.inputs.get(label, kwargs.get("value", ""))
     def date_input(self, label, **_kwargs): return self.inputs.get(label, date(2026, 8, 27))
     def number_input(self, label, **_kwargs): return self.inputs.get(label, 0.0)
     def checkbox(self, label, **_kwargs): return self.inputs.get(label, False)
     def button(self, label, **_kwargs): return label == self.submitted_label
-    def selectbox(self, label, options, **_kwargs): return self.inputs.get(label, options[0])
+    def selectbox(self, label, options, **kwargs):
+        if kwargs.get("key"): self.widget_keys.append(kwargs["key"])
+        return self.inputs.get(label, options[kwargs.get("index", 0)])
     def form_submit_button(self, label, **_kwargs): return label == self.submitted_label
     def rerun(self): self.rerun_calls += 1
     def dataframe(self, rows, **_kwargs): self.dataframes.append(rows)
@@ -64,7 +69,7 @@ def scope_for(service):
 
 def install_empty_services(monkeypatch):
     for name in (
-        "_vehicle_service", "_driver_service", "_customer_service", "_route_service",
+        "_vehicle_service", "_legal_entity_service", "_driver_service", "_customer_service", "_route_service",
         "_trip_service", "_assignment_service", "_fuel_service", "_financial_service",
     ):
         monkeypatch.setattr(operations, name, scope_for(EmptyService()))
@@ -191,6 +196,98 @@ def test_route_form_calls_route_service(monkeypatch):
 
     assert service.calls == [("r1", "Depot", "Terminal")]
     assert fake_st.rerun_calls == 1
+
+def test_fleet_combines_filters_and_shows_truthful_selected_detail(monkeypatch):
+    owner = SimpleNamespace(id=7, name="Owner Co", status="active")
+    matching = SimpleNamespace(id=1, registration_number="PC5234D", make_model=None, status="active",
+        registered_owner_id=7, vehicle_type="Bus", passenger_capacity=19, parking_monthly_cost=None)
+    other = SimpleNamespace(id=2, registration_number="CAR-2", make_model="Car", status="active",
+        registered_owner_id=None, vehicle_type="car", passenger_capacity=4)
+    entities = EmptyService(); entities.list_entities = lambda: [owner]
+    vehicles = EmptyService(); vehicles.list_vehicles = lambda: [matching, other]
+    fake_st = FakeStreamlit(inputs={"Filter by company": 7, "Filter by vehicle type": "Bus", "Filter by exact passenger capacity": 19})
+    monkeypatch.setattr(operations, "st", fake_st)
+    monkeypatch.setattr(operations, "_legal_entity_service", scope_for(entities))
+    monkeypatch.setattr(operations, "_vehicle_service", scope_for(vehicles))
+    operations._render_vehicle_register()
+    assert len(fake_st.dataframes[0]) == 1
+    assert fake_st.dataframes[0][0]["Registration"] == "PC5234D"
+    assert "Not recorded" in fake_st.text()
+
+def test_fleet_unfiltered_list_groups_registered_companies_then_registration(monkeypatch):
+    owners = [
+        SimpleNamespace(id=7, name="Zulu Transport", status="active"),
+        SimpleNamespace(id=8, name="Alpha Transport", status="active"),
+    ]
+    vehicles_list = [
+        SimpleNamespace(id=1, registration_number="PC2000A", make_model=None, status="active", registered_owner_id=7, vehicle_type="Bus", passenger_capacity=23),
+        SimpleNamespace(id=2, registration_number="PC3000A", make_model=None, status="active", registered_owner_id=8, vehicle_type="Bus", passenger_capacity=23),
+        SimpleNamespace(id=3, registration_number="PC1000A", make_model=None, status="active", registered_owner_id=8, vehicle_type="Bus", passenger_capacity=23),
+        SimpleNamespace(id=4, registration_number="PC0001A", make_model=None, status="active", registered_owner_id=None, vehicle_type="Bus", passenger_capacity=23),
+    ]
+    entities = EmptyService(); entities.list_entities = lambda: owners
+    vehicles = EmptyService(); vehicles.list_vehicles = lambda: vehicles_list
+    fake_st = FakeStreamlit()
+    monkeypatch.setattr(operations, "st", fake_st)
+    monkeypatch.setattr(operations, "_legal_entity_service", scope_for(entities))
+    monkeypatch.setattr(operations, "_vehicle_service", scope_for(vehicles))
+
+    operations._render_vehicle_register()
+
+    assert [row["Registration"] for row in fake_st.dataframes[0]] == [
+        "PC1000A",
+        "PC3000A",
+        "PC2000A",
+        "PC0001A",
+    ]
+
+def test_fleet_detail_update_preserves_prefilled_values(monkeypatch):
+    owner = SimpleNamespace(id=7, name="Owner Co", status="active")
+    selected = SimpleNamespace(
+        id=1, registration_number="PC5234D", make_model="Bus", status="active",
+        registered_owner_id=7, vehicle_type="Bus", manufacture_year=2020,
+        passenger_capacity=19, propellant="Diesel", scheme="Scheme A",
+        road_tax_amount="850.00", road_tax_period_months=6,
+    )
+    entities = EmptyService(); entities.list_entities = lambda: [owner]
+    vehicles = EmptyService(); vehicles.list_vehicles = lambda: [selected]
+    calls = []
+    vehicles.update_details = lambda identifier, **values: calls.append((identifier, values))
+    fake_st = FakeStreamlit(
+        submitted_label="Update vehicle details",
+        inputs={"Monthly parking cost, GST-inclusive (optional)": "125.00"},
+    )
+    monkeypatch.setattr(operations, "st", fake_st)
+    monkeypatch.setattr(operations, "_legal_entity_service", scope_for(entities))
+    monkeypatch.setattr(operations, "_vehicle_service", scope_for(vehicles))
+
+    operations._render_vehicle_register()
+
+    assert calls[0][0] == 1
+    assert calls[0][1]["registered_owner_id"] == 7
+    assert calls[0][1]["vehicle_type"] == "Bus"
+    assert calls[0][1]["manufacture_year"] == 2020
+    assert calls[0][1]["passenger_capacity"] == 19
+    assert calls[0][1]["propellant"] == "Diesel"
+    assert calls[0][1]["scheme"] == "Scheme A"
+    assert calls[0][1]["road_tax_amount"] == "850.00"
+    assert calls[0][1]["road_tax_period_months"] == 6
+    assert calls[0][1]["parking_monthly_cost"] == "125.00"
+    detail_keys = [key for key in fake_st.widget_keys if key.startswith("vehicle_details_")]
+    assert detail_keys
+    assert all(key.startswith("vehicle_details_1_") for key in detail_keys)
+    assert len(detail_keys) == len(set(detail_keys))
+
+def test_fleet_load_failure_is_bounded(monkeypatch):
+    @contextmanager
+    def failed_scope():
+        raise RuntimeError("private database detail")
+        yield
+    fake_st = FakeStreamlit(); monkeypatch.setattr(operations, "st", fake_st)
+    monkeypatch.setattr(operations, "_legal_entity_service", failed_scope)
+    operations._render_vehicle_register()
+    assert "Companies could not be loaded" in fake_st.text()
+    assert "private database detail" not in fake_st.text()
 
 
 def test_dispatch_board_renders_recorded_daily_state(monkeypatch):

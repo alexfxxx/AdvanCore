@@ -5,6 +5,7 @@ from advancore.models.fuel_entry import FuelEntry
 from advancore.models.financial_entry import FinancialEntry
 from advancore.models.base import Base
 from advancore.models.knowledge import KnowledgeItem
+from advancore.models.legal_entity import LegalEntity
 from advancore.models.project import Project
 from advancore.models.route import Route
 from advancore.models.setting import SystemSetting
@@ -21,6 +22,7 @@ __all__ = [
     "Project",
     "Route",
     "KnowledgeItem",
+    "LegalEntity",
     "ActivityLog",
     "SystemSetting",
     "Vehicle",

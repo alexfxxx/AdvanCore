@@ -2,6 +2,7 @@
 
 from collections.abc import Iterator
 from contextlib import contextmanager
+from datetime import date
 
 import streamlit as st
 
@@ -11,6 +12,7 @@ from advancore.repositories import (
     DriverRepository,
     FinancialEntryRepository,
     FuelEntryRepository,
+    LegalEntityRepository,
     RouteRepository,
     TripAssignmentRepository,
     TripRepository,
@@ -38,6 +40,9 @@ from advancore.services.financial_entry_service import (
     FinancialEntryValidationError,
 )
 from advancore.services.fuel_entry_service import FuelEntryService, FuelEntryValidationError
+from advancore.services.legal_entity_service import (
+    DuplicateLegalEntityError, LegalEntityService, LegalEntityValidationError,
+)
 from advancore.services.operational_import_service import (
     DATASET_HEADERS,
     DATASET_LABELS,
@@ -79,6 +84,7 @@ from advancore.services.trip_service import (
 )
 from advancore.services.vehicle_service import (
     VEHICLE_STATUSES,
+    VEHICLE_TYPES,
     DuplicateVehicleError,
     VehicleNotFoundError,
     VehicleService,
@@ -99,6 +105,11 @@ def _vehicle_service() -> Iterator[VehicleService]:
             VehicleRepository(session),
             ActivityLogService(ActivityLogRepository(session)),
         )
+
+@contextmanager
+def _legal_entity_service() -> Iterator[LegalEntityService]:
+    with _session_scope() as session:
+        yield LegalEntityService(LegalEntityRepository(session))
 
 
 @contextmanager
@@ -342,8 +353,19 @@ def _render_setup() -> None:
 
 
 def _render_vehicle_register() -> None:
-    st.subheader("Vehicle register")
+    st.subheader("Fleet register")
     st.caption("Only vehicles you enter are shown. No sample fleet data is generated.")
+    entities = _load(_legal_entity_service, "list_entities", "Companies could not be loaded.")
+    if entities is None: return
+    with st.form("create_legal_entity"):
+        company_name = st.text_input("Registered company name", max_chars=160)
+        company_submitted = st.form_submit_button("Add company")
+    if company_submitted:
+        try:
+            with _legal_entity_service() as service: service.create(company_name)
+        except (LegalEntityValidationError, DuplicateLegalEntityError) as exc: st.warning(str(exc))
+        except Exception: st.error("Company could not be saved. Please try again.")
+        else: st.success("Company added."); st.rerun()
     with st.form("create_vehicle"):
         registration = st.text_input("Registration number", max_chars=32)
         make_model = st.text_input("Make/model (optional)", max_chars=120)
@@ -359,17 +381,36 @@ def _render_vehicle_register() -> None:
         else:
             st.success("Vehicle added.")
             st.rerun()
-    vehicles = _load(_vehicle_service, "list_vehicles", "Vehicle register could not be loaded.")
-    if vehicles is None:
-        return
+    all_vehicles = _load(_vehicle_service, "list_vehicles", "Vehicle register could not be loaded.")
+    if all_vehicles is None: return
+    owner_by_id = {item.id: item for item in entities}
+    company_options = [None, *owner_by_id]
+    type_options = [None, *VEHICLE_TYPES]
+    capacity_options = [None, *sorted({getattr(item, "passenger_capacity", None) for item in all_vehicles if getattr(item, "passenger_capacity", None) is not None})]
+    owner_filter = st.selectbox("Filter by company", company_options, format_func=lambda value: "All companies" if value is None else owner_by_id[value].name)
+    type_filter = st.selectbox("Filter by vehicle type", type_options, format_func=lambda value: "All vehicle types" if value is None else value)
+    capacity_filter = st.selectbox("Filter by exact passenger capacity", capacity_options, format_func=lambda value: "All capacities" if value is None else str(value))
+    vehicles = [item for item in all_vehicles if (owner_filter is None or getattr(item, "registered_owner_id", None) == owner_filter) and (type_filter is None or getattr(item, "vehicle_type", None) == type_filter) and (capacity_filter is None or getattr(item, "passenger_capacity", None) == capacity_filter)]
+    vehicles.sort(
+        key=lambda item: (
+            getattr(item, "registered_owner_id", None) not in owner_by_id,
+            owner_by_id[getattr(item, "registered_owner_id", None)].name.casefold()
+            if getattr(item, "registered_owner_id", None) in owner_by_id
+            else "",
+            item.registration_number,
+        )
+    )
     if not vehicles:
-        st.info("No vehicles registered yet.")
+        st.info("No vehicles registered yet." if not all_vehicles else "No vehicles match the selected filters.")
         return
     st.dataframe(
         [
             {
                 "Registration": item.registration_number,
                 "Make/model": item.make_model or "Not provided",
+                "Company": owner_by_id[getattr(item, "registered_owner_id", None)].name if getattr(item, "registered_owner_id", None) in owner_by_id else "Not recorded",
+                "Type": getattr(item, "vehicle_type", None) or "Not recorded",
+                "Exact seats": getattr(item, "passenger_capacity", None) if getattr(item, "passenger_capacity", None) is not None else "Not recorded",
                 "Status": item.status.replace("_", " ").title(),
             }
             for item in vehicles
@@ -399,6 +440,66 @@ def _render_vehicle_register() -> None:
         else:
             st.success("Vehicle status updated.")
             st.rerun()
+    selected_id = st.selectbox("View vehicle details", list(by_id), format_func=lambda key: by_id[key].registration_number)
+    selected = by_id[selected_id]
+    def shown(value): return "Not recorded" if value is None or value == "" else str(value)
+    def form_value(value): return "" if value is None else str(value)
+    st.write({
+        "Registered company": owner_by_id[getattr(selected, "registered_owner_id", None)].name if getattr(selected, "registered_owner_id", None) in owner_by_id else "Not recorded",
+        "Manufacture year": shown(getattr(selected, "manufacture_year", None)), "Vehicle type": shown(getattr(selected, "vehicle_type", None)),
+        "Exact LTA passenger capacity": shown(getattr(selected, "passenger_capacity", None)), "Propellant": shown(getattr(selected, "propellant", None)),
+        "Scheme": shown(getattr(selected, "scheme", None)), "Chassis number": shown(getattr(selected, "chassis_number", None)), "Engine number": shown(getattr(selected, "engine_number", None)),
+        "Original registration date": shown(getattr(selected, "original_registration_date", None)), "Lifespan expiry": shown(getattr(selected, "lifespan_expiry", None)), "COE expiry": shown(getattr(selected, "coe_expiry", None)),
+        "Primary colour": shown(getattr(selected, "primary_colour", None)), "Unladen weight (kg)": shown(getattr(selected, "unladen_weight_kg", None)), "Maximum laden weight (kg)": shown(getattr(selected, "maximum_laden_weight_kg", None)),
+        "Parking provider": shown(getattr(selected, "parking_provider", None)), "Parking location": shown(getattr(selected, "parking_location", None)), "Monthly parking cost (GST-inclusive)": shown(getattr(selected, "parking_monthly_cost", None)),
+        "Insurance provider": shown(getattr(selected, "insurance_provider", None)), "Annual insurance amount (GST-inclusive)": shown(getattr(selected, "insurance_annual_amount", None)),
+        "Road-tax amount": shown(getattr(selected, "road_tax_amount", None)), "Road-tax period months": shown(getattr(selected, "road_tax_period_months", None)),
+    })
+    st.caption(
+        "Current road-tax renewals are GIRO-paid. Amounts are recorded from the "
+        "actual current LTA/GIRO record and are never estimated from seating capacity."
+    )
+    detail_key = f"vehicle_details_{selected_id}"
+    with st.form(detail_key):
+        owner_options = [None, *owner_by_id]
+        selected_owner = getattr(selected, "registered_owner_id", None)
+        detail_owner = st.selectbox("Registered owner", owner_options, key=f"{detail_key}_owner", index=owner_options.index(selected_owner) if selected_owner in owner_options else 0, format_func=lambda value: "Not recorded" if value is None else owner_by_id[value].name)
+        type_options = [None, *VEHICLE_TYPES]
+        selected_type = getattr(selected, "vehicle_type", None)
+        detail_type = st.selectbox("Vehicle type", type_options, key=f"{detail_key}_type", index=type_options.index(selected_type) if selected_type in type_options else 0, format_func=lambda value: "Not recorded" if value is None else value)
+        detail_year = st.text_input("Manufacture year (optional)", value=form_value(getattr(selected, "manufacture_year", None)), max_chars=4, key=f"{detail_key}_manufacture_year")
+        detail_capacity = st.text_input("Exact LTA passenger capacity (optional)", value=form_value(getattr(selected, "passenger_capacity", None)), max_chars=4, key=f"{detail_key}_passenger_capacity")
+        text_fields = {
+            "propellant": ("Propellant (optional)", 40), "scheme": ("Scheme (optional)", 80),
+            "chassis_number": ("Chassis number (optional)", 80), "engine_number": ("Engine number (optional)", 80),
+            "primary_colour": ("Primary colour (optional)", 40), "parking_provider": ("Parking provider (optional)", 120),
+            "parking_location": ("Parking location (optional)", 200), "insurance_provider": ("Insurance provider (optional)", 120),
+        }
+        detail_text = {field: st.text_input(label, value=getattr(selected, field, None) or "", max_chars=maximum, key=f"{detail_key}_{field}") for field, (label, maximum) in text_fields.items()}
+        detail_dates = {field: st.text_input(label, value=form_value(getattr(selected, field, None)), max_chars=10, key=f"{detail_key}_{field}") for field, label in (
+            ("original_registration_date", "Original registration date YYYY-MM-DD (optional)"),
+            ("lifespan_expiry", "Lifespan expiry YYYY-MM-DD (optional)"), ("coe_expiry", "COE expiry YYYY-MM-DD (optional)"),
+        )}
+        detail_amounts = {field: st.text_input(label, value=form_value(getattr(selected, field, None)), key=f"{detail_key}_{field}") for field, label in (
+            ("unladen_weight_kg", "Unladen weight kg (optional)"), ("maximum_laden_weight_kg", "Maximum laden weight kg (optional)"),
+            ("parking_monthly_cost", "Monthly parking cost, GST-inclusive (optional)"),
+            ("insurance_annual_amount", "Annual insurance amount, GST-inclusive (optional)"), ("road_tax_amount", "Road-tax amount (optional)"),
+        )}
+        road_period_options = [None, 6, 12]
+        selected_road_period = getattr(selected, "road_tax_period_months", None)
+        road_period = st.selectbox("Road-tax period months", road_period_options, key=f"{detail_key}_road_tax_period_months", index=road_period_options.index(selected_road_period) if selected_road_period in road_period_options else 0, format_func=lambda value: "Not recorded" if value is None else str(value))
+        details_changed = st.form_submit_button("Update vehicle details")
+    if details_changed:
+        try:
+            parsed_dates = {field: date.fromisoformat(value.strip()) if value.strip() else None for field, value in detail_dates.items()}
+            with _vehicle_service() as service:
+                service.update_details(selected_id, registered_owner_id=detail_owner, vehicle_type=detail_type,
+                    manufacture_year=int(detail_year) if detail_year.strip() else None,
+                    passenger_capacity=int(detail_capacity) if detail_capacity.strip() else None,
+                    road_tax_period_months=road_period, **detail_text, **parsed_dates, **detail_amounts)
+        except (ValueError, VehicleValidationError, VehicleNotFoundError) as exc: st.warning(str(exc))
+        except Exception: st.error("Vehicle details could not be updated.")
+        else: st.success("Vehicle details updated."); st.rerun()
 
 
 def _render_dispatch_board() -> None:
