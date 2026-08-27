@@ -70,11 +70,13 @@ def test_vehicle_mutations_record_only_bounded_activity_identifiers():
         service = VehicleService(VehicleRepository(session), activity)
         vehicle = service.create_vehicle("BUS-PRIVATE", "Sensitive model note")
         service.set_status(vehicle.id, "retired")
+        service.update_details(vehicle.id, passenger_capacity=13)
         vehicle_id = vehicle.id
 
     assert activity.calls == [
         ("vehicle_created", "vehicle", vehicle_id),
         ("vehicle_status_changed", "vehicle", vehicle_id),
+        ("vehicle_details_updated", "vehicle", vehicle_id),
     ]
     assert "Sensitive" not in repr(activity.calls)
 

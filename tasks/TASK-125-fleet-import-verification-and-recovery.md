@@ -25,6 +25,11 @@ presented without changing business rules or expanding the data collected.
 ## Allowed changed-file scope
 
 - `tasks/TASK-125-fleet-import-verification-and-recovery.md`
+- `advancore/services/activity_service.py`
+- `advancore/services/database.py`
+- `tests/test_activity_service.py`
+- `tests/test_vehicle_service.py`
+- `tests/test_session.py`
 - Ignored local backup and recovery-evidence files.
 
 ## Database impact
@@ -46,4 +51,3 @@ create and delete only its bounded disposable temporary database.
 
 None. Corrections discovered during verification must stop for a new owner
 decision rather than silently changing real operational data.
-

@@ -64,6 +64,7 @@ def test_list_and_get_delegate_to_repository():
         ("knowledge_archived", "knowledge"),
         ("vehicle_created", "vehicle"),
         ("vehicle_status_changed", "vehicle"),
+        ("vehicle_details_updated", "vehicle"),
         ("driver_created", "driver"),
         ("driver_status_changed", "driver"),
         ("customer_created", "customer"),
