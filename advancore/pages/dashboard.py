@@ -13,6 +13,7 @@ from advancore.repositories import (
     KnowledgeItemRepository,
     ProjectRepository,
     SystemSettingRepository,
+    FuelEntryRepository,
 )
 from advancore.services.dashboard_preference_service import (
     AVAILABLE_DASHBOARD_MODULES,
@@ -23,6 +24,10 @@ from advancore.services.dashboard_preference_service import (
 )
 from advancore.services.dashboard_service import DashboardService
 from advancore.services.local_backup_service import LocalBackupService
+from advancore.services.fuel_intelligence_service import (
+    FuelIntelligenceService,
+    FuelIntelligenceSummary,
+)
 from advancore.services.platform_readiness_service import (
     PlatformReadinessService,
     ReadinessLevel,
@@ -37,7 +42,11 @@ from advancore.services.worker_routing_evidence_service import (
     WorkerSwitchingStatusService,
 )
 from advancore.ui.custom_components import render_fuel_status_component
-from advancore.ui.fuel_trends import ALLOWED_FUEL_WINDOWS, build_fuel_trend_figure
+from advancore.ui.fuel_trends import (
+    ALLOWED_FUEL_WINDOWS,
+    FuelTrendPoint,
+    build_fuel_trend_figure,
+)
 
 
 _MODULE_LABELS = {
@@ -53,9 +62,9 @@ _WORKER_LABELS = {
     "gemini": "Gemini",
 }
 _FUEL_WINDOW_LABELS = {
-    7: "Latest 7 readings",
-    30: "Latest 30 readings",
-    None: "All available readings",
+    7: "Latest 7 recorded days",
+    30: "Latest 30 recorded days",
+    None: "All recorded days",
 }
 _FUEL_WINDOW_STATE_KEY = "dashboard_fuel_window"
 _AI_AUTH_SESSION_KEY = "dashboard_ai_auth_readiness"
@@ -79,6 +88,22 @@ def _dashboard_preference_service() -> Iterator[DashboardPreferenceService]:
 
     with session_scope() as session:
         yield DashboardPreferenceService(SystemSettingRepository(session))
+
+
+@contextmanager
+def _fuel_intelligence_service() -> Iterator[FuelIntelligenceService]:
+    from advancore.services.database import session_scope
+
+    with session_scope() as session:
+        yield FuelIntelligenceService(FuelEntryRepository(session))
+
+
+def _load_fuel_intelligence() -> FuelIntelligenceSummary | None:
+    try:
+        with _fuel_intelligence_service() as service:
+            return service.get_summary()
+    except Exception:
+        return None
 
 
 def _worker_auth_readiness_service() -> WorkerAuthReadinessService:
@@ -279,14 +304,45 @@ def _active_fuel_window() -> int | None:
     return selected
 
 
-def _render_fuel_visual_foundation() -> None:
-    """Render the no-fabrication fuel chart and explicit voice confirmation UI."""
+def _render_fuel_visual_foundation(summary: FuelIntelligenceSummary | None) -> None:
+    """Render recorded fuel intelligence and explicit view confirmation UI."""
     st.subheader("Fuel trend console")
-    st.caption(
-        "Visual groundwork only. No operational fuel records are connected, so "
-        "AdvanCore will not invent a trend."
-    )
     render_fuel_status_component()
+    if summary is None:
+        st.warning("Recorded fuel intelligence is unavailable. No trend has been inferred.")
+        return
+    st.caption(
+        "Connected to immutable operational fuel records. Missing cost, currency, "
+        "and odometer evidence remains explicitly unavailable."
+    )
+    trend_points = tuple(
+        FuelTrendPoint.from_recorded_date(item.recorded_on, float(item.litres))
+        for item in summary.daily_totals
+    )
+    metric_columns = st.columns(4)
+    metric_columns[0].metric("Recorded entries", f"{summary.entry_count:,}")
+    metric_columns[1].metric("Recorded litres", f"{summary.total_litres:,.2f} L")
+    metric_columns[2].metric(
+        "Recorded total cost",
+        "Not available"
+        if summary.total_cost is None
+        else f"{summary.total_cost:,.2f} (currency not captured)",
+    )
+    metric_columns[3].metric(
+        "Recorded cost per litre",
+        "Not available"
+        if summary.average_cost_per_litre is None
+        else f"{summary.average_cost_per_litre:,.2f} (currency not captured)",
+    )
+    st.caption(
+        f"Cost recorded for {summary.cost_entry_count:,} of {summary.entry_count:,} entries. "
+        f"Observed odometer distance: "
+        f"{'Not enough evidence' if summary.observed_distance_km is None else f'{summary.observed_distance_km:,.1f} km'}; "
+        f"{summary.ignored_odometer_interval_count:,} non-increasing interval(s) ignored."
+    )
+    st.info(
+        "Fuel efficiency is not calculated because full-tank evidence is not captured."
+    )
 
     active_window = _active_fuel_window()
     selected_window = st.selectbox(
@@ -330,7 +386,7 @@ def _render_fuel_visual_foundation() -> None:
         st.success("Fuel view applied without voice.")
 
     st.caption(f"Active view: {_FUEL_WINDOW_LABELS[active_window]}.")
-    figure = build_fuel_trend_figure((), active_window)
+    figure = build_fuel_trend_figure(trend_points, active_window)
     st.plotly_chart(
         figure,
         width="stretch",
@@ -342,7 +398,8 @@ def _render_fuel_visual_foundation() -> None:
             "modeBarButtonsToRemove": ["select2d", "lasso2d"],
         },
     )
-    st.info("Fuel data connection is intentionally pending a separate governed task.")
+    if summary is not None and not summary.daily_totals:
+        st.info("No operational fuel entries are recorded yet.")
 
 
 def render():
@@ -371,7 +428,7 @@ def render():
         st.subheader("Platform status")
         st.success("Core application shell operational.")
         _render_platform_readiness()
-        _render_fuel_visual_foundation()
+        _render_fuel_visual_foundation(_load_fuel_intelligence())
 
     if "ai_workforce" in visible:
         _render_ai_workforce(preferences.workers)

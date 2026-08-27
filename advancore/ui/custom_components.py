@@ -9,7 +9,7 @@ FUEL_STATUS_COMPONENT_HTML = """
     <h3 class="fuel-hud__title">Fuel trend console</h3>
     <div class="fuel-hud__state">
         <span class="fuel-hud__dot" aria-hidden="true"></span>
-        Visual layer ready · operational fuel source not connected
+        Governed operational fuel source · recorded facts only
     </div>
 </section>
 """
