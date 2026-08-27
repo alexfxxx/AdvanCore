@@ -1,6 +1,6 @@
 # TASK-124 — Approved Real Fleet Import
 
-STATUS: APPROVED
+STATUS: COMPLETE
 
 ## Objective
 
@@ -44,12 +44,12 @@ the existing bounded activity events. No migration or schema change is allowed.
 
 ## Acceptance criteria
 
-- [ ] A fresh pre-import backup is created and independently verified.
-- [ ] Exactly three owner records and 27 unique vehicles are added atomically.
-- [ ] All required preview fields match the approved batch.
-- [ ] Unknown finance/current-cost fields remain null.
-- [ ] No source PDF or real import payload is committed.
-- [ ] A failed precondition or row rolls back the full batch.
+- [x] A fresh pre-import backup is created and independently verified.
+- [x] Exactly three owner records and 27 unique vehicles are added atomically.
+- [x] All required preview fields match the approved batch.
+- [x] Unknown finance/current-cost fields remain null.
+- [x] No source PDF or real import payload is committed.
+- [x] A failed precondition or row rolls back the full batch.
 
 ## Owner decisions
 
@@ -57,3 +57,22 @@ The owner approved the 27-vehicle TASK-123 preview on 27 August 2026. A road-tax
 amount without its required 6- or 12-month period must remain unrecorded rather
 than inferred.
 
+## Completion report
+
+- Implemented: created three approved legal owners and 27 approved vehicles in
+  one local transaction through the existing legal-entity and vehicle services.
+- Database changes: data only; no migration or schema change. The batch added
+  three legal entities, 27 vehicles and 54 bounded vehicle activity events.
+- Recovery gate: pre-import backup `advancore-20260827T150613Z-35a1a5dc` was
+  created and verified before the write.
+- Verification: 27 vehicles, 27 unique registrations, 27 owner links, 26 buses,
+  one lorry and all 27 current-cost groups unknown.
+- Rollback evidence: two pre-commit validation failures were reproduced during
+  controlled execution; both left vehicle and owner counts at zero before the
+  successful corrected run.
+- Privacy: the approved payload and source PDFs remained local scratch data and
+  were not staged or committed.
+- Assumption: the source-only road-tax amount remains unrecorded until its
+  required period is confirmed; no period was inferred.
+- Decisions required: none for the completed bounded import.
+- Recommended next step: finish TASK-125 recovery and visual verification.

@@ -1,6 +1,6 @@
 # TASK-123 — Real Fleet Logcard Import Preview
 
-STATUS: APPROVED
+STATUS: COMPLETE
 
 ## Objective
 
@@ -42,15 +42,26 @@ None. Approval of the preview is a separate gate before TASK-124.
 
 ## Acceptance criteria
 
-- [ ] Exactly 27 unique registrations are represented.
-- [ ] Every row has registered owner, make/model, manufacture year, exact
+- [x] Exactly 27 unique registrations are represented.
+- [x] Every row has registered owner, make/model, manufacture year, exact
       passenger capacity and normalized vehicle type.
-- [ ] No owner identifier, address or source PDF is copied into Git.
-- [ ] Unknown costs remain unknown and no amount is inferred.
-- [ ] The owner explicitly approves or rejects the preview before TASK-124.
+- [x] No owner identifier, address or source PDF is copied into Git.
+- [x] Unknown costs remain unknown and no amount is inferred.
+- [x] The owner explicitly approves or rejects the preview before TASK-124.
 
 ## Owner decisions
 
 The owner approved TASK-123 through TASK-125 and explicitly required the
 preview to remain a gate before the 27-vehicle database write.
 
+## Completion report
+
+- Implemented: parsed the 27 supplied documents into a hash-locked local batch
+  and produced a filterable redacted preview outside the repository.
+- Database changes: none during TASK-123.
+- Verification: 27 unique registrations, three owners, 26 buses, one lorry and
+  zero missing required preview fields.
+- Privacy: source PDFs, owner identifiers, addresses and the real row payload
+  were not copied into Git.
+- Decision: the owner explicitly approved the preview on 27 August 2026.
+- Recommended next step: execute TASK-124 against the approved batch only.
