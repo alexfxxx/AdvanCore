@@ -93,7 +93,7 @@ class RecoveryEvidenceService:
         clock_value = self._clock()
         if not isinstance(clock_value, datetime) or clock_value.tzinfo is None:
             raise RecoveryEvidenceError("Recovery evidence clock is invalid.")
-        if completed > clock_value.astimezone(timezone.utc).replace(microsecond=0):
+        if completed > clock_value.astimezone(timezone.utc):
             raise RecoveryEvidenceError("Recovery evidence is future-dated.")
         if not isinstance(evidence.migration_head, str) or not _MIGRATION_HEAD.fullmatch(
             evidence.migration_head
