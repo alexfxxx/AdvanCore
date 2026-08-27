@@ -45,6 +45,13 @@ from advancore.services.operational_import_service import (
     csv_template,
     preview_csv,
 )
+from advancore.services.operational_import_review_service import (
+    REVIEW_ALREADY_EXISTS,
+    REVIEW_DUPLICATE_FILE,
+    REVIEW_DUPLICATE_FILE_AND_EXISTS,
+    REVIEW_INVALID,
+    review_import,
+)
 from advancore.services.route_service import (
     ROUTE_STATUSES,
     DuplicateRouteError,
@@ -146,6 +153,28 @@ def _load(service_scope, method: str, error_message: str):
         return None
 
 
+def _existing_import_identities(dataset_type: str) -> set[str] | None:
+    configuration = {
+        "vehicles": (_vehicle_service, "list_vehicles", "registration_number"),
+        "drivers": (_driver_service, "list_drivers", "employee_reference"),
+        "customers": (_customer_service, "list_customers", "customer_reference"),
+        "routes": (_route_service, "list_routes", "route_code"),
+    }
+    service_scope, method, attribute = configuration[dataset_type]
+    records = _load(
+        service_scope,
+        method,
+        f"{DATASET_LABELS[dataset_type]} could not be loaded for duplicate review.",
+    )
+    if records is None:
+        return None
+    return {
+        value
+        for record in records
+        if isinstance((value := getattr(record, attribute, None)), str) and value
+    }
+
+
 def _render_setup() -> None:
     st.subheader("Operational CSV setup")
     st.caption(
@@ -206,6 +235,39 @@ def _render_setup() -> None:
         st.warning("Correct every invalid row before a later governed import review.")
     else:
         st.success("All rows pass preview validation. Nothing has been saved.")
+
+    existing_identities = _existing_import_identities(dataset_type)
+    if existing_identities is None:
+        return
+    review = review_import(preview, existing_identities)
+    st.subheader("Import review queue")
+    st.caption(
+        "Read-only exact duplicate review. No records are created from this screen."
+    )
+    existing_count = review.count(REVIEW_ALREADY_EXISTS) + review.count(
+        REVIEW_DUPLICATE_FILE_AND_EXISTS
+    )
+    file_duplicate_count = review.count(REVIEW_DUPLICATE_FILE) + review.count(
+        REVIEW_DUPLICATE_FILE_AND_EXISTS
+    )
+    st.write(
+        f"{review.publishable_count:,} ready; "
+        f"{existing_count:,} already exist; "
+        f"{file_duplicate_count:,} duplicated in file; "
+        f"{review.count(REVIEW_INVALID):,} invalid."
+    )
+    st.dataframe(
+        [
+            {
+                "CSV row": item.preview_row.row_number,
+                "Review status": item.status.replace("_", " ").title(),
+                "Review": item.message,
+            }
+            for item in review.rows
+        ],
+        use_container_width=True,
+        hide_index=True,
+    )
 
 
 def _render_vehicle_register() -> None:
