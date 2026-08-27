@@ -93,6 +93,7 @@ def test_fastapi_serves_static_console_and_bounded_status(tmp_path):
 
     assert page.status_code == 200
     assert "AdvanCore test console" in page.text
+    assert "script-src 'self'" in page.headers["content-security-policy"]
     assert response.status_code == 200
     assert response.json() == {
         "service": "AdvanCore local API",
@@ -197,3 +198,11 @@ def test_voice_websocket_is_disabled_and_accepts_no_audio(tmp_path):
 
     assert message["state"] == "disabled"
     assert "not accepted or stored" in message["message"]
+
+
+def test_authority_bearing_console_loads_no_remote_executable_script():
+    root = Path(__file__).resolve().parents[1]
+    page = (root / "frontend" / "index.html").read_text(encoding="utf-8")
+
+    assert "cdn.tailwindcss.com" not in page
+    assert '<script src="http' not in page
