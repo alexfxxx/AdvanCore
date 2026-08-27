@@ -37,6 +37,14 @@ from advancore.services.financial_entry_service import (
     FinancialEntryValidationError,
 )
 from advancore.services.fuel_entry_service import FuelEntryService, FuelEntryValidationError
+from advancore.services.operational_import_service import (
+    DATASET_HEADERS,
+    DATASET_LABELS,
+    MAX_CSV_BYTES,
+    OperationalImportError,
+    csv_template,
+    preview_csv,
+)
 from advancore.services.route_service import (
     ROUTE_STATUSES,
     DuplicateRouteError,
@@ -136,6 +144,68 @@ def _load(service_scope, method: str, error_message: str):
     except Exception:
         st.error(error_message)
         return None
+
+
+def _render_setup() -> None:
+    st.subheader("Operational CSV setup")
+    st.caption(
+        "Preview only: uploaded rows stay in memory and are never saved to the database."
+    )
+    dataset_type = st.selectbox(
+        "CSV dataset",
+        list(DATASET_HEADERS),
+        format_func=lambda value: DATASET_LABELS[value],
+    )
+    st.download_button(
+        f"Download {DATASET_LABELS[dataset_type].lower()} template",
+        data=csv_template(dataset_type),
+        file_name=f"advancore_{dataset_type}_template.csv",
+        mime="text/csv",
+        key=f"download_{dataset_type}_template",
+    )
+    upload = st.file_uploader(
+        f"Upload completed {DATASET_LABELS[dataset_type].lower()} CSV",
+        type=["csv"],
+        key=f"upload_{dataset_type}_csv",
+        max_upload_size=1,
+    )
+    if upload is None:
+        st.info("Download a template, complete it locally, then upload it for validation.")
+        return
+    reported_size = getattr(upload, "size", None)
+    if reported_size is not None and reported_size > MAX_CSV_BYTES:
+        st.warning("CSV file exceeds the 1 MiB preview limit.")
+        return
+    try:
+        preview = preview_csv(dataset_type, upload.getvalue())
+    except OperationalImportError as exc:
+        st.warning(str(exc))
+        return
+
+    st.write(
+        f"Previewed {len(preview.rows):,} row(s): "
+        f"{preview.valid_row_count:,} valid and {preview.invalid_row_count:,} requiring correction."
+    )
+    if not preview.rows:
+        st.info("The template contains no data rows to preview.")
+        return
+    st.dataframe(
+        [
+            {
+                "CSV row": row.row_number,
+                "Status": "Valid" if row.is_valid else "Needs correction",
+                **{header: row.values[header] or "" for header in preview.headers},
+                "Validation": "; ".join(row.errors) if row.errors else "Ready for later review",
+            }
+            for row in preview.rows
+        ],
+        use_container_width=True,
+        hide_index=True,
+    )
+    if preview.invalid_row_count:
+        st.warning("Correct every invalid row before a later governed import review.")
+    else:
+        st.success("All rows pass preview validation. Nothing has been saved.")
 
 
 def _render_vehicle_register() -> None:
@@ -641,8 +711,9 @@ def _render_financial_entries() -> None:
 def render() -> None:
     st.header("Transport Operations")
     st.write("Build operational records from real information you enter. AdvanCore does not generate sample business data.")
-    tabs = st.tabs(["Fleet", "Drivers", "Customers", "Routes", "Trips", "Assignments", "Fuel", "Finance"])
+    tabs = st.tabs(["Setup", "Fleet", "Drivers", "Customers", "Routes", "Trips", "Assignments", "Fuel", "Finance"])
     renderers = (
+        _render_setup,
         _render_vehicle_register,
         _render_driver_register,
         _render_customer_register,
