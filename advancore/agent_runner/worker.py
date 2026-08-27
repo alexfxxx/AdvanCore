@@ -8,6 +8,7 @@ import os
 import pwd
 import re
 import signal
+import stat
 import subprocess
 import tempfile
 import time
@@ -65,6 +66,25 @@ KIMI_INHERITED_LOCALE_VARIABLES: tuple[str, ...] = (
     "LC_CTYPE",
     "TZ",
 )
+
+
+def _resolve_kimi_executable(executable: str) -> str | None:
+    """Resolve Kimi from PATH or its single governed owner-home fallback."""
+    discovered = shutil.which(executable)
+    if discovered or executable != KIMI_EXECUTABLE:
+        return discovered
+
+    account_home = Path(pwd.getpwuid(os.getuid()).pw_dir).resolve()
+    candidate = account_home / ".kimi-code" / "bin" / KIMI_EXECUTABLE
+    try:
+        candidate_stat = candidate.lstat()
+    except OSError:
+        return None
+    if not stat.S_ISREG(candidate_stat.st_mode) or not os.access(candidate, os.X_OK):
+        return None
+    return str(candidate)
+
+
 WORKER_TASK_REFERENCE_RE = re.compile(
     r"(?<![A-Za-z0-9_.-])(tasks/TASK-[0-9]+-[A-Za-z0-9_.-]+\.md)"
 )
@@ -714,7 +734,7 @@ class KimiWorkerAdapter(WorkerAdapter):
     def run(self, instruction: str, working_dir: Path) -> WorkerResult:
         if _worker_input_blocked(instruction, working_dir):
             return _credential_block_result(self.timeout_seconds)
-        resolved_executable = shutil.which(self.executable)
+        resolved_executable = _resolve_kimi_executable(self.executable)
         if not resolved_executable:
             return WorkerResult(
                 success=False,
@@ -857,7 +877,7 @@ class KimiSwarmWorkerAdapter(WorkerAdapter):
     def run(self, instruction: str, working_dir: Path) -> WorkerResult:
         if _worker_input_blocked(instruction, working_dir):
             return _credential_block_result(self.timeout_seconds)
-        resolved_executable = shutil.which(self.executable)
+        resolved_executable = _resolve_kimi_executable(self.executable)
         if not resolved_executable:
             return WorkerResult(
                 success=False,
@@ -1068,7 +1088,7 @@ class GeminiWorkerAdapter(WorkerAdapter):
         working_dir.resolve(strict=True)
         return [
             self.executable,
-            "--print",
+            f"--print={instruction}",
             "--mode",
             "accept-edits",
             "--sandbox",
@@ -1078,7 +1098,6 @@ class GeminiWorkerAdapter(WorkerAdapter):
             "--print-timeout",
             f"{self.timeout_seconds}s",
             "--new-project",
-            instruction,
         ]
 
     def run(self, instruction: str, working_dir: Path) -> WorkerResult:

@@ -10,6 +10,13 @@ Standing authority is consumed at actual launch. Fallback consumes a separate
 approved-fallback action. Neither route receives new credentials or approval,
 merge, `main`, deployment, business or compliance authority.
 
+The registered Kimi and Kimi-Swarm adapters first use normal executable PATH
+discovery. If PATH does not contain `kimi`, they may launch only the fixed
+owner-home `.kimi-code/bin/kimi` path, and only when it is a non-symlink regular
+executable file. Missing, non-executable, symlinked, or otherwise unsafe fixed
+candidates fail closed. Explicit executable overrides remain PATH-only test
+seams and do not enable caller-controlled production discovery.
+
 ## Start-of-day authentication readiness
 
 Each new local Dashboard session runs fixed non-generative CLI checks for Kimi,
@@ -30,7 +37,8 @@ in the fixed Kimi, Gemini, Codex order.
 Gemini uses the fixed local `agy` Antigravity CLI after owner-present Google
 authentication and a synthetic smoke evaluation. It is approved only for
 implementation and fallback roles, not planning or review. The adapter owns its
-executable name and arguments, uses print mode, accept-edits mode, workspace
+executable name and arguments, passes the entire bounded prompt as one
+`--print=<prompt>` argument, uses accept-edits mode, workspace
 sandboxing, disabled slash expansion, JSON output, and a bounded timeout. It
 never enables the permission-bypass flag or accepts caller-selected models,
 agents, plugins, endpoints, API keys, or arbitrary command options.
