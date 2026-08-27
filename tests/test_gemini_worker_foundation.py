@@ -27,11 +27,12 @@ def test_gemini_is_approved_for_implementation_but_not_planning():
 def test_gemini_command_is_fixed_sandboxed_and_non_interactive(tmp_path):
     adapter = GeminiWorkerAdapter(timeout_seconds=600)
 
-    command = adapter.build_command("bounded work", tmp_path)
+    instruction = "bounded work; echo '$HOME' && $(touch nope)"
+    command = adapter.build_command(instruction, tmp_path)
 
     assert command == [
         "agy",
-        "--print",
+        f"--print={instruction}",
         "--mode",
         "accept-edits",
         "--sandbox",
@@ -41,7 +42,6 @@ def test_gemini_command_is_fixed_sandboxed_and_non_interactive(tmp_path):
         "--print-timeout",
         "600s",
         "--new-project",
-        "bounded work",
     ]
     for forbidden in (
         "--dangerously-skip-permissions",
@@ -79,7 +79,7 @@ def test_gemini_launch_uses_minimal_environment_and_scope(tmp_path, monkeypatch)
     assert result is expected
     command = bounded.call_args.args[0]
     assert command[0] == "/Users/example/.local/bin/agy"
-    assert command[-1].endswith("Allowed changed-file scope:\n- one.py")
+    assert command[1].endswith("Allowed changed-file scope:\n- one.py")
     environment = bounded.call_args.kwargs["environment"]
     assert environment["HOME"]
     assert "advancore-gemini-" in environment["TMPDIR"]
