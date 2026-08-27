@@ -529,6 +529,8 @@ def classify_provider_failure(result: WorkerResult | None) -> ProviderFailure:
     """Deterministically classify only approved provider-availability failures."""
     if result is None:
         return ProviderFailure.UNKNOWN
+    if result.terminal_reason == "quota_or_capacity":
+        return ProviderFailure.QUOTA_OR_CAPACITY
     if result.failure_classification in {"EXECUTABLE_NOT_FOUND", "SPAWN_ERROR"}:
         return ProviderFailure.EXECUTABLE_UNAVAILABLE
     evidence = " ".join(

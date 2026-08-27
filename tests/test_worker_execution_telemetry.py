@@ -1,9 +1,8 @@
 """Regression coverage for TASK-138 worker execution telemetry."""
 
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 import sys
-from types import SimpleNamespace
 from unittest.mock import patch
 
 from advancore.agent_runner.audit import build_audit_payload
@@ -19,7 +18,6 @@ from advancore.agent_runner.worker import (
     KimiWorkerAdapter,
     WorkerResult,
     run_bounded_worker_process,
-    _probe_cli_version,
 )
 
 
@@ -90,24 +88,18 @@ def test_gemini_command_uses_one_unambiguous_print_argument(tmp_path):
     assert command[command.index("--mode") + 1] == "accept-edits"
 
 
-def test_cli_version_probe_runs_outside_repository(tmp_path):
-    owner_home = tmp_path / "owner"
-    executable = owner_home / ".local" / "bin" / "agy"
-    executable.parent.mkdir(parents=True)
-    executable.write_text(
-        "#!/bin/sh\nprintf 'touched' > probe-marker\nprintf '1.2.3\\n'\n",
-        encoding="utf-8",
+def test_expired_launch_deadline_preserves_quota_classification(tmp_path):
+    result = run_bounded_worker_process(
+        [sys.executable, "-c", "raise AssertionError('must not launch')"],
+        tmp_path,
+        5,
+        launch_deadline=datetime.now(timezone.utc) - timedelta(seconds=1),
     )
-    executable.chmod(0o700)
 
-    with patch(
-        "advancore.agent_runner.worker.pwd.getpwuid",
-        return_value=SimpleNamespace(pw_dir=str(owner_home)),
-    ):
-        version = _probe_cli_version(str(executable))
-
-    assert version == "1.2.3"
-    assert not (tmp_path / "probe-marker").exists()
+    assert result.success is False
+    assert result.terminal_reason == "quota_or_capacity"
+    assert result.failure_classification == SPAWN_ERROR
+    assert classify_provider_failure(result) == ProviderFailure.QUOTA_OR_CAPACITY
 
 
 def test_audit_projects_only_bounded_worker_metadata():

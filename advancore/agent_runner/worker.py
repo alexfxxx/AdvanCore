@@ -65,8 +65,6 @@ KIMI_SANDBOX_PROBE_PROFILE = (
     '(deny file-write* (require-not (subpath "/private/tmp")))'
 )
 KIMI_RUNTIME_PATH = "/usr/bin:/bin:/usr/sbin:/sbin"
-WORKER_VERSION_PROBE_TIMEOUT_SECONDS = 5
-WORKER_VERSION_MAX_CHARS = 120
 EXECUTABLE_NOT_FOUND = "EXECUTABLE_NOT_FOUND"
 SPAWN_ERROR = "SPAWN_ERROR"
 RUNTIME_ERROR = "RUNTIME_ERROR"
@@ -110,64 +108,17 @@ def _kimi_executable_resolution(
     )
 
 
-def _probe_cli_version(
-    resolved_executable: str, environment: dict[str, str] | None = None
-) -> str | None:
-    """Return one bounded version line without retaining arbitrary CLI output."""
-    executable = Path(resolved_executable)
-    if not executable.is_file() or not os.access(executable, os.X_OK):
-        return None
-    account_home = Path(pwd.getpwuid(os.getuid()).pw_dir).resolve()
-    trusted_parents = {
-        account_home / ".kimi-code" / "bin",
-        account_home / ".local" / "bin",
-        Path("/opt/homebrew/bin"),
-        Path("/usr/local/bin"),
-        Path("/usr/bin"),
-        Path("/bin"),
-    }
-    if executable.parent not in trusted_parents:
-        return None
-    try:
-        with tempfile.TemporaryDirectory(
-            prefix="advancore-version-", dir="/tmp"
-        ) as scratch_name:
-            completed = subprocess.run(
-                [resolved_executable, "--version"],
-                cwd=Path(scratch_name).resolve(strict=True),
-                capture_output=True,
-                text=True,
-                check=False,
-                timeout=WORKER_VERSION_PROBE_TIMEOUT_SECONDS,
-                env=environment,
-            )
-    except (OSError, subprocess.SubprocessError):
-        return None
-    if completed.returncode != 0:
-        return None
-    first_line = (completed.stdout or completed.stderr or "").splitlines()[:1]
-    if not first_line:
-        return None
-    value = first_line[0].strip()
-    if not value or _contains_credential_material(value):
-        return None
-    return value[:WORKER_VERSION_MAX_CHARS]
-
-
 def _annotate_worker_result(
     result: WorkerResult,
     *,
     resolved_executable: str,
     executable_resolution: str,
     runtime_path_profile: str,
-    environment: dict[str, str] | None,
 ) -> WorkerResult:
     """Attach bounded adapter context without persisting commands or environment."""
     result.resolved_executable = resolved_executable
     result.executable_resolution = executable_resolution
     result.runtime_path_profile = runtime_path_profile
-    if getattr(subprocess.run, "__module__", "subprocess") == "subprocess":
-        result.cli_version = _probe_cli_version(resolved_executable, environment)
     return result
 
 
@@ -848,7 +799,6 @@ class KimiWorkerAdapter(WorkerAdapter):
                 resolved_executable=resolved_executable,
                 executable_resolution="configured_override",
                 runtime_path_profile="controller_default",
-                environment=None,
             )
         with tempfile.TemporaryDirectory(
             prefix="advancore-kimi-", dir="/tmp"
@@ -896,7 +846,6 @@ class KimiWorkerAdapter(WorkerAdapter):
                         self.executable, resolved_executable
                     ),
                     runtime_path_profile="kimi_minimal",
-                    environment=environment,
                 )
             result = run_bounded_worker_process(
                 command,
@@ -912,7 +861,6 @@ class KimiWorkerAdapter(WorkerAdapter):
                     self.executable, resolved_executable
                 ),
                 runtime_path_profile="kimi_minimal",
-                environment=environment,
             )
 
 
@@ -1016,7 +964,6 @@ class KimiSwarmWorkerAdapter(WorkerAdapter):
                 resolved_executable=resolved_executable,
                 executable_resolution="configured_override",
                 runtime_path_profile="controller_default",
-                environment=None,
             )
         with tempfile.TemporaryDirectory(
             prefix="advancore-kimi-", dir="/tmp"
@@ -1062,7 +1009,6 @@ class KimiSwarmWorkerAdapter(WorkerAdapter):
                         self.executable, resolved_executable
                     ),
                     runtime_path_profile="kimi_minimal",
-                    environment=environment,
                 )
             result = run_bounded_worker_process(
                 command,
@@ -1078,7 +1024,6 @@ class KimiSwarmWorkerAdapter(WorkerAdapter):
                     self.executable, resolved_executable
                 ),
                 runtime_path_profile="kimi_minimal",
-                environment=environment,
             )
 
 
@@ -1165,7 +1110,6 @@ class CodexWorkerAdapter(WorkerAdapter):
                     resolved_executable=resolved_executable,
                     executable_resolution="system_path",
                     runtime_path_profile="codex_minimal",
-                    environment=environment,
                 )
             except Exception as exc:  # pragma: no cover - defensive
                 return WorkerResult(
@@ -1261,11 +1205,10 @@ class GeminiWorkerAdapter(WorkerAdapter):
             return _credential_block_result(self.timeout_seconds)
         resolved_executable = shutil.which(self.executable)
         if not resolved_executable:
-            return WorkerResult(
-                success=False,
-                message=f"Worker executable '{self.executable}' not found in PATH",
-                terminal_reason="launch_failed",
-                timeout_seconds=self.timeout_seconds,
+            return _executable_not_found_result(
+                self.executable,
+                self.timeout_seconds,
+                "gemini_minimal",
             )
         bounded_instruction = _governed_instruction(instruction, self.allowed_scope)
         with tempfile.TemporaryDirectory(
@@ -1287,7 +1230,6 @@ class GeminiWorkerAdapter(WorkerAdapter):
                     resolved_executable=resolved_executable,
                     executable_resolution="system_path",
                     runtime_path_profile="gemini_minimal",
-                    environment=environment,
                 )
             except Exception as exc:  # pragma: no cover - defensive
                 return WorkerResult(

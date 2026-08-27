@@ -36,8 +36,9 @@ and CLI context in the local runner audit.
   successful spawn as `RUNTIME_ERROR`; preserve the existing timeout,
   cancellation and provider-fallback semantics.
 - Capture worker start, finish and monotonic elapsed duration.
-- Attach the resolved executable, safe resolution source, minimal runtime-path
-  profile and bounded CLI version to the in-memory result.
+- Attach the resolved executable, safe resolution source and minimal runtime-path
+  profile to the in-memory result. Keep CLI version optional and do not launch a
+  second, less-isolated provider process merely to discover it.
 - Add only safe, bounded worker metadata to local audit records. Raw prompts,
   command arguments, environment values and stdout/stderr must not be persisted.
 - Add deterministic unit tests for resolution, argument construction,
@@ -82,9 +83,10 @@ None.
       non-zero exits, timeout and cancellation are `RUNTIME_ERROR`.
 - [ ] Non-zero results retain raw stdout/stderr only in memory for immediate
       bounded classification.
-- [ ] Audit metadata reports timing, exit code, terminal reason, failure class,
-      executable resolution and CLI version without raw command, prompt, PATH,
-      stdout, stderr, credentials or business content.
+- [ ] Audit metadata reports timing, exit code, terminal reason, failure class
+      and executable resolution without raw command, prompt, PATH, stdout,
+      stderr, credentials or business content. Optional CLI-version evidence is
+      never collected through an unisolated provider launch.
 - [ ] Existing fail-closed isolation, credential screening, repository checks,
       approval gates and worker order remain unchanged.
 - [ ] Focused tests, full tests and `git diff --check` pass.
@@ -93,4 +95,3 @@ None.
 
 None. The owner approved this bounded repair and requested Bugbot review on
 28 August 2026.
-

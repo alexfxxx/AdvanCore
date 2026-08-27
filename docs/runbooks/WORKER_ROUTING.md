@@ -122,9 +122,11 @@ timed out or was cancelled. Provider authentication, quota and capacity routing
 continues to use the existing bounded classifier and unchanged-repository gate.
 
 The result also records the resolved executable, whether it came from normal
-PATH or the governed owner-home Kimi fallback, the named minimal runtime-path
-profile, and one bounded CLI version line. Raw stdout and stderr remain available
-in memory long enough for immediate failure classification, but durable audit
-records deliberately exclude the command, prompt, environment, raw PATH and
-transcripts. This gives the owner useful timing and failure-stage evidence
-without turning the audit into a credential or business-data store.
+PATH or the governed owner-home Kimi fallback, and the named minimal runtime-path
+profile. Its CLI-version field is optional and must not be populated by launching
+a second provider process outside the governed isolation boundary. Raw stdout
+and stderr remain available in memory long enough for immediate failure
+classification, but durable audit records deliberately exclude the command,
+prompt, environment, raw PATH and transcripts. This gives the owner useful
+timing and failure-stage evidence without turning the audit into a credential or
+business-data store.
