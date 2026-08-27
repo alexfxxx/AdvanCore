@@ -40,6 +40,14 @@ class WorkerResult:
     timeout_seconds: int | None = None
     recovery_action: str | None = None
     repository_state: dict[str, object] | None = None
+    started_at: datetime | None = None
+    finished_at: datetime | None = None
+    elapsed_seconds: float | None = None
+    failure_classification: str | None = None
+    resolved_executable: str | None = None
+    executable_resolution: str | None = None
+    cli_version: str | None = None
+    runtime_path_profile: str | None = None
 
 
 DEFAULT_WORKER_TIMEOUT_SECONDS = 30 * 60
@@ -57,6 +65,11 @@ KIMI_SANDBOX_PROBE_PROFILE = (
     '(deny file-write* (require-not (subpath "/private/tmp")))'
 )
 KIMI_RUNTIME_PATH = "/usr/bin:/bin:/usr/sbin:/sbin"
+WORKER_VERSION_PROBE_TIMEOUT_SECONDS = 5
+WORKER_VERSION_MAX_CHARS = 120
+EXECUTABLE_NOT_FOUND = "EXECUTABLE_NOT_FOUND"
+SPAWN_ERROR = "SPAWN_ERROR"
+RUNTIME_ERROR = "RUNTIME_ERROR"
 KIMI_INHERITED_LOCALE_VARIABLES: tuple[str, ...] = (
     "LANG",
     "LC_ALL",
@@ -80,6 +93,101 @@ def _resolve_kimi_executable(executable: str) -> str | None:
     if not stat.S_ISREG(candidate_stat.st_mode) or not os.access(candidate, os.X_OK):
         return None
     return str(candidate)
+
+
+def _kimi_executable_resolution(
+    requested_executable: str, resolved_executable: str
+) -> str:
+    """Return a bounded description of how the Kimi binary was resolved."""
+    if requested_executable != KIMI_EXECUTABLE:
+        return "configured_override"
+    account_home = Path(pwd.getpwuid(os.getuid()).pw_dir).resolve()
+    fallback = account_home / ".kimi-code" / "bin" / KIMI_EXECUTABLE
+    return (
+        "owner_home_fallback"
+        if Path(resolved_executable) == fallback
+        else "system_path"
+    )
+
+
+def _probe_cli_version(
+    resolved_executable: str, environment: dict[str, str] | None = None
+) -> str | None:
+    """Return one bounded version line without retaining arbitrary CLI output."""
+    executable = Path(resolved_executable)
+    if not executable.is_file() or not os.access(executable, os.X_OK):
+        return None
+    account_home = Path(pwd.getpwuid(os.getuid()).pw_dir).resolve()
+    trusted_parents = {
+        account_home / ".kimi-code" / "bin",
+        account_home / ".local" / "bin",
+        Path("/opt/homebrew/bin"),
+        Path("/usr/local/bin"),
+        Path("/usr/bin"),
+        Path("/bin"),
+    }
+    if executable.parent not in trusted_parents:
+        return None
+    try:
+        with tempfile.TemporaryDirectory(
+            prefix="advancore-version-", dir="/tmp"
+        ) as scratch_name:
+            completed = subprocess.run(
+                [resolved_executable, "--version"],
+                cwd=Path(scratch_name).resolve(strict=True),
+                capture_output=True,
+                text=True,
+                check=False,
+                timeout=WORKER_VERSION_PROBE_TIMEOUT_SECONDS,
+                env=environment,
+            )
+    except (OSError, subprocess.SubprocessError):
+        return None
+    if completed.returncode != 0:
+        return None
+    first_line = (completed.stdout or completed.stderr or "").splitlines()[:1]
+    if not first_line:
+        return None
+    value = first_line[0].strip()
+    if not value or _contains_credential_material(value):
+        return None
+    return value[:WORKER_VERSION_MAX_CHARS]
+
+
+def _annotate_worker_result(
+    result: WorkerResult,
+    *,
+    resolved_executable: str,
+    executable_resolution: str,
+    runtime_path_profile: str,
+    environment: dict[str, str] | None,
+) -> WorkerResult:
+    """Attach bounded adapter context without persisting commands or environment."""
+    result.resolved_executable = resolved_executable
+    result.executable_resolution = executable_resolution
+    result.runtime_path_profile = runtime_path_profile
+    if getattr(subprocess.run, "__module__", "subprocess") == "subprocess":
+        result.cli_version = _probe_cli_version(resolved_executable, environment)
+    return result
+
+
+def _executable_not_found_result(
+    executable: str, timeout_seconds: int, runtime_path_profile: str
+) -> WorkerResult:
+    """Return one explicit, non-retried executable-resolution failure."""
+    now = datetime.now(timezone.utc)
+    return WorkerResult(
+        success=False,
+        message=f"Worker executable '{executable}' not found in PATH",
+        terminal_reason="launch_failed",
+        timeout_seconds=timeout_seconds,
+        started_at=now,
+        finished_at=now,
+        elapsed_seconds=0.0,
+        failure_classification=EXECUTABLE_NOT_FOUND,
+        executable_resolution="unavailable",
+        runtime_path_profile=runtime_path_profile,
+    )
 
 
 WORKER_TASK_REFERENCE_RE = re.compile(
@@ -515,18 +623,28 @@ def run_bounded_worker_process(
     environment: dict[str, str] | None = None,
 ) -> WorkerResult:
     """Run one local worker in an isolated session with governed termination."""
+    started_at = datetime.now(timezone.utc)
+    started_monotonic = time.monotonic()
+
+    def finish(result: WorkerResult) -> WorkerResult:
+        result.started_at = started_at
+        result.finished_at = datetime.now(timezone.utc)
+        result.elapsed_seconds = max(0.0, time.monotonic() - started_monotonic)
+        return result
+
     timeout_seconds = validate_worker_timeout(timeout_seconds)
     repo_root = working_dir.resolve(strict=True)
     before = _git_evidence(repo_root)
     if launch_deadline is not None:
         if launch_deadline.tzinfo is None:
-            return WorkerResult(
+            return finish(WorkerResult(
                 success=False,
                 command=command,
                 message="provider quota/capacity paused: launch deadline is invalid",
                 terminal_reason="quota_or_capacity",
                 timeout_seconds=timeout_seconds,
-            )
+                failure_classification=SPAWN_ERROR,
+            ))
         deadline_remaining = math.floor(
             (
                 launch_deadline.astimezone(timezone.utc)
@@ -534,13 +652,14 @@ def run_bounded_worker_process(
             ).total_seconds()
         )
         if deadline_remaining <= 0:
-            return WorkerResult(
+            return finish(WorkerResult(
                 success=False,
                 command=command,
                 message="provider quota/capacity paused: provider reset reached before launch",
                 terminal_reason="quota_or_capacity",
                 timeout_seconds=timeout_seconds,
-            )
+                failure_classification=SPAWN_ERROR,
+            ))
         timeout_seconds = min(timeout_seconds, deadline_remaining)
     try:
         process = subprocess.Popen(
@@ -548,12 +667,15 @@ def run_bounded_worker_process(
             text=True, start_new_session=True, env=environment,
         )
     except Exception as exc:
-        return WorkerResult(
+        return finish(WorkerResult(
             success=False, command=command,
             message=f"Worker launch failed: {type(exc).__name__}",
             terminal_reason="launch_failed", timeout_seconds=timeout_seconds,
-        )
+            failure_classification=SPAWN_ERROR,
+        ))
     terminal_reason: str | None = None
+    stdout: str | None = None
+    stderr: str | None = None
     try:
         stdout, stderr = process.communicate(timeout=timeout_seconds)
     except subprocess.TimeoutExpired:
@@ -578,19 +700,33 @@ def run_bounded_worker_process(
         message = f"Worker {terminal_reason}; repository state " + (
             "unchanged" if unchanged else "mutated or ambiguous; controller review required"
         )
-        return WorkerResult(
-            success=False, command=command, returncode=process.poll(), message=message,
+        return finish(WorkerResult(
+            success=False, command=command, stdout=stdout, stderr=stderr,
+            returncode=process.poll(), message=message,
             terminal_reason=terminal_reason, timeout_seconds=timeout_seconds,
             recovery_action=WORKER_RECOVERY_ACTION if unchanged else None,
             repository_state=state,
-        )
+            failure_classification=RUNTIME_ERROR,
+        ))
 
-    return WorkerResult(
-        success=process.returncode == 0, command=command, stdout=stdout, stderr=stderr,
-        returncode=process.returncode, timeout_seconds=timeout_seconds,
-        message="Worker finished successfully" if process.returncode == 0
+    returncode = process.returncode
+    spawn_style_failure = returncode in {126, 127}
+    return finish(WorkerResult(
+        success=returncode == 0, command=command, stdout=stdout, stderr=stderr,
+        returncode=returncode, timeout_seconds=timeout_seconds,
+        message="Worker finished successfully" if returncode == 0
         else "Worker finished with non-zero exit code",
-    )
+        terminal_reason=(
+            "completed" if returncode == 0
+            else "launch_failed" if spawn_style_failure
+            else "runtime_error"
+        ),
+        failure_classification=(
+            None if returncode == 0
+            else SPAWN_ERROR if spawn_style_failure
+            else RUNTIME_ERROR
+        ),
+    ))
 
 
 APPROVED_WORKER_NAMES: tuple[str, ...] = (
@@ -697,17 +833,22 @@ class KimiWorkerAdapter(WorkerAdapter):
             return _credential_block_result(self.timeout_seconds)
         resolved_executable = _resolve_kimi_executable(self.executable)
         if not resolved_executable:
-            return WorkerResult(
-                success=False,
-                message=f"Worker executable '{self.executable}' not found in PATH",
+            return _executable_not_found_result(
+                self.executable,
+                self.timeout_seconds,
+                "kimi_minimal",
             )
         command = self.build_command(
             _governed_instruction(instruction, self.allowed_scope), working_dir
         )
         command[0] = resolved_executable
         if self.executable != self.DEFAULT_EXECUTABLE:
-            return run_bounded_worker_process(
-                command, working_dir, self.timeout_seconds
+            return _annotate_worker_result(
+                run_bounded_worker_process(command, working_dir, self.timeout_seconds),
+                resolved_executable=resolved_executable,
+                executable_resolution="configured_override",
+                runtime_path_profile="controller_default",
+                environment=None,
             )
         with tempfile.TemporaryDirectory(
             prefix="advancore-kimi-", dir="/tmp"
@@ -724,6 +865,8 @@ class KimiWorkerAdapter(WorkerAdapter):
             # callers/tests; production uses the bounded Popen implementation.
             if (not self.implementation_worker
                     and getattr(subprocess.run, "__module__", "subprocess") != "subprocess"):
+                seam_started_at = datetime.now(timezone.utc)
+                seam_started_monotonic = time.monotonic()
                 completed = subprocess.run(
                     command, cwd=working_dir, capture_output=True, text=True,
                     check=False, env=environment,
@@ -734,8 +877,27 @@ class KimiWorkerAdapter(WorkerAdapter):
                     returncode=completed.returncode, timeout_seconds=self.timeout_seconds,
                     message="Worker finished successfully" if completed.returncode == 0
                     else "Worker finished with non-zero exit code",
+                    terminal_reason=(
+                        "completed" if completed.returncode == 0 else "runtime_error"
+                    ),
+                    started_at=seam_started_at,
+                    finished_at=datetime.now(timezone.utc),
+                    elapsed_seconds=max(
+                        0.0, time.monotonic() - seam_started_monotonic
+                    ),
+                    failure_classification=(
+                        None if completed.returncode == 0 else RUNTIME_ERROR
+                    ),
                 )
-                return result
+                return _annotate_worker_result(
+                    result,
+                    resolved_executable=resolved_executable,
+                    executable_resolution=_kimi_executable_resolution(
+                        self.executable, resolved_executable
+                    ),
+                    runtime_path_profile="kimi_minimal",
+                    environment=environment,
+                )
             result = run_bounded_worker_process(
                 command,
                 working_dir,
@@ -743,7 +905,15 @@ class KimiWorkerAdapter(WorkerAdapter):
                 None,
                 environment,
             )
-            return result
+            return _annotate_worker_result(
+                result,
+                resolved_executable=resolved_executable,
+                executable_resolution=_kimi_executable_resolution(
+                    self.executable, resolved_executable
+                ),
+                runtime_path_profile="kimi_minimal",
+                environment=environment,
+            )
 
 
 KIMI_SWARM_INSTRUCTION_TEMPLATE = """Read AGENTS.md.
@@ -831,17 +1001,22 @@ class KimiSwarmWorkerAdapter(WorkerAdapter):
             return _credential_block_result(self.timeout_seconds)
         resolved_executable = _resolve_kimi_executable(self.executable)
         if not resolved_executable:
-            return WorkerResult(
-                success=False,
-                message=f"Worker executable '{self.executable}' not found in PATH",
+            return _executable_not_found_result(
+                self.executable,
+                self.timeout_seconds,
+                "kimi_minimal",
             )
         command = self.build_command(
             _governed_instruction(instruction, self.allowed_scope), working_dir
         )
         command[0] = resolved_executable
         if self.executable != self.DEFAULT_EXECUTABLE:
-            return run_bounded_worker_process(
-                command, working_dir, self.timeout_seconds
+            return _annotate_worker_result(
+                run_bounded_worker_process(command, working_dir, self.timeout_seconds),
+                resolved_executable=resolved_executable,
+                executable_resolution="configured_override",
+                runtime_path_profile="controller_default",
+                environment=None,
             )
         with tempfile.TemporaryDirectory(
             prefix="advancore-kimi-", dir="/tmp"
@@ -856,6 +1031,8 @@ class KimiSwarmWorkerAdapter(WorkerAdapter):
             environment = _kimi_environment(scratch_dir)
             if (not self.implementation_worker
                     and getattr(subprocess.run, "__module__", "subprocess") != "subprocess"):
+                seam_started_at = datetime.now(timezone.utc)
+                seam_started_monotonic = time.monotonic()
                 completed = subprocess.run(
                     command, cwd=working_dir, capture_output=True, text=True,
                     check=False, env=environment,
@@ -866,8 +1043,27 @@ class KimiSwarmWorkerAdapter(WorkerAdapter):
                     returncode=completed.returncode, timeout_seconds=self.timeout_seconds,
                     message="Worker finished successfully" if completed.returncode == 0
                     else "Worker finished with non-zero exit code",
+                    terminal_reason=(
+                        "completed" if completed.returncode == 0 else "runtime_error"
+                    ),
+                    started_at=seam_started_at,
+                    finished_at=datetime.now(timezone.utc),
+                    elapsed_seconds=max(
+                        0.0, time.monotonic() - seam_started_monotonic
+                    ),
+                    failure_classification=(
+                        None if completed.returncode == 0 else RUNTIME_ERROR
+                    ),
                 )
-                return result
+                return _annotate_worker_result(
+                    result,
+                    resolved_executable=resolved_executable,
+                    executable_resolution=_kimi_executable_resolution(
+                        self.executable, resolved_executable
+                    ),
+                    runtime_path_profile="kimi_minimal",
+                    environment=environment,
+                )
             result = run_bounded_worker_process(
                 command,
                 working_dir,
@@ -875,7 +1071,15 @@ class KimiSwarmWorkerAdapter(WorkerAdapter):
                 None,
                 environment,
             )
-            return result
+            return _annotate_worker_result(
+                result,
+                resolved_executable=resolved_executable,
+                executable_resolution=_kimi_executable_resolution(
+                    self.executable, resolved_executable
+                ),
+                runtime_path_profile="kimi_minimal",
+                environment=environment,
+            )
 
 
 class DryRunWorkerAdapter(WorkerAdapter):
@@ -938,9 +1142,10 @@ class CodexWorkerAdapter(WorkerAdapter):
             return _credential_block_result(self.timeout_seconds)
         resolved_executable = shutil.which(self.executable)
         if not resolved_executable:
-            return WorkerResult(
-                success=False,
-                message=f"Worker executable '{self.executable}' not found in PATH",
+            return _executable_not_found_result(
+                self.executable,
+                self.timeout_seconds,
+                "codex_minimal",
             )
         bounded_instruction = _governed_instruction(instruction, self.allowed_scope)
         with tempfile.TemporaryDirectory(
@@ -950,16 +1155,25 @@ class CodexWorkerAdapter(WorkerAdapter):
                 command = self.build_command(bounded_instruction, working_dir)
                 command[0] = resolved_executable
                 environment = _codex_environment(Path(scratch_name).resolve(strict=True))
-                return run_bounded_worker_process(
-                    command,
-                    working_dir,
-                    self.timeout_seconds,
+                return _annotate_worker_result(
+                    run_bounded_worker_process(
+                        command,
+                        working_dir,
+                        self.timeout_seconds,
+                        environment=environment,
+                    ),
+                    resolved_executable=resolved_executable,
+                    executable_resolution="system_path",
+                    runtime_path_profile="codex_minimal",
                     environment=environment,
                 )
             except Exception as exc:  # pragma: no cover - defensive
                 return WorkerResult(
                     success=False,
                     message=f"Worker launch failed: {type(exc).__name__}",
+                    terminal_reason="launch_failed",
+                    timeout_seconds=self.timeout_seconds,
+                    failure_classification=SPAWN_ERROR,
                 )
 
 
@@ -988,11 +1202,10 @@ class CodexPlannerAdapter(WorkerAdapter):
             return _credential_block_result(self.timeout_seconds)
         resolved_executable = shutil.which(self.executable)
         if not resolved_executable:
-            return WorkerResult(
-                success=False,
-                message=f"Worker executable '{self.executable}' not found in PATH",
-                terminal_reason="launch_failed",
-                timeout_seconds=self.timeout_seconds,
+            return _executable_not_found_result(
+                self.executable,
+                self.timeout_seconds,
+                "gemini_minimal",
             )
         with tempfile.TemporaryDirectory(
             prefix="advancore-codex-planner-", dir="/tmp"
@@ -1061,13 +1274,20 @@ class GeminiWorkerAdapter(WorkerAdapter):
             try:
                 command = self.build_command(bounded_instruction, working_dir)
                 command[0] = resolved_executable
-                return run_bounded_worker_process(
-                    command,
-                    working_dir,
-                    self.timeout_seconds,
-                    environment=_gemini_environment(
-                        Path(scratch_name).resolve(strict=True), working_dir
+                environment = _gemini_environment(
+                    Path(scratch_name).resolve(strict=True), working_dir
+                )
+                return _annotate_worker_result(
+                    run_bounded_worker_process(
+                        command,
+                        working_dir,
+                        self.timeout_seconds,
+                        environment=environment,
                     ),
+                    resolved_executable=resolved_executable,
+                    executable_resolution="system_path",
+                    runtime_path_profile="gemini_minimal",
+                    environment=environment,
                 )
             except Exception as exc:  # pragma: no cover - defensive
                 return WorkerResult(
@@ -1075,6 +1295,7 @@ class GeminiWorkerAdapter(WorkerAdapter):
                     message=f"Worker launch failed: {type(exc).__name__}",
                     terminal_reason="launch_failed",
                     timeout_seconds=self.timeout_seconds,
+                    failure_classification=SPAWN_ERROR,
                 )
 
 

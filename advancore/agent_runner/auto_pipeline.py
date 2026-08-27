@@ -529,6 +529,8 @@ def classify_provider_failure(result: WorkerResult | None) -> ProviderFailure:
     """Deterministically classify only approved provider-availability failures."""
     if result is None:
         return ProviderFailure.UNKNOWN
+    if result.failure_classification in {"EXECUTABLE_NOT_FOUND", "SPAWN_ERROR"}:
+        return ProviderFailure.EXECUTABLE_UNAVAILABLE
     evidence = " ".join(
         part for part in (result.message, result.stdout, result.stderr) if part
     ).lower()[:4000]
@@ -873,6 +875,41 @@ def build_auto_artifact_payload(result: AutoPipelineResult) -> dict[str, Any]:
         ],
         "automatic_handoffs": automatic_handoffs,
         "worker_success": result.worker_result.success if result.worker_result else None,
+        "worker_started_at": (
+            result.worker_result.started_at.isoformat()
+            if result.worker_result and result.worker_result.started_at
+            else None
+        ),
+        "worker_finished_at": (
+            result.worker_result.finished_at.isoformat()
+            if result.worker_result and result.worker_result.finished_at
+            else None
+        ),
+        "worker_elapsed_seconds": (
+            result.worker_result.elapsed_seconds if result.worker_result else None
+        ),
+        "worker_returncode": (
+            result.worker_result.returncode if result.worker_result else None
+        ),
+        "worker_failure_classification": (
+            result.worker_result.failure_classification
+            if result.worker_result else None
+        ),
+        "worker_resolved_executable": (
+            result.worker_result.resolved_executable
+            if result.worker_result else None
+        ),
+        "worker_executable_resolution": (
+            result.worker_result.executable_resolution
+            if result.worker_result else None
+        ),
+        "worker_cli_version": (
+            result.worker_result.cli_version if result.worker_result else None
+        ),
+        "worker_runtime_path_profile": (
+            result.worker_result.runtime_path_profile
+            if result.worker_result else None
+        ),
         "worker_timeout_seconds": result.worker_timeout_seconds,
         "terminal_reason": result.terminal_reason,
         "recovery_action": result.recovery_action,
@@ -976,6 +1013,23 @@ def format_auto_pipeline_report(result: AutoPipelineResult) -> str:
         lines.append(f"Worker success:    {result.worker_result.success}")
         lines.append(f"Worker message:    {result.worker_result.message}")
         lines.append(f"Terminal reason:   {result.terminal_reason or 'completed'}")
+        lines.append(
+            "Failure class:    "
+            f"{result.worker_result.failure_classification or 'none'}"
+        )
+        lines.append(
+            "Worker elapsed:   "
+            f"{result.worker_result.elapsed_seconds:.3f} seconds"
+            if result.worker_result.elapsed_seconds is not None
+            else "Worker elapsed:   n/a"
+        )
+        lines.append(
+            f"CLI version:      {result.worker_result.cli_version or 'unknown'}"
+        )
+        lines.append(
+            "Executable source: "
+            f"{result.worker_result.executable_resolution or 'unknown'}"
+        )
         lines.append(f"Worker timeout:    {result.worker_timeout_seconds or 'n/a'} seconds")
         if result.recovery_action:
             lines.append(f"Recovery action:   {result.recovery_action}")

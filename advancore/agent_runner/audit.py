@@ -42,6 +42,16 @@ def build_audit_payload(
     post_verification_ok: bool | None,
     final_status: str,
     changed_paths: list[str] | None = None,
+    worker_started_at: datetime | None = None,
+    worker_finished_at: datetime | None = None,
+    worker_elapsed_seconds: float | None = None,
+    worker_returncode: int | None = None,
+    worker_terminal_reason: str | None = None,
+    worker_failure_classification: str | None = None,
+    worker_resolved_executable: str | None = None,
+    worker_executable_resolution: str | None = None,
+    worker_cli_version: str | None = None,
+    worker_runtime_path_profile: str | None = None,
 ) -> dict[str, Any]:
     """Return a safe metadata payload for one audit record.
 
@@ -63,6 +73,24 @@ def build_audit_payload(
         "post_verification_ok": post_verification_ok,
         "final_status": final_status,
         "changed_paths": changed_paths or [],
+        "worker_started_at": (
+            worker_started_at.astimezone(timezone.utc).isoformat()
+            if worker_started_at is not None
+            else None
+        ),
+        "worker_finished_at": (
+            worker_finished_at.astimezone(timezone.utc).isoformat()
+            if worker_finished_at is not None
+            else None
+        ),
+        "worker_elapsed_seconds": worker_elapsed_seconds,
+        "worker_returncode": worker_returncode,
+        "worker_terminal_reason": worker_terminal_reason,
+        "worker_failure_classification": worker_failure_classification,
+        "worker_resolved_executable": worker_resolved_executable,
+        "worker_executable_resolution": worker_executable_resolution,
+        "worker_cli_version": worker_cli_version,
+        "worker_runtime_path_profile": worker_runtime_path_profile,
     }
 
 

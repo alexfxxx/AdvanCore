@@ -110,3 +110,21 @@ sandbox, minimal environment, credential screening, and runner-owned configured
 timeout. The fixed three-worker route, no-repetition and maximum-attempt
 boundaries, standing and fallback authority consumption, database, production,
 deployment, protected-main, and Git-integrity safeguards remain unchanged.
+
+## Worker execution telemetry
+
+Every bounded subprocess attempt records controller-owned start and finish
+timestamps, monotonic elapsed seconds, exit code, terminal reason and a coarse
+failure class. `EXECUTABLE_NOT_FOUND` means pre-flight resolution found no safe
+binary. `SPAWN_ERROR` means the binary could not be loaded or returned an
+executable-style 126/127 result. `RUNTIME_ERROR` means a launched process failed,
+timed out or was cancelled. Provider authentication, quota and capacity routing
+continues to use the existing bounded classifier and unchanged-repository gate.
+
+The result also records the resolved executable, whether it came from normal
+PATH or the governed owner-home Kimi fallback, the named minimal runtime-path
+profile, and one bounded CLI version line. Raw stdout and stderr remain available
+in memory long enough for immediate failure classification, but durable audit
+records deliberately exclude the command, prompt, environment, raw PATH and
+transcripts. This gives the owner useful timing and failure-stage evidence
+without turning the audit into a credential or business-data store.
