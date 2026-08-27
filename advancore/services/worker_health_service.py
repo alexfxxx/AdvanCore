@@ -10,10 +10,7 @@ from advancore.agent_runner.worker_registry import (
     WorkerApprovalState,
     get_worker_profile,
 )
-from advancore.services.worker_usage_service import (
-    UsageState,
-    WorkerUsageService,
-)
+from advancore.services.worker_usage_service import WorkerUsageService
 
 
 class WorkerHealthState(str, Enum):
@@ -49,31 +46,11 @@ class WorkerHealthService:
     def get_status(self, worker: str) -> WorkerHealthSummary:
         profile = get_worker_profile(worker)
         if profile.provider == "kimi":
-            try:
-                usage = self._usage_service.get_summary("kimi")
-            except Exception:
-                usage = None
-            if usage is None:
-                state = WorkerHealthState.UNAVAILABLE
-            elif usage.state == UsageState.AVAILABLE:
-                state = WorkerHealthState.AVAILABLE
-            elif usage.state == UsageState.PAUSED:
-                state = WorkerHealthState.PAUSED
-            elif usage.checked_at is not None:
-                state = WorkerHealthState.STALE
-            else:
-                state = WorkerHealthState.UNAVAILABLE
             return WorkerHealthSummary(
                 worker=profile.name,
                 label=profile.label,
                 approval_state=profile.approval_state,
-                state=state,
-                weekly_used_percent=(usage.weekly_used_percent if usage else None),
-                weekly_percent_limit=(usage.weekly_percent_limit if usage else 20.0),
-                runtime_seconds=(usage.runtime_seconds if usage else None),
-                runtime_limit_seconds=(usage.runtime_limit_seconds if usage else 3600),
-                checked_at=(usage.checked_at if usage else None),
-                reset_at=(usage.reset_at if usage else None),
+                state=WorkerHealthState.CHECKED_AT_LAUNCH,
             )
         if profile.name in {"codex", "gemini"}:
             return WorkerHealthSummary(

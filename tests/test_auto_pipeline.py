@@ -1028,16 +1028,16 @@ class TestKimiSwarmWorkerAdapter:
             "advancore.agent_runner.worker.shutil.which", return_value=None
         ), patch(
             "advancore.agent_runner.worker.pwd.getpwuid",
-            return_value=SimpleNamespace(pw_dir=str(owner_home)),
-        ), patch("advancore.agent_runner.worker._kimi_usage_preflight") as preflight, patch(
+            return_value=SimpleNamespace(pw_dir=str(owner_home), pw_name="owner"),
+        ), patch("advancore.agent_runner.worker._kimi_isolation_available", return_value=True), patch(
             "advancore.agent_runner.worker.subprocess.run"
         ) as launched:
-            preflight.return_value = (None, None, None)
             launched.return_value = subprocess.CompletedProcess([], 0, "", "")
             result = adapter.run("instruction", tmp_path)
 
         assert result.success is True
-        assert launched.call_args.args[0][0] == str(fixed_kimi)
+        assert launched.call_args.args[0][0] == "/usr/bin/sandbox-exec"
+        assert launched.call_args.args[0][3] == str(fixed_kimi)
 
 
 class TestAutoPipelineReport:

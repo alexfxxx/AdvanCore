@@ -1,10 +1,17 @@
 # Kimi-first worker routing
 
 Unattended implementation uses the fixed registered route Kimi-Swarm first,
-Gemini second, and Codex last. Kimi still passes the TASK-044 fresh usage,
-weekly percentage, runtime and isolation checks. The auto-pipeline moves to the
-next worker only for an eligible provider failure after repository integrity is
-proven unchanged.
+Gemini second, and Codex last. Each provider's executable, authentication,
+quota/limit, and capacity are checked by its bounded process attempt. The
+auto-pipeline moves to the next worker only for an eligible classified failure
+after repository integrity is proven unchanged.
+
+Legacy Kimi usage evidence is informational only. Missing, stale, unreadable,
+or 20%-plus weekly evidence, and local weekly-runtime accounting, do not gate or
+shorten a Kimi launch. The provider CLI is authoritative for runtime
+authentication, quota/limit, and capacity failures. AdvanCore does not infer
+quota from local evidence or provider output beyond the existing bounded failure
+classification.
 
 Standing authority is consumed at actual launch. Fallback consumes a separate
 approved-fallback action. Neither route receives new credentials or approval,
@@ -60,10 +67,11 @@ prefers Kimi and then Codex. Missing or stale evidence is unavailable. Registry
 approval and role eligibility are checked before a name can be selected.
 
 Selection does not consume standing authority or start a process. The selected
-adapter must still pass the established credential, usage, isolation,
-repository-integrity, timeout, and launch checks. An unreadable balance is not
-itself a launch failure; executable, authentication, quota, and capacity facts
-are classified from the bounded launch result.
+adapter must still pass credential screening, isolation, repository-integrity,
+timeout, and launch checks. Kimi, Gemini, and Codex health is reported as
+checked at launch; legacy usage evidence does not mark Kimi paused or
+unavailable. Executable, authentication, quota, and capacity facts are
+classified from the bounded launch result.
 
 ## Safe failover checkpoint
 
@@ -95,9 +103,10 @@ unreadable balance evidence never create a notification. The receipt contains no
 raw provider output, prompt, response, transcript, credential, account identifier,
 environment value, customer data, or repository path.
 
-Unreadable provider balance or Dashboard usage evidence alone neither disables a
-worker nor prevents selection, launch, or continuation. The fixed three-worker
-route, no-repetition and maximum-attempt boundaries, standing and fallback
-authority consumption, credential screening, environment isolation, timeout,
-database, production, deployment, protected-main, and Git-integrity safeguards
-remain unchanged.
+Provider balance or Dashboard usage evidence—whether missing, stale, above a
+local percentage threshold, or unreadable—neither disables a worker nor
+prevents selection, launch, or continuation. Kimi retains its macOS filesystem
+sandbox, minimal environment, credential screening, and runner-owned configured
+timeout. The fixed three-worker route, no-repetition and maximum-attempt
+boundaries, standing and fallback authority consumption, database, production,
+deployment, protected-main, and Git-integrity safeguards remain unchanged.
