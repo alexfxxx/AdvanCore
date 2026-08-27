@@ -31,7 +31,15 @@
       </div>
     </header>
 
-    <main class="shell layout-grid">
+    <nav class="shell console-nav" aria-label="Console sections">
+      <a href="#controller-console">Controller</a>
+      <a href="#fleet-console">Fleet</a>
+      <a href="#dispatch-console">Dispatch</a>
+      <a href="#fuel-console">Fuel</a>
+      <a href="#preferences-console">Display</a>
+    </nav>
+
+    <main class="shell layout-grid" id="controller-console">
       <section class="panel command-panel" aria-labelledby="owner-goal-title">
         <div class="panel-heading">
           <div>
@@ -181,6 +189,128 @@
         </div>
         <div id="knowledge-list" class="record-list" aria-live="polite">
           <p class="empty-state">Loading Knowledge…</p>
+        </div>
+      </section>
+
+      <section class="panel operations-panel" id="fleet-console" aria-labelledby="fleet-title">
+        <div class="panel-heading">
+          <div>
+            <p class="section-code">06 / TRANSPORT OPERATIONS</p>
+            <h2 id="fleet-title">Fleet</h2>
+          </div>
+          <span class="boundary-badge muted">READ ONLY</span>
+        </div>
+        <p class="supporting-copy">
+          Real vehicle records from the existing fleet register. Filters never alter saved data.
+        </p>
+        <div class="filter-grid">
+          <label>Registered owner
+            <select id="fleet-company"><option value="">All companies</option></select>
+          </label>
+          <label>Vehicle type
+            <select id="fleet-type">
+              <option value="">All types</option>
+              <option value="Bus">Bus</option>
+              <option value="lorry">Lorry</option>
+              <option value="car">Car</option>
+            </select>
+          </label>
+          <label>Exact seating
+            <select id="fleet-capacity"><option value="">All capacities</option></select>
+          </label>
+          <button class="secondary-action-button filter-button" id="refresh-fleet" type="button">Refresh fleet</button>
+        </div>
+        <p id="fleet-summary" class="micro-copy left-copy">Loading fleet…</p>
+        <div id="fleet-list" class="operations-list" aria-live="polite"></div>
+      </section>
+
+      <section class="panel operations-panel" id="dispatch-console" aria-labelledby="dispatch-title">
+        <div class="panel-heading">
+          <div>
+            <p class="section-code">07 / DAILY CONTROL</p>
+            <h2 id="dispatch-title">Dispatch Board</h2>
+          </div>
+          <span class="boundary-badge muted">READ ONLY</span>
+        </div>
+        <div class="filter-grid compact-filters">
+          <label>Service date
+            <input id="dispatch-date" type="date" />
+          </label>
+          <button class="secondary-action-button filter-button" id="refresh-dispatch" type="button">Load day</button>
+        </div>
+        <div class="metric-grid operation-metrics">
+          <div class="metric-card"><span>Trips</span><strong id="dispatch-trip-count">—</strong></div>
+          <div class="metric-card"><span>Conflicts</span><strong id="dispatch-conflict-count">—</strong></div>
+          <div class="metric-card"><span>Available vehicles</span><strong id="dispatch-vehicle-count">—</strong></div>
+          <div class="metric-card"><span>Available drivers</span><strong id="dispatch-driver-count">—</strong></div>
+        </div>
+        <div id="dispatch-list" class="operations-list" aria-live="polite"></div>
+      </section>
+
+      <section class="panel operations-panel" id="fuel-console" aria-labelledby="fuel-title">
+        <div class="panel-heading">
+          <div>
+            <p class="section-code">08 / FUEL INTELLIGENCE</p>
+            <h2 id="fuel-title">Fuel & Market Benchmark</h2>
+          </div>
+          <span class="boundary-badge">PRE-DISCOUNT</span>
+        </div>
+        <p class="supporting-copy">
+          Your recorded fuel facts stay separate from the dated Singapore pump-price reference.
+          Market prices shown are gross rates before discounts.
+        </p>
+        <div class="metric-grid operation-metrics">
+          <div class="metric-card"><span>Recorded entries</span><strong id="fuel-entry-count">—</strong></div>
+          <div class="metric-card"><span>Recorded litres</span><strong id="fuel-total-litres">—</strong></div>
+          <div class="metric-card"><span>Diesel market median</span><strong id="fuel-market-median">—</strong></div>
+          <div class="metric-card"><span>Market range</span><strong id="fuel-market-range">—</strong></div>
+        </div>
+        <div class="split-grid">
+          <div>
+            <h3>Current comparison</h3>
+            <p id="fuel-market-date" class="micro-copy left-copy">Loading dated reference…</p>
+            <div id="fuel-market-list" class="record-list"></div>
+          </div>
+          <div>
+            <h3>Official checks</h3>
+            <p class="micro-copy left-copy">Dated reference only—not live pricing. SPC and Shell source timestamps are kept with every rate.</p>
+            <div id="fuel-official-list" class="record-list"></div>
+          </div>
+        </div>
+      </section>
+
+      <section class="panel operations-panel" id="preferences-console" aria-labelledby="preferences-title">
+        <div class="panel-heading">
+          <div>
+            <p class="section-code">09 / LOCAL DISPLAY</p>
+            <h2 id="preferences-title">Console Appearance</h2>
+          </div>
+          <span class="boundary-badge muted">THIS BROWSER ONLY</span>
+        </div>
+        <p class="supporting-copy">
+          Choose a fixed safe theme. Preferences stay in this browser and do not touch PostgreSQL.
+        </p>
+        <div class="filter-grid">
+          <label>Colour scheme
+            <select id="preference-theme">
+              <option value="midnight">Midnight neon</option>
+              <option value="light-business">Light business</option>
+              <option value="graphite">Graphite</option>
+            </select>
+          </label>
+          <label>Panel shape
+            <select id="preference-shape">
+              <option value="soft">Soft corners</option>
+              <option value="compact">Compact corners</option>
+            </select>
+          </label>
+          <label>Motion
+            <select id="preference-motion">
+              <option value="full">Full</option>
+              <option value="reduced">Reduced</option>
+            </select>
+          </label>
+          <button class="secondary-action-button filter-button" id="reset-preferences" type="button">Reset display</button>
         </div>
       </section>
 

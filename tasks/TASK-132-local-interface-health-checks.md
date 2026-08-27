@@ -1,6 +1,6 @@
 # TASK-132 — Local Interface Health Checks
 
-STATUS: READY
+STATUS: COMPLETE
 
 ## Objective
 Provide bounded readiness checks for the FastAPI and Streamlit loopback interfaces.
@@ -24,12 +24,15 @@ None.
 - This task file
 
 ## Acceptance criteria
-- [ ] Checks are loopback-only, bounded, and non-secret.
-- [ ] One unavailable interface does not produce invented readiness.
-- [ ] Tests pass.
+- [x] Checks are loopback-only, bounded, and non-secret.
+- [x] One unavailable interface does not produce invented readiness.
+- [x] Tests pass.
 
 ## Owner decisions
 None.
 
 ## Completion report
-Pending.
+Added a fixed-target readiness check for the FastAPI status endpoint and
+Streamlit health endpoint. It uses two-second request bounds and prints no
+response body, environment value or secret. Verified by focused and full-suite
+tests on 28 August 2026.

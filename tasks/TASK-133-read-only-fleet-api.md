@@ -1,6 +1,6 @@
 # TASK-133 — Read-Only Fleet API
 
-STATUS: READY
+STATUS: COMPLETE
 
 ## Objective
 Expose the existing approved Fleet register through rollback-only FastAPI read models.
@@ -23,13 +23,16 @@ None; rollback-only reads.
 - This task file
 
 ## Acceptance criteria
-- [ ] API returns truthful existing Fleet values and nulls.
-- [ ] Filters use approved exact values.
-- [ ] No transaction can commit.
-- [ ] Tests pass.
+- [x] API returns truthful existing Fleet values and nulls.
+- [x] Filters use approved exact values.
+- [x] No transaction can commit.
+- [x] Tests pass.
 
 ## Owner decisions
 None; no field expansion is allowed.
 
 ## Completion report
-Pending.
+Added `GET /api/fleet` through the existing legal-entity and vehicle services.
+Company, approved vehicle-type and positive exact-capacity filters are bounded;
+the database session always rolls back and closes. No write route, schema change
+or sample record was added. Verified by the full suite on 28 August 2026.

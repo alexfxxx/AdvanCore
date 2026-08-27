@@ -1,6 +1,6 @@
 # TASK-137 — Local UI Preferences
 
-STATUS: READY
+STATUS: COMPLETE
 
 ## Objective
 Allow the owner to change colour scheme, button feel, and animation intensity without touching governance or the database.
@@ -23,13 +23,16 @@ None.
 - This task file
 
 ## Acceptance criteria
-- [ ] Preferences survive a browser refresh on the same device.
-- [ ] Only fixed allow-listed values are applied.
-- [ ] Governance controls and readable contrast remain intact.
-- [ ] Tests and visual checks pass.
+- [x] Preferences survive a browser refresh on the same device.
+- [x] Only fixed allow-listed values are applied.
+- [x] Governance controls and readable contrast remain intact.
+- [x] Tests and visual checks pass.
 
 ## Owner decisions
 None; presentation-only customization was approved.
 
 ## Completion report
-Pending.
+Added browser-local, allow-listed theme, panel-shape and motion preferences with
+safe defaults and reset. No arbitrary CSS, server preference or database write
+is accepted. Midnight, light-business and responsive mobile layouts were
+visually verified on 28 August 2026.

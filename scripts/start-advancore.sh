@@ -110,6 +110,10 @@ if [ ! -x "$PROJECT_ROOT/.venv/bin/python" ] || \
     echo "The local Python environment is not ready. Follow the README setup once, then retry." >&2
     exit 1
 fi
+if ! "$PROJECT_ROOT/.venv/bin/python" -c 'import fastapi, uvicorn' >/dev/null 2>&1; then
+    echo "The local API dependencies are not ready. Install the approved project dependencies, then retry." >&2
+    exit 1
+fi
 if [ ! -f "$PROJECT_ROOT/.env.example" ]; then
     echo "The safe local environment template is missing." >&2
     exit 1
@@ -188,6 +192,64 @@ if ! "$PROJECT_ROOT/.venv/bin/alembic" upgrade head; then
     echo "Approved database migrations could not be applied. The saved database volume was kept." >&2
     exit 1
 fi
-echo "AdvanCore is starting. Keep this window open while using the app."
-exec "$PROJECT_ROOT/.venv/bin/streamlit" run "$PROJECT_ROOT/app.py" \
-    --server.address 127.0.0.1
+API_PID=
+STREAMLIT_PID=
+cleanup_interfaces() {
+    if [ -n "$API_PID" ] && kill -0 "$API_PID" >/dev/null 2>&1; then
+        kill "$API_PID" >/dev/null 2>&1 || true
+    fi
+    if [ -n "$STREAMLIT_PID" ] && kill -0 "$STREAMLIT_PID" >/dev/null 2>&1; then
+        kill "$STREAMLIT_PID" >/dev/null 2>&1 || true
+    fi
+    [ -z "$API_PID" ] || wait "$API_PID" >/dev/null 2>&1 || true
+    [ -z "$STREAMLIT_PID" ] || wait "$STREAMLIT_PID" >/dev/null 2>&1 || true
+}
+trap cleanup_interfaces EXIT INT TERM
+
+"$PROJECT_ROOT/.venv/bin/python" -m uvicorn main:app \
+    --host 127.0.0.1 --port 8000 &
+API_PID=$!
+"$PROJECT_ROOT/.venv/bin/streamlit" run "$PROJECT_ROOT/app.py" \
+    --server.address 127.0.0.1 --server.port 8501 &
+STREAMLIT_PID=$!
+
+attempt=0
+until "$PROJECT_ROOT/.venv/bin/python" "$PROJECT_ROOT/scripts/check-local-interfaces.py" >/dev/null 2>&1; do
+    attempt=$((attempt + 1))
+    if ! kill -0 "$API_PID" >/dev/null 2>&1 || ! kill -0 "$STREAMLIT_PID" >/dev/null 2>&1; then
+        break
+    fi
+    if [ "$attempt" -ge 30 ]; then
+        echo "The local interfaces did not become ready within 30 seconds." >&2
+        exit 1
+    fi
+    sleep 1
+done
+
+if ! "$PROJECT_ROOT/.venv/bin/python" "$PROJECT_ROOT/scripts/check-local-interfaces.py" >/dev/null 2>&1; then
+    echo "A local interface stopped before readiness. The saved database was not changed." >&2
+    exit 1
+fi
+
+echo "AdvanCore is ready. Keep this window open while using the apps."
+echo "Decoupled console: http://127.0.0.1:8000"
+echo "Streamlit transition app: http://127.0.0.1:8501"
+while kill -0 "$API_PID" >/dev/null 2>&1 && kill -0 "$STREAMLIT_PID" >/dev/null 2>&1; do
+    sleep 1
+done
+# Give a clean, paired shutdown one brief grace period before terminating a survivor.
+sleep 1
+if kill -0 "$API_PID" >/dev/null 2>&1; then kill "$API_PID" >/dev/null 2>&1 || true; fi
+if kill -0 "$STREAMLIT_PID" >/dev/null 2>&1; then kill "$STREAMLIT_PID" >/dev/null 2>&1 || true; fi
+set +e
+wait "$API_PID"
+api_status=$?
+wait "$STREAMLIT_PID"
+streamlit_status=$?
+set -e
+trap - EXIT INT TERM
+if [ "$api_status" -eq 0 ] && [ "$streamlit_status" -eq 0 ]; then
+    exit 0
+fi
+echo "A local interface stopped. The other interface was closed safely." >&2
+exit 1

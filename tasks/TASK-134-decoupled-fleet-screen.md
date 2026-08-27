@@ -1,6 +1,6 @@
 # TASK-134 — Decoupled Fleet Screen
 
-STATUS: READY
+STATUS: COMPLETE
 
 ## Objective
 Show the real Fleet register in the decoupled frontend using the TASK-133 read-only API.
@@ -22,12 +22,16 @@ None.
 - This task file
 
 ## Acceptance criteria
-- [ ] Existing vehicles render without manual re-entry.
-- [ ] Filters match the approved Fleet rules.
-- [ ] Text wraps and desktop/mobile layouts pass.
+- [x] Existing vehicles render without manual re-entry.
+- [x] Filters match the approved Fleet rules.
+- [x] Text wraps and desktop/mobile layouts pass.
 
 ## Owner decisions
 None.
 
 ## Completion report
-Pending.
+The decoupled console now renders the existing Fleet register with company,
+vehicle-type and exact-seat filters plus truthful null states. Visual checks
+against the local database showed all 27 imported vehicles; filtering Bus plus
+43 seats returned three records. Desktop and 390-pixel mobile checks passed on
+28 August 2026.
