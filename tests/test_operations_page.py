@@ -27,6 +27,7 @@ class FakeStreamlit:
     def date_input(self, label, **_kwargs): return self.inputs.get(label, date(2026, 8, 27))
     def number_input(self, label, **_kwargs): return self.inputs.get(label, 0.0)
     def checkbox(self, label, **_kwargs): return self.inputs.get(label, False)
+    def button(self, label, **_kwargs): return label == self.submitted_label
     def selectbox(self, label, options, **_kwargs): return self.inputs.get(label, options[0])
     def form_submit_button(self, label, **_kwargs): return label == self.submitted_label
     def rerun(self): self.rerun_calls += 1
@@ -131,6 +132,32 @@ def test_setup_flags_exact_database_duplicate(monkeypatch):
 
     assert fake_st.dataframes[1][0]["Review status"] == "Already Exists"
     assert "0 ready; 1 already exist" in fake_st.text()
+
+
+def test_setup_publishes_fully_ready_confirmed_batch_through_service(monkeypatch):
+    upload = SimpleNamespace(
+        getvalue=lambda: b"registration_number,make_model\nTEST-1,Model\n"
+    )
+    confirmation = "I reviewed all 1 row(s) and approve creating these records."
+    fake_st = FakeStreamlit(
+        submitted_label="Publish 1 vehicles record(s)",
+        inputs={
+            "Upload completed vehicles CSV": upload,
+            confirmation: True,
+        },
+    )
+    service = EmptyService()
+    service.list_vehicles = lambda: []
+    service.calls = []
+    service.create_vehicle = lambda *values: service.calls.append(values)
+    monkeypatch.setattr(operations, "st", fake_st)
+    monkeypatch.setattr(operations, "_vehicle_service", scope_for(service))
+
+    operations._render_setup()
+
+    assert service.calls == [("TEST-1", "Model")]
+    assert "Published 1 record(s)" in fake_st.text()
+    assert fake_st.rerun_calls == 1
 
 
 def test_setup_rejects_reported_oversized_upload_before_reading(monkeypatch):

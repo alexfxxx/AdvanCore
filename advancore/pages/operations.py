@@ -52,6 +52,10 @@ from advancore.services.operational_import_review_service import (
     REVIEW_INVALID,
     review_import,
 )
+from advancore.services.operational_import_publication_service import (
+    ImportPublicationError,
+    publish_import,
+)
 from advancore.services.route_service import (
     ROUTE_STATUSES,
     DuplicateRouteError,
@@ -175,6 +179,42 @@ def _existing_import_identities(dataset_type: str) -> set[str] | None:
     }
 
 
+def _publish_import_review(review, confirmed: bool):
+    configuration = {
+        "vehicles": (
+            _vehicle_service,
+            lambda service, values: service.create_vehicle(
+                values["registration_number"], values["make_model"]
+            ),
+        ),
+        "drivers": (
+            _driver_service,
+            lambda service, values: service.create_driver(
+                values["name"], values["employee_reference"]
+            ),
+        ),
+        "customers": (
+            _customer_service,
+            lambda service, values: service.create_customer(
+                values["name"], values["customer_reference"]
+            ),
+        ),
+        "routes": (
+            _route_service,
+            lambda service, values: service.create_route(
+                values["route_code"], values["origin"], values["destination"]
+            ),
+        ),
+    }
+    service_scope, create = configuration[review.dataset_type]
+    with service_scope() as service:
+        return publish_import(
+            review,
+            confirmed=confirmed,
+            create_record=lambda values: create(service, values),
+        )
+
+
 def _render_setup() -> None:
     st.subheader("Operational CSV setup")
     st.caption(
@@ -268,6 +308,36 @@ def _render_setup() -> None:
         use_container_width=True,
         hide_index=True,
     )
+    if review.publishable_count != len(review.rows) or not review.rows:
+        st.info("Publication stays locked until every row in the batch is ready.")
+        return
+    confirmed = st.checkbox(
+        f"I reviewed all {len(review.rows):,} row(s) and approve creating these records."
+    )
+    if st.button(
+        f"Publish {len(review.rows):,} {DATASET_LABELS[dataset_type].lower()} record(s)",
+        type="primary",
+        disabled=not confirmed,
+    ):
+        try:
+            result = _publish_import_review(review, confirmed)
+        except (
+            ImportPublicationError,
+            VehicleValidationError,
+            DuplicateVehicleError,
+            DriverValidationError,
+            DuplicateDriverReferenceError,
+            CustomerValidationError,
+            DuplicateCustomerReferenceError,
+            RouteValidationError,
+            DuplicateRouteError,
+        ) as exc:
+            st.warning(str(exc))
+        except Exception:
+            st.error("The import batch could not be published. No partial batch was saved.")
+        else:
+            st.success(f"Published {result.published_count:,} record(s).")
+            st.rerun()
 
 
 def _render_vehicle_register() -> None:
