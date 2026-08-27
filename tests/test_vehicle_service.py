@@ -3,7 +3,7 @@ from contextlib import contextmanager, nullcontext
 import pytest
 from sqlalchemy import create_engine
 
-from advancore.models import Base, Vehicle
+from advancore.models import Base, LegalEntity, Vehicle
 from advancore.repositories import VehicleRepository
 from advancore.services.database import create_session_factory, session_scope
 from advancore.services.vehicle_service import (
@@ -77,3 +77,33 @@ def test_vehicle_mutations_record_only_bounded_activity_identifiers():
         ("vehicle_status_changed", "vehicle", vehicle_id),
     ]
     assert "Sensitive" not in repr(activity.calls)
+
+def test_vehicle_details_preserve_nulls_exact_capacity_costs_and_combined_filters():
+    factory = build_service()
+    with session_scope(factory) as session:
+        owner = LegalEntity(name="Owner One", status="active")
+        session.add(owner); session.flush()
+        service = VehicleService(VehicleRepository(session))
+        selected = service.create_vehicle("PC5234D")
+        other = service.create_vehicle("LORRY-2")
+        service.update_details(selected.id, registered_owner_id=owner.id, vehicle_type="Bus", passenger_capacity=19,
+            parking_monthly_cost="120.50", insurance_annual_amount="1000", road_tax_amount="850", road_tax_period_months=6)
+        service.update_details(other.id, vehicle_type="lorry", passenger_capacity=3)
+        found = service.list_vehicles(owner.id, "Bus", 19)
+        assert [item.registration_number for item in found] == ["PC5234D"]
+        assert found[0].passenger_capacity == 19
+        assert found[0].manufacture_year is None
+        assert str(found[0].road_tax_amount) == "850.00"
+
+@pytest.mark.parametrize("details", [
+    {"vehicle_type": "van"}, {"passenger_capacity": 0}, {"parking_monthly_cost": "-1"},
+    {"unladen_weight_kg": "100000000.00"},
+    {"maximum_laden_weight_kg": "100000000.00"},
+    {"road_tax_amount": "850"}, {"road_tax_period_months": 6},
+])
+def test_vehicle_details_reject_invalid_values_without_estimation(details):
+    factory = build_service()
+    with session_scope(factory) as session:
+        service = VehicleService(VehicleRepository(session)); vehicle = service.create_vehicle("BUS-9")
+        with pytest.raises(VehicleValidationError): service.update_details(vehicle.id, **details)
+        assert vehicle.road_tax_amount is None

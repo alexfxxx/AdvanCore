@@ -18,6 +18,7 @@ def test_model_package_imports():
         Driver,
         Base,
         KnowledgeItem,
+        LegalEntity,
         Project,
         Route,
         SystemSetting,
@@ -28,6 +29,7 @@ def test_model_package_imports():
     assert Project is not None
     assert Route is not None
     assert KnowledgeItem is not None
+    assert LegalEntity is not None
     assert ActivityLog is not None
     assert Customer is not None
     assert Driver is not None
@@ -46,9 +48,18 @@ def test_expected_model_tables_registered():
     assert "activity_logs" in table_names
     assert "system_settings" in table_names
     assert "vehicles" in table_names
+    assert "legal_entities" in table_names
     assert "drivers" in table_names
     assert "customers" in table_names
     assert "routes" in table_names
+
+def test_vehicle_fleet_columns_are_nullable_and_bounded():
+    from advancore.models import Vehicle
+    table = Vehicle.__table__
+    additions = {"registered_owner_id", "manufacture_year", "passenger_capacity", "vehicle_type", "road_tax_amount", "road_tax_period_months"}
+    assert all(table.c[name].nullable for name in additions)
+    assert next(iter(table.c.registered_owner_id.foreign_keys)).target_fullname == "legal_entities.id"
+    assert {constraint.name for constraint in table.constraints} >= {"ck_vehicles_type", "ck_vehicles_passenger_capacity_positive", "ck_vehicles_road_tax_period"}
 
 
 def test_knowledge_model_registers_bounded_approval_metadata():
