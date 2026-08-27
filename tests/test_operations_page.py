@@ -99,18 +99,38 @@ def test_setup_previews_uploaded_rows_without_using_database(monkeypatch):
         }
     )
     monkeypatch.setattr(operations, "st", fake_st)
+    monkeypatch.setattr(operations, "_driver_service", scope_for(EmptyService()))
 
     operations._render_setup()
 
     assert "Previewed 1 row(s): 1 valid and 0 requiring correction" in fake_st.text()
     assert "Nothing has been saved" in fake_st.text()
-    assert fake_st.dataframes == [[{
+    assert fake_st.dataframes[0] == [{
         "CSV row": 2,
         "Status": "Valid",
         "name": "Alex Tan",
         "employee_reference": "DRV-7",
         "Validation": "Ready for later review",
-    }]]
+    }]
+    assert fake_st.dataframes[1][0]["Review status"] == "Ready"
+    assert "1 ready; 0 already exist" in fake_st.text()
+
+
+def test_setup_flags_exact_database_duplicate(monkeypatch):
+    upload = SimpleNamespace(
+        getvalue=lambda: b"registration_number,make_model\nBUS-1,Model\n"
+    )
+    fake_st = FakeStreamlit(inputs={"Upload completed vehicles CSV": upload})
+    existing = SimpleNamespace(registration_number="BUS-1")
+    service = EmptyService()
+    service.list_vehicles = lambda: [existing]
+    monkeypatch.setattr(operations, "st", fake_st)
+    monkeypatch.setattr(operations, "_vehicle_service", scope_for(service))
+
+    operations._render_setup()
+
+    assert fake_st.dataframes[1][0]["Review status"] == "Already Exists"
+    assert "0 ready; 1 already exist" in fake_st.text()
 
 
 def test_setup_rejects_reported_oversized_upload_before_reading(monkeypatch):
