@@ -42,6 +42,25 @@ def test_record_and_load_strict_secret_free_receipt(tmp_path):
     }
 
 
+def test_record_accepts_current_time_with_microseconds(tmp_path):
+    current = datetime(2026, 8, 26, 2, 3, 4, 987654, tzinfo=timezone.utc)
+    store = RecoveryEvidenceService(
+        tmp_path,
+        tmp_path / "state",
+        clock=lambda: current,
+    )
+
+    recorded = store.record(
+        backup_id=RECOVERY_REFERENCE,
+        migration_head=MIGRATION_REFERENCE,
+        required_table_count=4,
+        cleanup_confirmed=True,
+    )
+
+    assert recorded.completed_at == current.replace(microsecond=0)
+    assert store.load() == recorded
+
+
 def test_missing_receipt_is_truthfully_absent(tmp_path):
     assert service(tmp_path).load() is None
 
