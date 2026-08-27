@@ -161,7 +161,8 @@ def _install(
         "_worker_auth_readiness_service",
         lambda: auth_service or FakeAuthService(_auth_results()),
     )
-    monkeypatch.setattr(dashboard, "_render_fuel_visual_foundation", lambda: None)
+    monkeypatch.setattr(dashboard, "_render_fuel_visual_foundation", lambda *_args: None)
+    monkeypatch.setattr(dashboard, "_load_fuel_intelligence", lambda: None)
     monkeypatch.setattr(dashboard, "_render_platform_readiness", lambda: None)
     return preferences
 

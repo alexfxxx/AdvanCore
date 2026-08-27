@@ -1,7 +1,7 @@
 """Typed Plotly fuel-trend visuals with an honest no-data state."""
 
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import date, datetime, time, timezone
 from math import isfinite
 from typing import Iterable
 
@@ -17,6 +17,12 @@ class FuelTrendPoint:
 
     recorded_at: datetime
     litres: float
+
+    @classmethod
+    def from_recorded_date(cls, recorded_on: date, litres: float) -> "FuelTrendPoint":
+        if type(recorded_on) is not date:
+            raise TypeError("Recorded fuel date must be a date value.")
+        return cls(datetime.combine(recorded_on, time.min, tzinfo=timezone.utc), litres)
 
 
 def _validated_points(points: Iterable[FuelTrendPoint]) -> tuple[FuelTrendPoint, ...]:
@@ -83,7 +89,7 @@ def build_fuel_trend_figure(
         )
     else:
         figure.add_annotation(
-            text="No operational fuel readings connected yet",
+            text="No operational fuel readings recorded yet",
             x=0.5,
             y=0.5,
             xref="paper",
@@ -92,7 +98,7 @@ def build_fuel_trend_figure(
             font={"color": "#A5B4FC", "size": 15},
         )
 
-    window_label = "all readings" if window is None else f"last {window} readings"
+    window_label = "all recorded days" if window is None else f"last {window} recorded days"
     figure.update_layout(
         title={
             "text": f"Fuel usage trend · {window_label}",
