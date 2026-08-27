@@ -82,15 +82,40 @@ separate vanilla-JavaScript files. Future owner-selectable themes or animation
 preferences can therefore change presentation without altering PostgreSQL,
 business services, controller policy or `agent_runner` authority.
 
+TASK-137 adds three fixed, allow-listed themes, two panel shapes and a reduced
+motion choice. The validated selection is stored only in browser
+`localStorage`; arbitrary CSS, HTML and remote themes are not accepted.
+
+## Read-only operations
+
+- `GET /api/fleet` returns existing companies and vehicles, with optional
+  company, approved vehicle-type and exact-capacity filters.
+- `GET /api/dispatch?service_date=YYYY-MM-DD` uses the existing dispatch-board
+  service to project recorded trips, assignments, conflicts and available
+  resources for one date.
+- `GET /api/fuel/intelligence` reports calculations derived only from recorded
+  fuel entries.
+- `GET /api/fuel/market-benchmark` returns a repository-held, dated Singapore
+  gross pump-price reference. It never scrapes during app startup and never
+  writes the reference into the operational database.
+
+All database-backed reads use rollback-only sessions. The operational API has
+no POST, PUT, PATCH or DELETE route.
+
 ## Local startup
 
-After installing the pinned project requirements in an isolated environment:
+After installing the pinned project requirements in an isolated environment,
+the normal launcher starts PostgreSQL, applies already-approved migrations, and
+starts both local interfaces:
 
 ```bash
-uvicorn main:app --host 127.0.0.1 --port 8000
+./scripts/start-advancore.sh
 ```
 
-Open `http://127.0.0.1:8000`. Binding to `0.0.0.0` is outside TASK-126.
+Open `http://127.0.0.1:8000` for the decoupled console or
+`http://127.0.0.1:8501` for the Streamlit transition app. Run
+`./scripts/check-local-interfaces.py` for a bounded readiness check. Binding to
+`0.0.0.0` remains outside scope.
 
 The static frontend is served by FastAPI on the same origin. Explicit CORS
 origins exist only for bounded loopback development ports; wildcard origins

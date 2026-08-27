@@ -1,6 +1,6 @@
 # TASK-135 — Decoupled Daily Dispatch Board
 
-STATUS: READY
+STATUS: COMPLETE
 
 ## Objective
 Show the existing truthful Daily Dispatch view in the decoupled frontend.
@@ -23,12 +23,15 @@ None.
 - This task file
 
 ## Acceptance criteria
-- [ ] Board derives only from existing records and service rules.
-- [ ] Missing links remain visibly missing, never guessed.
-- [ ] Tests and mobile/desktop checks pass.
+- [x] Board derives only from existing records and service rules.
+- [x] Missing links remain visibly missing, never guessed.
+- [x] Tests and mobile/desktop checks pass.
 
 ## Owner decisions
 None.
 
 ## Completion report
-Pending.
+Added a dated read-only dispatch endpoint and console board backed by the
+existing dispatch-board service. It displays recorded trips, assignments,
+conflicts and available resources without an assignment write path. Tests and
+responsive visual checks passed on 28 August 2026.

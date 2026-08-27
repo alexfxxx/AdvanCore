@@ -16,7 +16,7 @@ from advancore.api.dependencies import (
     ReadModelGateway,
 )
 from advancore.api.orchestration_service import GovernedOrchestrationService
-from advancore.api.routes import orchestration, owner_goals, read_models, status, voice
+from advancore.api.routes import operations, orchestration, owner_goals, read_models, status, voice
 
 
 LOOPBACK_ORIGINS = (
@@ -46,7 +46,7 @@ def create_app(
             "worker, database-write or publication authority."
         ),
     )
-    app.state.read_gateway = read_gateway or DatabaseReadModelGateway()
+    app.state.read_gateway = read_gateway or DatabaseReadModelGateway(resolved_root)
     app.state.goal_previewer = goal_previewer or ControllerOwnerGoalPreviewer(
         resolved_root
     )
@@ -70,6 +70,7 @@ def create_app(
 
     app.include_router(status.router)
     app.include_router(read_models.router)
+    app.include_router(operations.router)
     app.include_router(owner_goals.router)
     app.include_router(orchestration.router)
     app.include_router(voice.router)

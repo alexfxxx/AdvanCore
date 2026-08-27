@@ -1,6 +1,6 @@
 # TASK-136 — Source-Backed Fuel Market Benchmark
 
-STATUS: READY
+STATUS: COMPLETE
 
 ## Objective
 Add a dated, pre-discount Singapore pump-price benchmark beside existing truthful fuel intelligence.
@@ -32,13 +32,17 @@ None.
 - This task file
 
 ## Acceptance criteria
-- [ ] All prices are SGD/litre before discounts and have auditable sources.
-- [ ] Market diesel low/high/median are calculated from the recorded comparison values.
-- [ ] Stale observations are labelled, not silently called live.
-- [ ] No invented fuel or business figures appear.
+- [x] All prices are SGD/litre before discounts and have auditable sources.
+- [x] Market diesel low/high/median are calculated from the recorded comparison values.
+- [x] Stale observations are labelled, not silently called live.
+- [x] No invented fuel or business figures appear.
 
 ## Owner decisions
 None; sources and pre-discount definition were specified by the owner.
 
 ## Completion report
-Pending.
+Stored a dated, auditable reference snapshot separate from operational fuel
+records. Motorist supplies the five-provider diesel comparison; official SPC
+and Shell rates retain their provider timestamps. The API calculates SGD
+3.89/L low, SGD 3.95/L median and SGD 4.05/L high. The UI explicitly labels
+official checks as dated rather than live. Verified on 28 August 2026.

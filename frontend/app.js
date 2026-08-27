@@ -5,6 +5,12 @@ let localActionToken = null;
 let approvedPreviewGoal = null;
 let activeRunId = null;
 let progressStream = null;
+const DISPLAY_PREFERENCE_KEY = "advancore.console.preferences.v1";
+const DISPLAY_ALLOWLIST = {
+  theme: ["midnight", "light-business", "graphite"],
+  shape: ["soft", "compact"],
+  motion: ["full", "reduced"],
+};
 
 async function requestJson(path, options = {}) {
   const response = await fetch(path, {
@@ -63,6 +69,202 @@ function renderRecords(containerId, records, factory, emptyLabel) {
     return;
   }
   records.forEach((record) => container.append(factory(record)));
+}
+
+function formatMoney(value) {
+  if (value === null || value === undefined || value === "") return "Not recorded";
+  return new Intl.NumberFormat("en-SG", { style: "currency", currency: "SGD" }).format(Number(value));
+}
+
+function appendDetail(grid, label, value) {
+  const item = document.createElement("div");
+  const term = document.createElement("span");
+  const result = document.createElement("strong");
+  term.textContent = label;
+  result.textContent = value ?? "Not recorded";
+  item.append(term, result);
+  grid.append(item);
+}
+
+function vehicleCard(vehicle, companies) {
+  const card = document.createElement("article");
+  card.className = "operation-card";
+  const heading = document.createElement("div");
+  heading.className = "operation-card-heading";
+  const title = document.createElement("h3");
+  title.textContent = vehicle.registration_number;
+  const badge = document.createElement("span");
+  badge.className = "record-status";
+  badge.textContent = vehicle.status;
+  heading.append(title, badge);
+  const owner = companies.find((item) => item.id === vehicle.registered_owner_id);
+  const grid = document.createElement("div");
+  grid.className = "detail-grid";
+  appendDetail(grid, "Registered owner", owner?.name || "Not recorded");
+  appendDetail(grid, "Make / model", vehicle.make_model || "Not recorded");
+  appendDetail(grid, "Vehicle / seating", [vehicle.vehicle_type, vehicle.passenger_capacity ? `${vehicle.passenger_capacity} seats` : null].filter(Boolean).join(" · ") || "Not recorded");
+  appendDetail(grid, "Year / propellant", [vehicle.manufacture_year, vehicle.propellant].filter(Boolean).join(" · ") || "Not recorded");
+  appendDetail(grid, "Parking", [vehicle.parking_provider, vehicle.parking_location, formatMoney(vehicle.parking_monthly_cost)].filter((item) => item && item !== "Not recorded").join(" · ") || "Not recorded");
+  appendDetail(grid, "Insurance", [vehicle.insurance_provider, formatMoney(vehicle.insurance_annual_amount)].filter((item) => item && item !== "Not recorded").join(" · ") || "Not recorded");
+  appendDetail(grid, "Road tax", vehicle.road_tax_amount === null ? "Not recorded" : `${formatMoney(vehicle.road_tax_amount)} / ${vehicle.road_tax_period_months} months`);
+  appendDetail(grid, "COE expiry", vehicle.coe_expiry || "Not recorded");
+  card.append(heading, grid);
+  return card;
+}
+
+function replaceOptions(select, records, valueFor, labelFor, firstLabel) {
+  const selected = select.value;
+  select.replaceChildren();
+  const first = document.createElement("option");
+  first.value = "";
+  first.textContent = firstLabel;
+  select.append(first);
+  records.forEach((record) => {
+    const option = document.createElement("option");
+    option.value = valueFor(record);
+    option.textContent = labelFor(record);
+    select.append(option);
+  });
+  if ([...select.options].some((option) => option.value === selected)) select.value = selected;
+}
+
+async function loadFleet({ initialiseFilters = false } = {}) {
+  const parameters = new URLSearchParams();
+  const company = byId("fleet-company").value;
+  const type = byId("fleet-type").value;
+  const capacity = byId("fleet-capacity").value;
+  if (company) parameters.set("registered_owner_id", company);
+  if (type) parameters.set("vehicle_type", type);
+  if (capacity) parameters.set("passenger_capacity", capacity);
+  const path = `/api/fleet${parameters.size ? `?${parameters}` : ""}`;
+  try {
+    const fleet = await requestJson(path);
+    if (initialiseFilters) {
+      replaceOptions(byId("fleet-company"), fleet.companies, (item) => String(item.id), (item) => item.name, "All companies");
+      const capacities = [...new Set(fleet.vehicles.map((item) => item.passenger_capacity).filter(Boolean))].sort((a, b) => a - b);
+      replaceOptions(byId("fleet-capacity"), capacities, String, (item) => `${item} seats`, "All capacities");
+    }
+    setText("fleet-summary", `${fleet.vehicles.length} vehicle${fleet.vehicles.length === 1 ? "" : "s"} shown. No sample records are generated.`);
+    renderRecords("fleet-list", fleet.vehicles, (vehicle) => vehicleCard(vehicle, fleet.companies), "No vehicles match these filters.");
+  } catch (error) {
+    setText("fleet-summary", error.message);
+    renderRecords("fleet-list", [], recordRow, "Fleet is unavailable.");
+  }
+}
+
+function dispatchCard(row) {
+  const card = document.createElement("article");
+  card.className = `operation-card${row.conflicts.length ? " has-conflict" : ""}`;
+  const heading = document.createElement("div");
+  heading.className = "operation-card-heading";
+  const title = document.createElement("h3");
+  title.textContent = row.trip_reference;
+  const badge = document.createElement("span");
+  badge.className = "record-status";
+  badge.textContent = row.dispatch_state;
+  heading.append(title, badge);
+  const route = document.createElement("p");
+  route.className = "route-label";
+  route.textContent = row.route_label;
+  const grid = document.createElement("div");
+  grid.className = "detail-grid three-columns";
+  appendDetail(grid, "Trip state", row.trip_status);
+  appendDetail(grid, "Vehicle", row.vehicle_label);
+  appendDetail(grid, "Driver", row.driver_label);
+  card.append(heading, route, grid);
+  row.conflicts.forEach((message) => {
+    const conflict = document.createElement("p");
+    conflict.className = "conflict-copy";
+    conflict.textContent = message;
+    card.append(conflict);
+  });
+  return card;
+}
+
+async function loadDispatch() {
+  const serviceDate = byId("dispatch-date").value;
+  if (!serviceDate) return;
+  try {
+    const board = await requestJson(`/api/dispatch?service_date=${encodeURIComponent(serviceDate)}`);
+    setText("dispatch-trip-count", board.trip_count);
+    setText("dispatch-conflict-count", board.conflict_count);
+    setText("dispatch-vehicle-count", board.available_vehicles.length);
+    setText("dispatch-driver-count", board.available_drivers.length);
+    renderRecords("dispatch-list", board.rows, dispatchCard, "No trips are recorded for this date.");
+  } catch (error) {
+    renderRecords("dispatch-list", [], recordRow, error.message);
+  }
+}
+
+function fuelPriceRow(observation) {
+  const row = recordRow(
+    `${observation.provider} · ${observation.grade}`,
+    observation.source_updated_at,
+    `${formatMoney(observation.price_per_litre)}/L`,
+  );
+  const link = document.createElement("a");
+  link.href = observation.source_url;
+  link.target = "_blank";
+  link.rel = "noopener noreferrer";
+  link.className = "source-link";
+  link.textContent = observation.source_name;
+  row.querySelector("div").append(link);
+  return row;
+}
+
+async function loadFuel() {
+  try {
+    const [intelligence, benchmark] = await Promise.all([
+      requestJson("/api/fuel/intelligence"),
+      requestJson("/api/fuel/market-benchmark"),
+    ]);
+    setText("fuel-entry-count", intelligence.entry_count);
+    setText("fuel-total-litres", `${Number(intelligence.total_litres).toLocaleString("en-SG")} L`);
+    setText("fuel-market-median", `${formatMoney(benchmark.median)}/L`);
+    setText("fuel-market-range", `${formatMoney(benchmark.low)}–${formatMoney(benchmark.high)}/L`);
+    setText("fuel-market-date", `${benchmark.benchmark_grade} · ${benchmark.basis} · retrieved ${benchmark.retrieved_on}`);
+    renderRecords("fuel-market-list", benchmark.market_observations, fuelPriceRow, "No market observations recorded.");
+    renderRecords("fuel-official-list", benchmark.official_confirmations, fuelPriceRow, "No official confirmations recorded.");
+  } catch (error) {
+    setText("fuel-market-date", error.message);
+    renderRecords("fuel-market-list", [], recordRow, "Fuel market reference is unavailable.");
+    renderRecords("fuel-official-list", [], recordRow, "Official price checks are unavailable.");
+  }
+}
+
+function validatedPreferences(raw) {
+  const defaults = { theme: "midnight", shape: "soft", motion: "full" };
+  if (!raw || typeof raw !== "object") return defaults;
+  return Object.fromEntries(Object.entries(defaults).map(([key, fallback]) => [
+    key,
+    DISPLAY_ALLOWLIST[key].includes(raw[key]) ? raw[key] : fallback,
+  ]));
+}
+
+function applyPreferences(preferences) {
+  const safe = validatedPreferences(preferences);
+  document.documentElement.dataset.theme = safe.theme;
+  document.documentElement.dataset.shape = safe.shape;
+  document.documentElement.dataset.motion = safe.motion;
+  Object.entries(safe).forEach(([key, value]) => {
+    const select = byId(`preference-${key}`);
+    if (select) select.value = value;
+  });
+  localStorage.setItem(DISPLAY_PREFERENCE_KEY, JSON.stringify(safe));
+}
+
+function configurePreferences() {
+  let stored = null;
+  try { stored = JSON.parse(localStorage.getItem(DISPLAY_PREFERENCE_KEY)); } catch (_error) { stored = null; }
+  applyPreferences(stored);
+  ["theme", "shape", "motion"].forEach((key) => {
+    byId(`preference-${key}`).addEventListener("change", () => applyPreferences({
+      theme: byId("preference-theme").value,
+      shape: byId("preference-shape").value,
+      motion: byId("preference-motion").value,
+    }));
+  });
+  byId("reset-preferences").addEventListener("click", () => applyPreferences(null));
 }
 
 async function loadStatus() {
@@ -305,11 +507,20 @@ function configureGoalForm() {
 
 document.addEventListener("DOMContentLoaded", () => {
   configureGoalForm();
+  configurePreferences();
+  const now = new Date();
+  byId("dispatch-date").value = [now.getFullYear(), String(now.getMonth() + 1).padStart(2, "0"), String(now.getDate()).padStart(2, "0")].join("-");
+  byId("refresh-fleet").addEventListener("click", () => loadFleet());
+  ["fleet-company", "fleet-type", "fleet-capacity"].forEach((id) => byId(id).addEventListener("change", () => loadFleet()));
+  byId("refresh-dispatch").addEventListener("click", loadDispatch);
   Promise.allSettled([
     loadLocalActionSession(),
     loadStatus(),
     loadProjects(),
     loadKnowledge(),
     recoverCurrentJob(),
+    loadFleet({ initialiseFilters: true }),
+    loadDispatch(),
+    loadFuel(),
   ]);
 });
