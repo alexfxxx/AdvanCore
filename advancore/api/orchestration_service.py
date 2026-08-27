@@ -3,6 +3,14 @@
 from __future__ import annotations
 
 import re
+import errno
+import hashlib
+import json
+import os
+import pwd
+import stat
+import subprocess
+import sys
 import threading
 import uuid
 from dataclasses import dataclass
@@ -15,6 +23,7 @@ from advancore.agent_runner.orchestration import (
     OrchestrationError,
     OrchestrationResult,
     OwnerAction,
+    default_orchestration_dir,
     load_checkpoint,
     run_orchestration,
 )
@@ -30,6 +39,8 @@ MAX_PROGRESS_MESSAGES = 8
 MAX_JOB_RECORDS = 50
 _TERMINAL_JOB_STATES = frozenset({"completed", "failed"})
 _CREDENTIAL_URL = re.compile(r"[a-z][a-z0-9+.-]*://[^\s:/@]+:[^\s/@]+@", re.I)
+_RUN_ID = re.compile(r"^ORCH-[A-Za-z0-9_-]{1,120}$")
+_LOCK_MAX_BYTES = 4096
 
 
 class OrchestrationJobBusy(RuntimeError):
@@ -42,6 +53,41 @@ class OrchestrationJobNotFound(RuntimeError):
 
 class OrchestrationRunNotFound(RuntimeError):
     """Raised when a governed orchestration checkpoint is unavailable."""
+
+
+def _repository_identity(repo_root: Path) -> Path | None:
+    """Return the shared Git identity, or None for a non-repository test root."""
+    try:
+        result = subprocess.run(
+            ["git", "rev-parse", "--path-format=absolute", "--git-common-dir"],
+            cwd=repo_root,
+            capture_output=True,
+            text=True,
+            timeout=5,
+            check=False,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None
+    if result.returncode != 0 or not result.stdout.strip():
+        return None
+    try:
+        return Path(result.stdout.strip()).resolve(strict=True)
+    except OSError:
+        return None
+
+
+def default_repository_lock_path(repo_root: Path) -> Path:
+    """Return one controller-owned lock shared by this Git repository."""
+    identity = _repository_identity(repo_root)
+    if identity is None:
+        return repo_root / ".agent_runner" / "api" / "orchestration.lock"
+    digest = hashlib.sha256(str(identity).encode("utf-8")).hexdigest()[:32]
+    account_home = Path(pwd.getpwuid(os.getuid()).pw_dir).resolve()
+    if sys.platform == "darwin":
+        state_root = account_home / "Library" / "Application Support" / "AdvanCore"
+    else:
+        state_root = account_home / ".local" / "state" / "advancore"
+    return state_root / "agent_runner" / "repository-locks" / f"{digest}.lock"
 
 
 def _now() -> datetime:
@@ -72,6 +118,7 @@ class _JobRecord:
     owner_decision_required: bool = False
     message: str = "Queued for the governed controller."
     next_action: str | None = None
+    known_run_ids: frozenset[str] = frozenset()
 
 
 class GovernedOrchestrationService:
@@ -82,12 +129,18 @@ class GovernedOrchestrationService:
         repo_root: Path,
         *,
         runner: Callable[[OrchestrationConfig, Path], OrchestrationResult] = run_orchestration,
+        repository_lock_path: Path | None = None,
     ):
         self._repo_root = repo_root.resolve()
         self._runner = runner
         self._lock = threading.Lock()
         self._jobs: dict[str, _JobRecord] = {}
         self._active_job_id: str | None = None
+        self._active_thread: threading.Thread | None = None
+        self._shutting_down = False
+        self._repository_lock_path = Path(
+            repository_lock_path or default_repository_lock_path(self._repo_root)
+        ).resolve()
 
     @staticmethod
     def _new_run_config(goal: str, *, apply: bool) -> OrchestrationConfig:
@@ -157,6 +210,10 @@ class GovernedOrchestrationService:
         run_id: str | None,
     ) -> OrchestrationJobResponse:
         with self._lock:
+            if self._shutting_down:
+                raise OrchestrationJobBusy(
+                    "The local controller is shutting down and cannot start new work."
+                )
             if self._active_job_id is not None:
                 active = self._jobs.get(self._active_job_id)
                 if active is not None and active.state not in _TERMINAL_JOB_STATES:
@@ -165,6 +222,11 @@ class GovernedOrchestrationService:
                     )
             self._prune_jobs_locked()
             job_id = f"JOB-{uuid.uuid4().hex}"
+            lock_token = uuid.uuid4().hex
+            known_run_ids = (
+                self._checkpoint_run_ids() if operation == "start" else frozenset()
+            )
+            self._acquire_repository_lock(job_id, run_id, lock_token)
             now = _now()
             record = _JobRecord(
                 job_id=job_id,
@@ -173,18 +235,155 @@ class GovernedOrchestrationService:
                 created_at=now,
                 updated_at=now,
                 run_id=run_id,
+                known_run_ids=known_run_ids,
             )
             self._jobs[job_id] = record
             self._active_job_id = job_id
 
         thread = threading.Thread(
             target=self._run_job,
-            args=(job_id, config),
+            args=(job_id, config, lock_token),
             name=f"advancore-{job_id}",
-            daemon=True,
+            daemon=False,
         )
-        thread.start()
+        with self._lock:
+            self._active_thread = thread
+        try:
+            thread.start()
+        except Exception as exc:
+            with self._lock:
+                self._jobs.pop(job_id, None)
+                self._active_job_id = None
+                self._active_thread = None
+            self._release_repository_lock(job_id, lock_token)
+            raise OrchestrationJobBusy(
+                "The governed orchestration job could not start safely."
+            ) from exc
         return self.get_job(job_id)
+
+    def _prepare_lock_parent(self) -> None:
+        parent = self._repository_lock_path.parent
+        parent.mkdir(parents=True, mode=0o700, exist_ok=True)
+        details = parent.lstat()
+        if (
+            stat.S_ISLNK(details.st_mode)
+            or not stat.S_ISDIR(details.st_mode)
+            or details.st_uid != os.getuid()
+            or stat.S_IMODE(details.st_mode) & 0o022
+        ):
+            raise OrchestrationJobBusy(
+                "The repository orchestration lock location is unsafe."
+            )
+
+    def _acquire_repository_lock(
+        self, job_id: str, run_id: str | None, token: str
+    ) -> None:
+        try:
+            self._prepare_lock_parent()
+            flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL
+            if hasattr(os, "O_NOFOLLOW"):
+                flags |= os.O_NOFOLLOW
+            descriptor = os.open(self._repository_lock_path, flags, 0o600)
+            try:
+                payload = json.dumps(
+                    {
+                        "job_id": job_id,
+                        "run_id": run_id,
+                        "token": token,
+                        "created_at": _now().isoformat(),
+                        "pid": os.getpid(),
+                    },
+                    sort_keys=True,
+                ).encode("utf-8")
+                os.write(descriptor, payload)
+                os.fsync(descriptor)
+            finally:
+                os.close(descriptor)
+        except FileExistsError as exc:
+            raise OrchestrationJobBusy(
+                "Another governed repository orchestration is active or requires recovery review."
+            ) from exc
+        except OSError as exc:
+            if exc.errno == errno.EEXIST:
+                raise OrchestrationJobBusy(
+                    "Another governed repository orchestration is active or requires recovery review."
+                ) from exc
+            raise OrchestrationJobBusy(
+                "The repository orchestration lock could not be established safely."
+            ) from exc
+
+    def _release_repository_lock(self, job_id: str, token: str) -> None:
+        path = self._repository_lock_path
+        try:
+            flags = os.O_RDONLY
+            if hasattr(os, "O_NOFOLLOW"):
+                flags |= os.O_NOFOLLOW
+            descriptor = os.open(path, flags)
+            try:
+                details = os.fstat(descriptor)
+                if (
+                    not stat.S_ISREG(details.st_mode)
+                    or details.st_uid != os.getuid()
+                    or details.st_nlink != 1
+                    or details.st_size > _LOCK_MAX_BYTES
+                    or stat.S_IMODE(details.st_mode) & 0o077
+                ):
+                    return
+                payload = json.loads(os.read(descriptor, _LOCK_MAX_BYTES).decode("utf-8"))
+            finally:
+                os.close(descriptor)
+            if payload.get("job_id") != job_id or payload.get("token") != token:
+                return
+            path.unlink()
+        except (OSError, UnicodeError, ValueError, AttributeError):
+            return
+
+    def _checkpoint_run_ids(self) -> frozenset[str]:
+        directory = default_orchestration_dir(self._repo_root)
+        try:
+            if not directory.exists():
+                return frozenset()
+            if directory.is_symlink() or not directory.is_dir():
+                raise OrchestrationJobBusy(
+                    "The orchestration checkpoint directory is unsafe."
+                )
+            return frozenset(
+                path.stem
+                for path in directory.iterdir()
+                if path.is_file() and not path.is_symlink() and _RUN_ID.fullmatch(path.stem)
+            )
+        except OSError as exc:
+            raise OrchestrationJobBusy(
+                "The orchestration checkpoint directory is unavailable."
+            ) from exc
+
+    def _discover_started_run(self, snapshot: _JobRecord) -> str | None:
+        if snapshot.operation != "start" or snapshot.run_id is not None:
+            return snapshot.run_id
+        candidates = self._checkpoint_run_ids() - snapshot.known_run_ids
+        if len(candidates) != 1:
+            return None
+        candidate = next(iter(candidates))
+        try:
+            checkpoint = load_checkpoint(candidate, self._repo_root)
+            created_at = datetime.fromisoformat(checkpoint.created_at)
+        except (OrchestrationError, OSError, ValueError):
+            return None
+        if created_at.tzinfo is None or created_at < snapshot.created_at:
+            return None
+        with self._lock:
+            record = self._jobs.get(snapshot.job_id)
+            if record is not None and record.run_id is None:
+                record.run_id = candidate
+        return candidate
+
+    def shutdown(self) -> None:
+        """Stop intake and wait for active governed work to reach its checkpoint."""
+        with self._lock:
+            self._shutting_down = True
+            active_thread = self._active_thread
+        if active_thread is not None and active_thread is not threading.current_thread():
+            active_thread.join()
 
     def _prune_jobs_locked(self) -> None:
         """Keep bounded process-local progress history; never remove active work."""
@@ -200,7 +399,9 @@ class GovernedOrchestrationService:
         while len(self._jobs) >= MAX_JOB_RECORDS and removable:
             self._jobs.pop(removable.pop(0).job_id, None)
 
-    def _run_job(self, job_id: str, config: OrchestrationConfig) -> None:
+    def _run_job(
+        self, job_id: str, config: OrchestrationConfig, lock_token: str
+    ) -> None:
         self._update_job(
             job_id,
             state="running",
@@ -244,6 +445,9 @@ class GovernedOrchestrationService:
             with self._lock:
                 if self._active_job_id == job_id:
                     self._active_job_id = None
+                if self._active_thread is threading.current_thread():
+                    self._active_thread = None
+            self._release_repository_lock(job_id, lock_token)
 
     def _update_job(self, job_id: str, **changes: object) -> None:
         with self._lock:
@@ -258,6 +462,9 @@ class GovernedOrchestrationService:
             if record is None:
                 raise OrchestrationJobNotFound("Orchestration job was not found.")
             snapshot = _JobRecord(**record.__dict__)
+
+        if snapshot.run_id is None and snapshot.state not in _TERMINAL_JOB_STATES:
+            snapshot.run_id = self._discover_started_run(snapshot)
 
         if snapshot.run_id and snapshot.state not in _TERMINAL_JOB_STATES:
             try:

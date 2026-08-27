@@ -1,6 +1,7 @@
 """FastAPI application factory for the decoupled local AdvanCore console."""
 
 import secrets
+from contextlib import asynccontextmanager
 from pathlib import Path
 
 from fastapi import FastAPI
@@ -37,6 +38,18 @@ def create_app(
 ) -> FastAPI:
     resolved_root = (repo_root or Path(__file__).resolve().parents[2]).resolve()
     resolved_frontend = (frontend_dir or resolved_root / "frontend").resolve()
+    resolved_orchestration = (
+        orchestration_service or GovernedOrchestrationService(resolved_root)
+    )
+
+    @asynccontextmanager
+    async def lifespan(_app: FastAPI):
+        try:
+            yield
+        finally:
+            shutdown = getattr(resolved_orchestration, "shutdown", None)
+            if callable(shutdown):
+                shutdown()
 
     app = FastAPI(
         title="AdvanCore Local API",
@@ -45,14 +58,13 @@ def create_app(
             "Loopback-only presentation API. It does not grant controller, "
             "worker, database-write or publication authority."
         ),
+        lifespan=lifespan,
     )
     app.state.read_gateway = read_gateway or DatabaseReadModelGateway(resolved_root)
     app.state.goal_previewer = goal_previewer or ControllerOwnerGoalPreviewer(
         resolved_root
     )
-    app.state.orchestration_service = (
-        orchestration_service or GovernedOrchestrationService(resolved_root)
-    )
+    app.state.orchestration_service = resolved_orchestration
     app.state.action_token = secrets.token_urlsafe(32)
     app.state.allowed_origins = frozenset(LOOPBACK_ORIGINS)
 
@@ -83,6 +95,15 @@ def create_app(
 
     @app.get("/", include_in_schema=False, response_class=FileResponse)
     def index() -> FileResponse:
-        return FileResponse(resolved_frontend / "index.html")
+        return FileResponse(
+            resolved_frontend / "index.html",
+            headers={
+                "Content-Security-Policy": (
+                    "default-src 'self'; script-src 'self'; style-src 'self'; "
+                    "connect-src 'self'; img-src 'self' data:; object-src 'none'; "
+                    "base-uri 'none'; frame-ancestors 'none'; form-action 'self'"
+                )
+            },
+        )
 
     return app
