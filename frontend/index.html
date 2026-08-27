@@ -38,13 +38,13 @@
             <p class="section-code">01 / OWNER INTAKE</p>
             <h2 id="owner-goal-title">Owner Goal</h2>
           </div>
-          <span class="boundary-badge">DRY-RUN ONLY</span>
+          <span class="boundary-badge">CONTROLLER MEDIATED</span>
         </div>
 
         <p class="supporting-copy">
-          Describe the outcome you want. This first scaffold validates and
-          previews a governed task. Worker launch remains available through the
-          controller and agent_runner, never directly from the browser.
+          Describe the outcome you want. Preview it first, then explicitly ask
+          the controller to begin. Any AI worker is launched by agent_runner,
+          never by this browser.
         </p>
 
         <form id="owner-goal-form">
@@ -59,13 +59,54 @@
           ></textarea>
           <div class="form-footer">
             <span id="goal-count" aria-live="polite">0 / 2000</span>
-            <button class="primary-button" type="submit">
-              Preview governed task
-            </button>
+            <div class="action-cluster">
+              <button class="secondary-action-button" id="preview-goal" type="submit">
+                Preview governed task
+              </button>
+              <button class="primary-button" id="start-goal" type="button" disabled>
+                Start through controller
+              </button>
+            </div>
           </div>
         </form>
 
         <div id="goal-result" class="result-box" hidden aria-live="polite"></div>
+        <section id="progress-panel" class="progress-panel" hidden aria-labelledby="progress-title">
+          <div class="progress-heading">
+            <div>
+              <p class="section-code">LIVE GOVERNED PROGRESS</p>
+              <h3 id="progress-title">Controller activity</h3>
+            </div>
+            <span id="progress-state" class="record-status">Waiting</span>
+          </div>
+          <dl class="progress-grid">
+            <div><dt>Run</dt><dd id="progress-run">Not assigned</dd></div>
+            <div><dt>Task</dt><dd id="progress-task">Not assigned</dd></div>
+            <div><dt>Phase</dt><dd id="progress-phase">Not started</dd></div>
+          </dl>
+          <p id="progress-message" class="progress-message" aria-live="polite"></p>
+          <p id="progress-next" class="micro-copy progress-next"></p>
+          <div id="controller-actions" class="controller-actions" hidden>
+            <button class="primary-button" data-owner-action="APPROVE_TASK" type="button">
+              Approve task
+            </button>
+            <button class="danger-button" data-owner-action="BLOCK_TASK" type="button">
+              Block task
+            </button>
+            <button class="primary-button" data-owner-action="APPROVE_IMPLEMENTATION" type="button">
+              Approve implementation and eligible feature-branch publication
+            </button>
+            <button class="warning-button" data-owner-action="REWORK_IMPLEMENTATION" type="button">
+              Request bounded rework
+            </button>
+            <button class="danger-button" data-owner-action="BLOCK_IMPLEMENTATION" type="button">
+              Block implementation
+            </button>
+          </div>
+          <button id="resume-controller" class="secondary-action-button" type="button" hidden>
+            Resume controller from checkpoint
+          </button>
+        </section>
       </section>
 
       <aside class="panel voice-panel" aria-labelledby="voice-title">
@@ -150,8 +191,9 @@
         </div>
         <ul>
           <li>Database changes stay behind governed application services</li>
-          <li>AI workers launch through controller → agent_runner</li>
-          <li>Approval and publication remain controller-gated</li>
+          <li>AI workers launch only through controller → agent_runner</li>
+          <li>Each approval is an explicit, phase-bound controller action</li>
+          <li>Database changes and publication remain controller-gated</li>
           <li>Voice transcripts require explicit owner confirmation</li>
         </ul>
       </section>
