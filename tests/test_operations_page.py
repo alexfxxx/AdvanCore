@@ -12,6 +12,7 @@ class FakeStreamlit:
         self.submitted_label = submitted_label
         self.inputs = inputs or {}
         self.rerun_calls = 0
+        self.downloads = []
 
     def _record(self, kind, value): self.messages.append((kind, str(value)))
     def header(self, value): self._record("header", value)
@@ -30,6 +31,8 @@ class FakeStreamlit:
     def form_submit_button(self, label, **_kwargs): return label == self.submitted_label
     def rerun(self): self.rerun_calls += 1
     def dataframe(self, rows, **_kwargs): self.dataframes.append(rows)
+    def download_button(self, label, **kwargs): self.downloads.append((label, kwargs))
+    def file_uploader(self, label, **_kwargs): return self.inputs.get(label)
 
     def tabs(self, labels):
         self._record("tabs", "|".join(labels))
@@ -75,7 +78,7 @@ def test_transport_operations_starts_truthfully_empty(monkeypatch):
 
     text = fake_st.text()
     assert "Transport Operations" in text
-    assert "Fleet|Drivers|Customers|Routes|Trips|Assignments|Fuel|Finance" in text
+    assert "Setup|Fleet|Drivers|Customers|Routes|Trips|Assignments|Fuel|Finance" in text
     assert "No vehicles registered yet" in text
     assert "No routes registered yet" in text
     assert "No trips planned yet" in text
@@ -83,6 +86,44 @@ def test_transport_operations_starts_truthfully_empty(monkeypatch):
     assert "No fuel entries recorded yet" in text
     assert "No financial entries recorded yet" in text
     assert "does not generate sample business data" in text
+    assert fake_st.dataframes == []
+    assert fake_st.downloads[0][1]["data"] == b"registration_number,make_model\n"
+
+
+def test_setup_previews_uploaded_rows_without_using_database(monkeypatch):
+    upload = SimpleNamespace(getvalue=lambda: b"name,employee_reference\n Alex Tan , drv-7 \n")
+    fake_st = FakeStreamlit(
+        inputs={
+            "CSV dataset": "drivers",
+            "Upload completed drivers CSV": upload,
+        }
+    )
+    monkeypatch.setattr(operations, "st", fake_st)
+
+    operations._render_setup()
+
+    assert "Previewed 1 row(s): 1 valid and 0 requiring correction" in fake_st.text()
+    assert "Nothing has been saved" in fake_st.text()
+    assert fake_st.dataframes == [[{
+        "CSV row": 2,
+        "Status": "Valid",
+        "name": "Alex Tan",
+        "employee_reference": "DRV-7",
+        "Validation": "Ready for later review",
+    }]]
+
+
+def test_setup_rejects_reported_oversized_upload_before_reading(monkeypatch):
+    def unexpected_read():
+        raise AssertionError("oversized upload must not be materialized")
+
+    upload = SimpleNamespace(size=1_048_577, getvalue=unexpected_read)
+    fake_st = FakeStreamlit(inputs={"Upload completed vehicles CSV": upload})
+    monkeypatch.setattr(operations, "st", fake_st)
+
+    operations._render_setup()
+
+    assert "exceeds the 1 MiB preview limit" in fake_st.text()
     assert fake_st.dataframes == []
 
 

@@ -1,6 +1,6 @@
 # TASK-114 — Operational CSV Import Foundation
 
-STATUS: READY
+STATUS: COMPLETE
 
 ## Objective
 
@@ -91,33 +91,52 @@ publication remain later tasks.
 
 ### Implemented
 
-Pending.
+- Added stable, header-only UTF-8 CSV templates for vehicles, drivers,
+  customers, and routes.
+- Added a strict preview-only parser with exact headers, byte and row limits,
+  row-shape checks, and deterministic validation aligned with existing domain
+  constraints.
+- Added an Operational CSV Setup tab with template downloads, in-memory upload
+  validation, row-level results, and explicit no-save messaging.
 
 ### Files changed
 
-Pending.
+- `tasks/TASK-114-operational-csv-import-foundation.md`
+- `advancore/services/operational_import_service.py`
+- `advancore/pages/operations.py`
+- `tests/test_operational_import_service.py`
+- `tests/test_operations_page.py`
 
 ### Database changes
 
-None.
+None. The parser and presentation flow do not open a database session.
 
 ### Tests and results
 
-Pending.
+- Focused after independent-review repair: `26 passed in 1.78s`.
+- Full repository after independent-review repair: `1201 passed, 2 skipped in
+  171.45s`.
+- `git diff --check`: passed.
 
 ### Assumptions
 
-CSV is the first portable intake format; spreadsheet-specific imports remain
-outside this task.
+- CSV is the first portable intake format; spreadsheet-specific imports remain
+  outside this task.
+- Exact ordered headers are required so ambiguous column mapping fails closed.
 
 ### Risks / unresolved issues
 
-Database duplicate detection and approved publication are intentionally
-deferred to TASK-115 and TASK-116.
+- Database duplicate detection and approved publication are intentionally
+  deferred to TASK-115 and TASK-116.
+- The installed Codex CLI removed the option currently used by the permanent
+  Codex worker adapter. Codex Desktop completed the bounded implementation as
+  the approved local fallback; permanent adapter compatibility remains a
+  separate governance/infrastructure repair.
 
 ### Decisions required
 
-None.
+None for TASK-114. Merging its PR into `projects-lifecycle-recovery` remains an
+owner-controlled publication decision.
 
 ### Recommended next step
 
