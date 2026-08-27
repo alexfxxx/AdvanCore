@@ -8,6 +8,7 @@ from advancore.repositories.activity import ActivityLogRepository
 from advancore.repositories.customer import CustomerRepository
 from advancore.repositories.driver import DriverRepository
 from advancore.repositories.fuel_entry import FuelEntryRepository
+from advancore.repositories.financial_entry import FinancialEntryRepository
 from advancore.repositories.knowledge import KnowledgeItemRepository
 from advancore.repositories.project import ProjectRepository
 from advancore.repositories.route import RouteRepository
@@ -21,6 +22,7 @@ __all__ = [
     "CustomerRepository",
     "DriverRepository",
     "FuelEntryRepository",
+    "FinancialEntryRepository",
     "KnowledgeItemRepository",
     "ProjectRepository",
     "RouteRepository",
