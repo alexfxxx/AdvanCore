@@ -1,5 +1,6 @@
 """FastAPI application factory for the decoupled local AdvanCore console."""
 
+import secrets
 from pathlib import Path
 
 from fastapi import FastAPI
@@ -14,7 +15,8 @@ from advancore.api.dependencies import (
     OwnerGoalPreviewer,
     ReadModelGateway,
 )
-from advancore.api.routes import owner_goals, read_models, status, voice
+from advancore.api.orchestration_service import GovernedOrchestrationService
+from advancore.api.routes import orchestration, owner_goals, read_models, status, voice
 
 
 LOOPBACK_ORIGINS = (
@@ -31,6 +33,7 @@ def create_app(
     frontend_dir: Path | None = None,
     read_gateway: ReadModelGateway | None = None,
     goal_previewer: OwnerGoalPreviewer | None = None,
+    orchestration_service: GovernedOrchestrationService | None = None,
 ) -> FastAPI:
     resolved_root = (repo_root or Path(__file__).resolve().parents[2]).resolve()
     resolved_frontend = (frontend_dir or resolved_root / "frontend").resolve()
@@ -47,13 +50,18 @@ def create_app(
     app.state.goal_previewer = goal_previewer or ControllerOwnerGoalPreviewer(
         resolved_root
     )
+    app.state.orchestration_service = (
+        orchestration_service or GovernedOrchestrationService(resolved_root)
+    )
+    app.state.action_token = secrets.token_urlsafe(32)
+    app.state.allowed_origins = frozenset(LOOPBACK_ORIGINS)
 
     app.add_middleware(
         CORSMiddleware,
         allow_origins=list(LOOPBACK_ORIGINS),
         allow_credentials=False,
         allow_methods=["GET", "POST", "OPTIONS"],
-        allow_headers=["Content-Type"],
+        allow_headers=["Content-Type", "X-AdvanCore-Action-Token"],
     )
     app.add_middleware(
         TrustedHostMiddleware,
@@ -63,6 +71,7 @@ def create_app(
     app.include_router(status.router)
     app.include_router(read_models.router)
     app.include_router(owner_goals.router)
+    app.include_router(orchestration.router)
     app.include_router(voice.router)
 
     app.mount(

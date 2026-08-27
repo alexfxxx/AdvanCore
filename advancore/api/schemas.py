@@ -1,8 +1,9 @@
 """Bounded request and response contracts for the local AdvanCore API."""
 
 from datetime import datetime
+from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, StrictBool
 
 from advancore.agent_runner.goal_task import MAX_GOAL_LENGTH
 
@@ -40,7 +41,11 @@ class KnowledgeResponse(BaseModel):
     updated_at: datetime
 
 
-class OwnerGoalRequest(BaseModel):
+class StrictRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+
+class OwnerGoalRequest(StrictRequest):
     goal: str = Field(min_length=1, max_length=MAX_GOAL_LENGTH)
 
 
@@ -59,3 +64,70 @@ class OwnerGoalPreviewResponse(BaseModel):
 
 class ApiErrorResponse(BaseModel):
     detail: str
+
+
+class LocalActionSessionResponse(BaseModel):
+    action_token: str
+    lifetime: str = "process"
+
+
+class OrchestrationLaunchRequest(StrictRequest):
+    goal: str = Field(min_length=1, max_length=MAX_GOAL_LENGTH)
+    confirmed: StrictBool
+
+
+class OrchestrationResumeRequest(StrictRequest):
+    confirmed: StrictBool
+
+
+class OrchestrationActionRequest(StrictRequest):
+    action: Literal[
+        "APPROVE_TASK",
+        "BLOCK_TASK",
+        "APPROVE_IMPLEMENTATION",
+        "REWORK_IMPLEMENTATION",
+        "BLOCK_IMPLEMENTATION",
+    ]
+    confirmed: StrictBool
+    owner_note: str | None = Field(default=None, max_length=400)
+
+
+class OrchestrationPreviewResponse(BaseModel):
+    run_id: str
+    task_id: str | None
+    phase: str
+    status: str
+    owner_decision_required: bool
+    next_action: str
+    planner_launched: bool = False
+    worker_launched: bool = False
+    mutations_performed: list[str]
+
+
+class OrchestrationJobResponse(BaseModel):
+    job_id: str
+    operation: str
+    state: str
+    terminal: bool
+    run_id: str | None
+    task_id: str | None
+    phase: str | None
+    status: str | None
+    owner_decision_required: bool
+    message: str
+    next_action: str | None
+    events_url: str
+    updated_at: datetime
+
+
+class OrchestrationRunResponse(BaseModel):
+    run_id: str
+    task_id: str | None
+    phase: str
+    status: str
+    branch: str | None
+    completed_phases: list[str]
+    owner_decision_count: int
+    push_verified: bool
+    updated_at: datetime
+    messages: list[str]

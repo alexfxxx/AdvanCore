@@ -2,26 +2,28 @@
 
 ## Status
 
-TASK-126 additive scaffold. The Streamlit application remains the supported
-operational interface while this console is evaluated.
+TASK-126 provides the additive presentation scaffold. TASK-127 adds a narrow
+controller-mediated launch and progress bridge. The Streamlit application
+remains available while the decoupled console is evaluated.
 
 ## Boundary
 
 ```text
 Browser HTML/CSS/JavaScript
         |
-        | read requests or explicit Owner Goal text
+        | read requests, explicit Owner Goal or exact owner action
         v
 FastAPI loopback presentation adapter
         |
-        | existing application services / dry-run goal generation
+        | fixed policy request; never a browser-selected worker/command
         v
-AdvanCore controller and agent_runner authority boundaries
+AdvanCore controller -> agent_runner -> approved worker route
 ```
 
 The browser is an untrusted presentation client. It has no database session,
-shell access, worker adapter, controller decision, task lifecycle, Git
-publication or deployment capability.
+shell access, worker adapter, Git client, publication target or deployment
+capability. It can submit an exact phase-bound owner action, but existing
+orchestration code remains solely responsible for validating and applying it.
 
 ## Initial endpoints
 
@@ -34,6 +36,40 @@ publication or deployment capability.
   `DryRunWorkerAdapter` and `execute=False`. It launches no planner and writes no
   task file.
 - `WS /ws/transcription` reports that voice is disabled and accepts no audio.
+
+## Controller-mediated endpoints
+
+- `GET /api/session` issues a process-lifetime anti-CSRF action token. The
+  response is `no-store`; the frontend keeps the token only in memory.
+- `POST /api/orchestrations/preview` runs the existing orchestration in
+  `apply=False` mode and returns its bounded projection.
+- `POST /api/orchestrations` submits an explicitly confirmed new run.
+- `POST /api/orchestrations/{run_id}/resume` resumes an existing checkpoint.
+- `POST /api/orchestrations/{run_id}/actions` submits one exact existing
+  `OwnerAction`; it does not create a second approval model.
+- `GET /api/orchestration-jobs/{job_id}` and its `/events` Server-Sent Events
+  stream expose bounded live state without goal text, prompts or credentials.
+- `GET /api/orchestration-jobs/current` restores the active or most recent
+  bounded job snapshot after a page refresh in the same server process.
+- `GET /api/orchestrations/{run_id}` provides a bounded checkpoint projection.
+
+Every mutating request requires both an allow-listed loopback `Origin` and the
+process-lifetime token. Unknown JSON fields, coerced confirmation values and
+malformed run identifiers are rejected. Only one repository orchestration job
+may run at once.
+Process-local job history is capped at 50 bounded records.
+
+New runs use a server-fixed configuration. The browser cannot set workers,
+controller adapters, timeouts, repair budgets, paths, branches or apply flags.
+The existing unattended worker policy retains Kimi-Swarm first and Codex as its
+approved fallback; the existing worker route supplies Gemini as the intermediate
+candidate where configured. Resumed runs recover their policy from the durable
+checkpoint rather than accepting browser overrides.
+
+Task approval, implementation review, database effects and safe feature-branch
+publication continue through the existing controller and `agent_runner`
+authority boundaries. A green test result or completed worker job is never
+treated as approval. `main`, merge and deployment authority are not exposed.
 
 Database reads use a rollback-only session. No API route is authorised to
 commit a transaction.
@@ -74,13 +110,15 @@ No audio or transcript is stored by default. A final transcript remains
 editable and requires explicit owner submission before it enters the
 controller workflow.
 
-## Deliberately absent capabilities
+## Deliberately absent direct browser capabilities
 
-- Task artifact creation or lifecycle approval
-- Worker execution or fallback routing
-- Database writes or migrations
-- Commit, push, PR, merge or deployment
+- Direct task lifecycle mutation outside existing controller actions
+- Direct worker execution, worker selection or fallback routing
+- Direct database writes or migrations
+- Direct commit, push, PR, merge or deployment
 - Gemini connection, credential handling or billing
 - Remote access or authentication
 
-Each requires a separate governed task and owner decision.
+The controller may perform only operations already authorised by its governed
+task, current lifecycle phase and exact owner decision. New capabilities still
+require a separate governed task and owner decision.
