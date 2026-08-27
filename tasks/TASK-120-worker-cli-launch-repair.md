@@ -1,6 +1,6 @@
 # TASK-120 — Worker CLI Launch Repair
 
-STATUS: READY
+STATUS: APPROVED
 
 ## Objective
 
@@ -67,16 +67,16 @@ None.
 
 ## Acceptance criteria
 
-- [ ] A registered Kimi/Kimi-Swarm adapter uses PATH discovery when available.
-- [ ] When PATH lacks Kimi, the registered adapter uses only the fixed
+- [x] A registered Kimi/Kimi-Swarm adapter uses PATH discovery when available.
+- [x] When PATH lacks Kimi, the registered adapter uses only the fixed
       owner-home `.kimi-code/bin/kimi` executable when it is a regular
       executable file.
-- [ ] Missing or unsafe Kimi candidates continue to fail closed.
-- [ ] Gemini passes the full bounded instruction through one
+- [x] Missing or unsafe Kimi candidates continue to fail closed.
+- [x] Gemini passes the full bounded instruction through one
       `--print=<prompt>` argument and retains all existing safe flags.
-- [ ] No provider credential, raw diagnostic output or account identifier is
+- [x] No provider credential, raw diagnostic output or account identifier is
       stored or exposed.
-- [ ] Focused and full tests, disposable smoke checks and `git diff --check`
+- [x] Focused and full tests, disposable smoke checks and `git diff --check`
       pass.
 
 ## Test requirements
@@ -105,16 +105,58 @@ requires an explicit owner decision.
 
 ### Implemented
 
+- Added PATH-first Kimi executable resolution with a fixed owner-home fallback
+  restricted to a non-symlink regular executable file.
+- Applied the resolver to both Kimi and Kimi-Swarm adapters while keeping
+  explicit executable overrides PATH-only.
+- Encoded Gemini's full bounded instruction as one `--print=<prompt>` argument
+  without changing its existing safety flags.
+- Added regression coverage and documented the governed launch behavior.
+
 ### Files changed
+
+- `advancore/agent_runner/worker.py`
+- `tests/test_agent_runner.py`
+- `tests/test_auto_pipeline.py`
+- `tests/test_gemini_worker_foundation.py`
+- `docs/runbooks/WORKER_ROUTING.md`
+- `tasks/TASK-120-worker-cli-launch-repair.md`
 
 ### Database changes
 
+None.
+
 ### Tests and results
+
+- Governed auto-pipeline full suite using the project virtual environment and
+  an isolated in-memory test URL: 1,227 passed.
+- Focused adapter suite: 129 passed.
+- `python -m py_compile` for all changed Python files and `git diff --check`:
+  passed.
+- Disposable no-file Kimi 0.38.0 smoke prompt: exited 0 and returned the
+  expected `READY` marker.
+- Disposable no-file Gemini/Antigravity 1.1.21 smoke prompt through the repaired
+  adapter: exited 0 and returned the expected `READY` marker.
 
 ### Assumptions
 
+- A symlink at the fixed Kimi path is unsafe and must fail closed even when its
+  target is a regular executable.
+- Provider smoke checks used a temporary empty Git repository and did not read
+  or modify AdvanCore files.
+
 ### Risks / unresolved issues
+
+- Kimi's separate 20% weekly and 60-minute local usage policy is unchanged. If
+  the authenticated provider reading is already 44%, AdvanCore will still pause
+  Kimi by policy even though the CLI and endpoint are healthy.
 
 ### Decisions required
 
+- None for this technical repair. Retaining or changing the separate 20% Kimi
+  usage threshold remains an owner policy decision.
+
 ### Recommended next step
+
+Publish the reviewed repair into `projects-lifecycle-recovery`, never `main`,
+then continue the separately reviewed Fleet PR #43 workflow.

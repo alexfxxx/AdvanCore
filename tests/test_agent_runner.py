@@ -11,6 +11,7 @@ from dataclasses import dataclass
 import hashlib
 from pathlib import Path
 import subprocess
+from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -582,6 +583,62 @@ class TestWorkerAdapterBoundary:
     def test_kimi_adapter_reports_missing_executable(self, tmp_path: Path):
         adapter = KimiWorkerAdapter(executable="definitely-not-kimi")
         result = adapter.run("instruction", tmp_path)
+
+        assert result.success is False
+        assert "not found in PATH" in result.message
+
+    def test_kimi_adapter_prefers_path_executable(self, tmp_path: Path):
+        adapter = KimiWorkerAdapter(implementation_worker=False)
+        with patch(
+            "advancore.agent_runner.worker.shutil.which", return_value="/bin/kimi"
+        ), patch("advancore.agent_runner.worker._kimi_usage_preflight") as preflight, patch(
+            "advancore.agent_runner.worker.subprocess.run"
+        ) as launched:
+            preflight.return_value = (None, None, None)
+            launched.return_value = subprocess.CompletedProcess([], 0, "", "")
+            result = adapter.run("instruction", tmp_path)
+
+        assert result.success is True
+        assert launched.call_args.args[0][0] == "/bin/kimi"
+
+    def test_kimi_adapter_uses_fixed_owner_home_fallback(self, tmp_path: Path):
+        owner_home = tmp_path / "owner"
+        fixed_kimi = owner_home / ".kimi-code" / "bin" / "kimi"
+        fixed_kimi.parent.mkdir(parents=True)
+        fixed_kimi.write_text("#!/bin/sh\n", encoding="utf-8")
+        fixed_kimi.chmod(0o700)
+        adapter = KimiWorkerAdapter(implementation_worker=False)
+        with patch(
+            "advancore.agent_runner.worker.shutil.which", return_value=None
+        ), patch(
+            "advancore.agent_runner.worker.pwd.getpwuid",
+            return_value=SimpleNamespace(pw_dir=str(owner_home)),
+        ), patch("advancore.agent_runner.worker._kimi_usage_preflight") as preflight, patch(
+            "advancore.agent_runner.worker.subprocess.run"
+        ) as launched:
+            preflight.return_value = (None, None, None)
+            launched.return_value = subprocess.CompletedProcess([], 0, "", "")
+            result = adapter.run("instruction", tmp_path)
+
+        assert result.success is True
+        assert launched.call_args.args[0][0] == str(fixed_kimi)
+
+    def test_kimi_adapter_rejects_unsafe_fixed_fallback(self, tmp_path: Path):
+        owner_home = tmp_path / "owner"
+        fixed_kimi = owner_home / ".kimi-code" / "bin" / "kimi"
+        fixed_kimi.parent.mkdir(parents=True)
+        target = tmp_path / "other-kimi"
+        target.write_text("#!/bin/sh\n", encoding="utf-8")
+        target.chmod(0o700)
+        fixed_kimi.symlink_to(target)
+        adapter = KimiWorkerAdapter()
+        with patch(
+            "advancore.agent_runner.worker.shutil.which", return_value=None
+        ), patch(
+            "advancore.agent_runner.worker.pwd.getpwuid",
+            return_value=SimpleNamespace(pw_dir=str(owner_home)),
+        ):
+            result = adapter.run("instruction", tmp_path)
 
         assert result.success is False
         assert "not found in PATH" in result.message
