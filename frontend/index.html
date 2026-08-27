@@ -1,0 +1,165 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta
+      name="description"
+      content="AdvanCore local governed operations console"
+    />
+    <title>AdvanCore Local Console</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link rel="stylesheet" href="/assets/styles.css" />
+    <script src="/assets/app.js" defer></script>
+    <script src="/assets/audio.js" defer></script>
+  </head>
+  <body>
+    <div class="ambient ambient-one" aria-hidden="true"></div>
+    <div class="ambient ambient-two" aria-hidden="true"></div>
+
+    <header class="shell header-row">
+      <div>
+        <p class="eyebrow">LOCAL GOVERNED CONSOLE</p>
+        <h1>ADVANCORE</h1>
+        <p class="subtitle">
+          A decoupled presentation layer. Controller authority remains intact.
+        </p>
+      </div>
+      <div class="status-chip" id="connection-chip" role="status">
+        <span class="status-dot" aria-hidden="true"></span>
+        <span id="connection-label">Checking local API</span>
+      </div>
+    </header>
+
+    <main class="shell layout-grid">
+      <section class="panel command-panel" aria-labelledby="owner-goal-title">
+        <div class="panel-heading">
+          <div>
+            <p class="section-code">01 / OWNER INTAKE</p>
+            <h2 id="owner-goal-title">Owner Goal</h2>
+          </div>
+          <span class="boundary-badge">DRY-RUN ONLY</span>
+        </div>
+
+        <p class="supporting-copy">
+          Describe the outcome you want. This first scaffold validates and
+          previews a governed task. Worker launch remains available through the
+          controller and agent_runner, never directly from the browser.
+        </p>
+
+        <form id="owner-goal-form">
+          <label for="owner-goal">Goal text</label>
+          <textarea
+            id="owner-goal"
+            name="goal"
+            maxlength="2000"
+            rows="7"
+            placeholder="Example: Review the route planning workflow and prepare a governed improvement task."
+            required
+          ></textarea>
+          <div class="form-footer">
+            <span id="goal-count" aria-live="polite">0 / 2000</span>
+            <button class="primary-button" type="submit">
+              Preview governed task
+            </button>
+          </div>
+        </form>
+
+        <div id="goal-result" class="result-box" hidden aria-live="polite"></div>
+      </section>
+
+      <aside class="panel voice-panel" aria-labelledby="voice-title">
+        <div class="panel-heading">
+          <div>
+            <p class="section-code">02 / VOICE HOOK</p>
+            <h2 id="voice-title">Voice Console</h2>
+          </div>
+          <span class="boundary-badge muted">DISABLED</span>
+        </div>
+        <div class="orb-shell" aria-hidden="true">
+          <div class="voice-orb"><span></span></div>
+        </div>
+        <p id="voice-status" class="voice-status" role="status">
+          Provider not configured. No audio is being recorded or transmitted.
+        </p>
+        <button id="voice-button" class="secondary-button" type="button">
+          Check voice readiness
+        </button>
+        <p class="micro-copy">
+          Future transcripts remain editable and require your explicit submit.
+        </p>
+      </aside>
+
+      <section class="panel status-panel" aria-labelledby="status-title">
+        <div class="panel-heading">
+          <div>
+            <p class="section-code">03 / SYSTEM</p>
+            <h2 id="status-title">Local Readiness</h2>
+          </div>
+        </div>
+        <div class="metric-grid" id="system-metrics">
+          <div class="metric-card">
+            <span>Database</span>
+            <strong id="database-state">Checking</strong>
+          </div>
+          <div class="metric-card">
+            <span>Controller</span>
+            <strong id="controller-state">Checking</strong>
+          </div>
+          <div class="metric-card">
+            <span>Governance</span>
+            <strong id="governance-state">Fail closed</strong>
+          </div>
+          <div class="metric-card">
+            <span>Voice</span>
+            <strong id="voice-state">Disabled</strong>
+          </div>
+        </div>
+      </section>
+
+      <section class="panel data-panel" aria-labelledby="projects-title">
+        <div class="panel-heading">
+          <div>
+            <p class="section-code">04 / READ ONLY</p>
+            <h2 id="projects-title">Projects</h2>
+          </div>
+          <span class="boundary-badge muted">NO WRITES</span>
+        </div>
+        <div id="projects-list" class="record-list" aria-live="polite">
+          <p class="empty-state">Loading projects…</p>
+        </div>
+      </section>
+
+      <section class="panel data-panel knowledge-panel" aria-labelledby="knowledge-title">
+        <div class="panel-heading">
+          <div>
+            <p class="section-code">05 / READ ONLY</p>
+            <h2 id="knowledge-title">Knowledge</h2>
+          </div>
+          <span class="boundary-badge muted">NO WRITES</span>
+        </div>
+        <div id="knowledge-list" class="record-list" aria-live="polite">
+          <p class="empty-state">Loading Knowledge…</p>
+        </div>
+      </section>
+
+      <section class="panel boundary-panel" aria-labelledby="boundary-title">
+        <div>
+          <p class="section-code">AUTHORITY BOUNDARY</p>
+          <h2 id="boundary-title">What this browser cannot do directly</h2>
+        </div>
+        <ul>
+          <li>Database changes stay behind governed application services</li>
+          <li>AI workers launch through controller → agent_runner</li>
+          <li>Approval and publication remain controller-gated</li>
+          <li>Voice transcripts require explicit owner confirmation</li>
+        </ul>
+      </section>
+    </main>
+
+    <footer class="shell footer-row">
+      <span>Loopback: 127.0.0.1:8000</span>
+      <span>Streamlit remains available during transition</span>
+    </footer>
+  </body>
+</html>
