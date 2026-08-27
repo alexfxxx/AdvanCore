@@ -79,13 +79,14 @@ def test_transport_operations_starts_truthfully_empty(monkeypatch):
 
     text = fake_st.text()
     assert "Transport Operations" in text
-    assert "Setup|Fleet|Drivers|Customers|Routes|Trips|Assignments|Fuel|Finance" in text
+    assert "Setup|Dispatch|Fleet|Drivers|Customers|Routes|Trips|Assignments|Fuel|Finance" in text
     assert "No vehicles registered yet" in text
     assert "No routes registered yet" in text
     assert "No trips planned yet" in text
     assert "No trip assignments recorded yet" in text
     assert "No fuel entries recorded yet" in text
     assert "No financial entries recorded yet" in text
+    assert "No trips are recorded for the selected dispatch date" in text
     assert "does not generate sample business data" in text
     assert fake_st.dataframes == []
     assert fake_st.downloads[0][1]["data"] == b"registration_number,make_model\n"
@@ -190,6 +191,60 @@ def test_route_form_calls_route_service(monkeypatch):
 
     assert service.calls == [("r1", "Depot", "Terminal")]
     assert fake_st.rerun_calls == 1
+
+
+def test_dispatch_board_renders_recorded_daily_state(monkeypatch):
+    route = SimpleNamespace(id=1, route_code="R1", origin="North", destination="South")
+    trip = SimpleNamespace(
+        id=2,
+        trip_reference="T1",
+        route_id=1,
+        service_date=date(2026, 8, 27),
+        status="planned",
+    )
+    vehicle = SimpleNamespace(id=3, registration_number="BUS-1", status="active")
+    available_vehicle = SimpleNamespace(id=5, registration_number="BUS-2", status="active")
+    driver = SimpleNamespace(id=4, name="Driver One", status="active")
+    available_driver = SimpleNamespace(id=6, name="Driver Two", status="active")
+    assignment = SimpleNamespace(
+        trip_id=2,
+        vehicle_id=3,
+        driver_id=4,
+        status="assigned",
+    )
+
+    def listed(method, rows):
+        service = EmptyService()
+        setattr(service, method, lambda: rows)
+        return service
+
+    monkeypatch.setattr(operations, "_route_service", scope_for(listed("list_routes", [route])))
+    monkeypatch.setattr(operations, "_trip_service", scope_for(listed("list_trips", [trip])))
+    monkeypatch.setattr(
+        operations,
+        "_vehicle_service",
+        scope_for(listed("list_vehicles", [vehicle, available_vehicle])),
+    )
+    monkeypatch.setattr(
+        operations,
+        "_driver_service",
+        scope_for(listed("list_drivers", [driver, available_driver])),
+    )
+    monkeypatch.setattr(
+        operations,
+        "_assignment_service",
+        scope_for(listed("list_assignments", [assignment])),
+    )
+    fake_st = FakeStreamlit()
+    monkeypatch.setattr(operations, "st", fake_st)
+
+    operations._render_dispatch_board()
+
+    assert "1 trip(s): 1 assigned, 0 unassigned" in fake_st.text()
+    assert fake_st.dataframes[0][0]["Route"] == "R1: North → South"
+    assert fake_st.dataframes[0][0]["Vehicle"] == "BUS-1"
+    assert "Available active vehicles: BUS-2" in fake_st.text()
+    assert "Available active drivers: Driver Two" in fake_st.text()
 
 
 def test_trip_assignment_fuel_and_finance_forms_use_services(monkeypatch):

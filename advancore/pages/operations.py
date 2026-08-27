@@ -31,6 +31,7 @@ from advancore.services.driver_service import (
     DriverValidationError,
     DuplicateDriverReferenceError,
 )
+from advancore.services.dispatch_board_service import build_dispatch_board
 from advancore.services.financial_entry_service import (
     FINANCIAL_ENTRY_TYPES,
     FinancialEntryService,
@@ -358,7 +359,6 @@ def _render_vehicle_register() -> None:
         else:
             st.success("Vehicle added.")
             st.rerun()
-
     vehicles = _load(_vehicle_service, "list_vehicles", "Vehicle register could not be loaded.")
     if vehicles is None:
         return
@@ -399,6 +399,71 @@ def _render_vehicle_register() -> None:
         else:
             st.success("Vehicle status updated.")
             st.rerun()
+
+
+def _render_dispatch_board() -> None:
+    st.subheader("Daily dispatch board")
+    st.caption(
+        "Read-only recorded state. AdvanCore does not infer schedules, travel time, or availability."
+    )
+    service_date = st.date_input("Dispatch date")
+    trips = _load(_trip_service, "list_trips", "Trips could not be loaded for dispatch.")
+    assignments = _load(
+        _assignment_service,
+        "list_assignments",
+        "Assignments could not be loaded for dispatch.",
+    )
+    routes = _load(_route_service, "list_routes", "Routes could not be loaded for dispatch.")
+    vehicles = _load(
+        _vehicle_service,
+        "list_vehicles",
+        "Vehicles could not be loaded for dispatch.",
+    )
+    drivers = _load(_driver_service, "list_drivers", "Drivers could not be loaded for dispatch.")
+    if any(items is None for items in (trips, assignments, routes, vehicles, drivers)):
+        return
+    board = build_dispatch_board(
+        service_date,
+        trips=trips,
+        assignments=assignments,
+        routes=routes,
+        vehicles=vehicles,
+        drivers=drivers,
+    )
+    if not board.rows:
+        st.info("No trips are recorded for the selected dispatch date.")
+        return
+    st.write(
+        f"{len(board.rows):,} trip(s): {board.state_count('Assigned'):,} assigned, "
+        f"{board.state_count('Unassigned'):,} unassigned, "
+        f"{board.state_count('Released'):,} released, "
+        f"{board.conflict_count:,} with recorded resource conflicts."
+    )
+    st.dataframe(
+        [
+            {
+                "Trip": row.trip_reference,
+                "Trip status": row.trip_status.title(),
+                "Route": row.route_label,
+                "Dispatch state": row.dispatch_state,
+                "Vehicle": row.vehicle_label,
+                "Driver": row.driver_label,
+                "Recorded conflict": "; ".join(row.conflicts) if row.conflicts else "None",
+            }
+            for row in board.rows
+        ],
+        use_container_width=True,
+        hide_index=True,
+    )
+    st.write(
+        "Active and not used by an active assignment on this date: "
+        f"{len(board.available_vehicles):,} vehicle(s), "
+        f"{len(board.available_drivers):,} driver(s)."
+    )
+    vehicle_labels = ", ".join(item.label for item in board.available_vehicles)
+    driver_labels = ", ".join(item.label for item in board.available_drivers)
+    st.write(f"Available active vehicles: {vehicle_labels or 'None recorded.'}")
+    st.write(f"Available active drivers: {driver_labels or 'None recorded.'}")
 
 
 def _render_driver_register() -> None:
@@ -843,9 +908,10 @@ def _render_financial_entries() -> None:
 def render() -> None:
     st.header("Transport Operations")
     st.write("Build operational records from real information you enter. AdvanCore does not generate sample business data.")
-    tabs = st.tabs(["Setup", "Fleet", "Drivers", "Customers", "Routes", "Trips", "Assignments", "Fuel", "Finance"])
+    tabs = st.tabs(["Setup", "Dispatch", "Fleet", "Drivers", "Customers", "Routes", "Trips", "Assignments", "Fuel", "Finance"])
     renderers = (
         _render_setup,
+        _render_dispatch_board,
         _render_vehicle_register,
         _render_driver_register,
         _render_customer_register,
