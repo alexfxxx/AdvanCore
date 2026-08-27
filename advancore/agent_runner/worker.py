@@ -705,6 +705,10 @@ class KimiWorkerAdapter(WorkerAdapter):
             _governed_instruction(instruction, self.allowed_scope), working_dir
         )
         command[0] = resolved_executable
+        if self.executable != self.DEFAULT_EXECUTABLE:
+            return run_bounded_worker_process(
+                command, working_dir, self.timeout_seconds
+            )
         with tempfile.TemporaryDirectory(
             prefix="advancore-kimi-", dir="/tmp"
         ) as scratch_name:
@@ -835,6 +839,10 @@ class KimiSwarmWorkerAdapter(WorkerAdapter):
             _governed_instruction(instruction, self.allowed_scope), working_dir
         )
         command[0] = resolved_executable
+        if self.executable != self.DEFAULT_EXECUTABLE:
+            return run_bounded_worker_process(
+                command, working_dir, self.timeout_seconds
+            )
         with tempfile.TemporaryDirectory(
             prefix="advancore-kimi-", dir="/tmp"
         ) as scratch_name:

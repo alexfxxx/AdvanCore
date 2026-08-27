@@ -144,6 +144,33 @@ def test_all_production_adapters_use_shared_runner(tmp_path: Path) -> None:
     assert bounded.call_count == 3
 
 
+@pytest.mark.parametrize("adapter_type", [KimiWorkerAdapter, KimiSwarmWorkerAdapter])
+def test_custom_kimi_executable_uses_portable_shared_runner(
+    tmp_path: Path, adapter_type
+) -> None:
+    repo = _repo(tmp_path)
+    expected = WorkerResult(True)
+    adapter = adapter_type(executable=sys.executable, timeout_seconds=123)
+    with patch(
+        "advancore.agent_runner.worker._kimi_isolation_preflight",
+        side_effect=AssertionError("custom executable must not require macOS isolation"),
+    ), patch(
+        "advancore.agent_runner.worker._isolate_kimi_command",
+        side_effect=AssertionError("custom executable must not be sandbox-wrapped"),
+    ), patch(
+        "advancore.agent_runner.worker._kimi_environment",
+        side_effect=AssertionError("custom executable must not receive Kimi environment"),
+    ), patch(
+        "advancore.agent_runner.worker.run_bounded_worker_process",
+        return_value=expected,
+    ) as bounded:
+        assert adapter.run("instruction", repo) is expected
+    bounded.assert_called_once()
+    assert bounded.call_args.args[0][0] == sys.executable
+    assert bounded.call_args.args[2] == 123
+    assert len(bounded.call_args.args) == 3
+
+
 def test_orchestration_checkpoint_persists_timeout_policy(tmp_path: Path) -> None:
     repo = _repo(tmp_path)
     config = OrchestrationConfig(goal="bounded goal", worker_timeout_seconds=321)

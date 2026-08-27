@@ -96,8 +96,9 @@ def test_kimi_sandbox_and_environment_still_protect_credentials(tmp_path, monkey
     assert "DATABASE_URL" not in environment
 
 
-def test_kimi_blocks_without_os_isolation(tmp_path):
-    adapter = KimiWorkerAdapter()
+@pytest.mark.parametrize("adapter_type", [KimiWorkerAdapter, KimiSwarmWorkerAdapter])
+def test_kimi_blocks_without_os_isolation(tmp_path, adapter_type):
+    adapter = adapter_type()
     with patch(
         "advancore.agent_runner.worker.shutil.which", return_value="/usr/bin/kimi"
     ), patch(

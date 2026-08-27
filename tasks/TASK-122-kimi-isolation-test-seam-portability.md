@@ -1,6 +1,6 @@
 # TASK-122 — Kimi Isolation Test-Seam Portability Repair
 
-STATUS: READY
+STATUS: APPROVED
 
 ## Objective
 
@@ -49,12 +49,14 @@ None.
 
 ## Acceptance criteria
 
-- [ ] Registered production Kimi/Kimi-Swarm still requires the macOS sandbox
+- [x] Registered production Kimi/Kimi-Swarm still requires the macOS sandbox
       and minimal environment.
-- [ ] An explicit custom executable test seam reaches the shared bounded runner
+- [x] An explicit custom executable test seam reaches the shared bounded runner
       on Linux without requiring `/usr/bin/sandbox-exec`.
-- [ ] Missing production isolation remains an eligible, fail-closed result.
-- [ ] Focused tests, full tests and `git diff --check` pass.
+- [x] Missing production isolation remains an eligible, fail-closed result.
+- [ ] Focused tests, full tests and `git diff --check` pass. Focused tests and
+      `git diff --check` pass; the full suite is blocked during collection by
+      missing/incompatible host dependencies documented below.
 
 ## Owner decisions
 
@@ -63,4 +65,54 @@ None.
 
 ## Completion report
 
-Pending implementation.
+### Implemented
+
+- Production `kimi` resolution continues through the macOS isolation
+  preflight, sandbox wrapper and minimal Kimi environment.
+- Explicit non-production executable overrides for Kimi and Kimi-Swarm now
+  call the shared bounded runner directly with the configured timeout.
+- Added focused coverage for the portable custom-executable seam and for
+  fail-closed production isolation on both adapters.
+
+### Files changed
+
+- `advancore/agent_runner/worker.py`
+- `tests/test_worker_timeout.py`
+- `tests/test_worker_usage_guardrail.py`
+- `tasks/TASK-122-kimi-isolation-test-seam-portability.md`
+
+### Database changes
+
+None.
+
+### Tests executed and results
+
+- `pytest -q tests/test_worker_timeout.py tests/test_worker_usage_guardrail.py`:
+  23 passed.
+- `git diff --check`: passed.
+- `pytest -q`: blocked during collection with 31 pre-existing environment
+  errors. The host lacks `streamlit` and `python-dotenv`, does not provide a
+  usable Alembic installation, and has a SQLAlchemy version without
+  `sqlalchemy.orm.mapped_column`. No repository-managed virtual environment is
+  present, and dependency installation is outside this task's allowed scope.
+
+### Assumptions
+
+- ASSUMPTION: an adapter using the registered executable name `kimi`, including
+  an explicitly supplied identical value, is production and must remain
+  isolated; only a different explicit executable is the test seam.
+
+### Risks / unresolved issues
+
+- Full-suite verification remains unresolved until the approved project
+  dependencies are available in the execution environment.
+
+### Decisions required
+
+None for implementation. Owner/reviewer approval remains required by policy.
+
+### Recommended next step
+
+Run the full suite in the project CI or an approved environment with the
+requirements installed, then review the bounded diff. Do not commit until
+explicitly approved.
