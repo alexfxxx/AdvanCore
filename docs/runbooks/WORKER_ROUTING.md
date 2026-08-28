@@ -113,8 +113,9 @@ worktree. The workspace-trust directory is not generally writable; unrelated
 trust records, credentials, OAuth state, plugins, skills and updates remain
 protected, except that the Kimi CLI may refresh its own exact `oauth/kimi-code`
 token and matching non-secret lock file needed for its existing authenticated
-session. No other provider, GitHub, database, SSH or controller credential is
-added to the write allowlist.
+session, and synchronize only its matching `credentials/kimi-code.json` mirror.
+Other files in both directories remain outside the write allowlist. No other
+provider, GitHub, database, SSH or controller credential is added.
 The fixed three-worker route, no-repetition and maximum-attempt
 boundaries, standing and fallback authority consumption, database, production,
 deployment, protected-main, and Git-integrity safeguards remain unchanged.

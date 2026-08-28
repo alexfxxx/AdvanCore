@@ -24,6 +24,9 @@ the current worktree's trust record.
 - Permit the Kimi CLI to refresh only its own existing `oauth/kimi-code` token
   and use its matching non-secret lock file; no GitHub, database, Codex, Gemini,
   SSH or other credential is allowed.
+- Permit atomic synchronization of only Kimi's matching
+  `credentials/kimi-code.json` mirror while keeping every other credential path
+  outside the allowlist.
 - Keep credential, OAuth, plugin, skill, update, Git metadata, controller state,
   environment-secret and unrelated-home protections unchanged.
 - Add tests proving other workspace-trust records remain outside the allowlist.

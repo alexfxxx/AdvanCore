@@ -120,13 +120,18 @@ def test_kimi_sandbox_allows_only_current_workspace_bookkeeping(tmp_path):
     registry = owner_home / ".kimi-code" / "workspaces.json"
     kimi_oauth = owner_home / ".kimi-code" / "oauth" / "kimi-code"
     kimi_oauth_lock = owner_home / ".kimi-code" / "oauth" / "kimi-code.lock"
+    kimi_credentials = owner_home / ".kimi-code" / "credentials"
+    kimi_credential_file = kimi_credentials / "kimi-code.json"
     trust_root = owner_home / ".kimi-code" / "workspace-trust"
     assert f'(literal "{exact_trust}")' in profile
     assert f'(literal "{registry}")' in profile
     assert f'(literal "{kimi_oauth}")' in profile
     assert f'(literal "{kimi_oauth_lock}")' in profile
+    assert f'(literal "{kimi_credentials}")' in profile
+    assert f'(literal "{kimi_credential_file}")' in profile
     assert f'(subpath "{trust_root}")' not in profile
     assert f'(subpath "{owner_home / ".kimi-code" / "oauth"}")' not in profile
+    assert f'(subpath "{kimi_credentials}")' not in profile
     assert "workspaces\\.json\\.tmp\\." in profile
     assert workspace_id in profile
     assert "wd_unrelated_000000000000" not in profile
