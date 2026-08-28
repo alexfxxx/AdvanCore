@@ -141,6 +141,10 @@ timing and failure-stage evidence without turning the audit into a credential or
 business-data store. A failed or unrecognized version probe leaves the optional
 field empty and does not block an otherwise valid Kimi launch. The probe has a
 small output ceiling, suppresses stderr, and terminates its complete process
-group on timeout. Authentication, credential-mirror, executable and trust files
-are accepted only when every path component below the canonical Kimi home is
-non-symlinked; malformed or recursively nested trust JSON is ignored fail-closed.
+group on timeout, excess output, failure, or unexpected surviving descendant.
+Every sandboxed Kimi or Kimi-Swarm launch validates all existing components of
+every Kimi-home path exposed by its write allowlist, including proposal-only and
+PATH-resolved launches. Authentication, credential-mirror, executable and trust
+files are accepted only when every path component below the canonical Kimi home
+is non-symlinked; malformed or recursively nested trust JSON is ignored
+fail-closed.

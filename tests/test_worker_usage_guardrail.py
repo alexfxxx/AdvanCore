@@ -286,6 +286,29 @@ def test_kimi_version_probe_terminates_timed_out_process_group(tmp_path):
     terminate.assert_called_once()
 
 
+def test_kimi_version_probe_terminates_successful_background_descendant(tmp_path):
+    scratch = tmp_path / "scratch"
+    scratch.mkdir()
+    parent_code = (
+        "import subprocess,sys;"
+        "subprocess.Popen([sys.executable,'-c','import time;time.sleep(10)'],"
+        "stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL);"
+        "print('0.38.0')"
+    )
+    with patch(
+        "advancore.agent_runner.worker._isolate_kimi_command",
+        return_value=[sys.executable, "-c", parent_code],
+    ), patch(
+        "advancore.agent_runner.worker._terminate_process_group",
+        wraps=_terminate_process_group,
+    ) as terminate:
+        version = _probe_kimi_cli_version(
+            "/owner/.kimi-code/bin/kimi", tmp_path, scratch, {"HOME": "/owner"}
+        )
+    assert version is None
+    terminate.assert_called_once()
+
+
 @pytest.mark.parametrize("adapter_type", [KimiWorkerAdapter, KimiSwarmWorkerAdapter])
 def test_kimi_optional_version_probe_never_blocks_launch(tmp_path, adapter_type):
     owner_home, executable, repository = _create_prewarmed_kimi_home(tmp_path)
@@ -308,6 +331,34 @@ def test_kimi_optional_version_probe_never_blocks_launch(tmp_path, adapter_type)
     assert result is expected
     assert result.cli_version is None
     bounded.assert_called_once()
+
+
+@pytest.mark.parametrize("adapter_type", [KimiWorkerAdapter, KimiSwarmWorkerAdapter])
+def test_every_sandboxed_kimi_launch_rejects_symlinked_auth_parent(
+    tmp_path, adapter_type
+):
+    owner_home, _, repository = _create_prewarmed_kimi_home(tmp_path)
+    oauth_root = owner_home / ".kimi-code" / "oauth"
+    (oauth_root / "kimi-code").unlink()
+    oauth_root.rmdir()
+    redirected = tmp_path / "redirected-proposal-oauth"
+    redirected.mkdir()
+    (redirected / "kimi-code").write_text("prewarmed", encoding="utf-8")
+    oauth_root.symlink_to(redirected, target_is_directory=True)
+    adapter = adapter_type(implementation_worker=False)
+    with patch(
+        "advancore.agent_runner.worker.pwd.getpwuid",
+        return_value=SimpleNamespace(pw_dir=str(owner_home), pw_name="owner"),
+    ), patch(
+        "advancore.agent_runner.worker.shutil.which", return_value="/usr/bin/kimi"
+    ), patch(
+        "advancore.agent_runner.worker.run_bounded_worker_process"
+    ) as bounded:
+        result = adapter.run("instruction", repository)
+    assert result.success is False
+    assert result.terminal_reason == "launch_failed"
+    assert "path-safety" in result.message
+    bounded.assert_not_called()
 
 
 def test_kimi_environment_never_inherits_unsupported_swarm_concurrency(

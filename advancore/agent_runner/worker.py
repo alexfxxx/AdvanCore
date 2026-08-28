@@ -308,6 +308,72 @@ def _non_symlinked_path_within(path: Path, trusted_root: Path) -> bool:
     return True
 
 
+def _existing_path_components_non_symlinked(
+    path: Path, trusted_root: Path
+) -> bool:
+    """Reject symlinks in every existing component of a governed Kimi path."""
+    try:
+        root = trusted_root.absolute()
+        candidate = path.absolute()
+        relative = candidate.relative_to(root)
+    except ValueError:
+        return False
+    current = root
+    for part in (None, *relative.parts):
+        if part is not None:
+            current /= part
+        try:
+            details = current.lstat()
+        except FileNotFoundError:
+            return True
+        except OSError:
+            return False
+        if stat.S_ISLNK(details.st_mode):
+            return False
+    try:
+        candidate.resolve(strict=True).relative_to(root.resolve(strict=True))
+    except (OSError, ValueError):
+        return False
+    return True
+
+
+def _kimi_home_path_safety_preflight(
+    working_dir: Path, timeout_seconds: int
+) -> WorkerResult | None:
+    """Validate every existing Kimi-home component exposed by the sandbox."""
+    account_home = Path(pwd.getpwuid(os.getuid()).pw_dir).resolve()
+    kimi_home = account_home / ".kimi-code"
+    workspace_id = _kimi_workspace_id(working_dir)
+    governed_paths = (
+        kimi_home,
+        kimi_home / "cache",
+        kimi_home / "logs",
+        kimi_home / "sessions",
+        kimi_home / "user-history",
+        kimi_home / "session_index.jsonl",
+        kimi_home / "workspaces.json",
+        kimi_home / "workspace-trust",
+        kimi_home / "workspace-trust" / workspace_id,
+        kimi_home / "oauth",
+        kimi_home / "oauth" / "kimi-code",
+        kimi_home / "oauth" / "kimi-code.lock",
+        kimi_home / "credentials",
+        kimi_home / "credentials" / "kimi-code.json",
+    )
+    if all(
+        _existing_path_components_non_symlinked(path, kimi_home)
+        for path in governed_paths
+    ):
+        return None
+    return WorkerResult(
+        success=False,
+        message="Kimi home path-safety preflight failed",
+        terminal_reason="launch_failed",
+        timeout_seconds=timeout_seconds,
+        failure_classification=SPAWN_ERROR,
+    )
+
+
 def _safe_owner_file(
     path: Path,
     *,
@@ -476,13 +542,16 @@ def _probe_kimi_cli_version(
             _terminate_process_group(process)
             return None
     except (OSError, subprocess.SubprocessError):
-        if process is not None and process.poll() is None:
+        if process is not None and _process_group_exists(process.pid):
             _terminate_process_group(process)
         return None
     finally:
         selector.close()
         if process is not None and process.stdout is not None:
             process.stdout.close()
+    if process is not None and _process_group_exists(process.pid):
+        _terminate_process_group(process)
+        return None
     if returncode != 0:
         return None
     try:
@@ -1036,6 +1105,18 @@ class KimiWorkerAdapter(WorkerAdapter):
         executable_resolution = _kimi_executable_resolution(
             self.executable, resolved_executable
         )
+        path_blocked = (
+            _kimi_home_path_safety_preflight(working_dir, self.timeout_seconds)
+            if self.executable == self.DEFAULT_EXECUTABLE
+            else None
+        )
+        if path_blocked is not None:
+            return _annotate_worker_result(
+                path_blocked,
+                resolved_executable=resolved_executable,
+                executable_resolution=executable_resolution,
+                runtime_path_profile="kimi_minimal",
+            )
         runtime_blocked = (
             _kimi_runtime_preflight(
                 resolved_executable, working_dir, self.timeout_seconds
@@ -1221,6 +1302,18 @@ class KimiSwarmWorkerAdapter(WorkerAdapter):
         executable_resolution = _kimi_executable_resolution(
             self.executable, resolved_executable
         )
+        path_blocked = (
+            _kimi_home_path_safety_preflight(working_dir, self.timeout_seconds)
+            if self.executable == self.DEFAULT_EXECUTABLE
+            else None
+        )
+        if path_blocked is not None:
+            return _annotate_worker_result(
+                path_blocked,
+                resolved_executable=resolved_executable,
+                executable_resolution=executable_resolution,
+                runtime_path_profile="kimi_minimal",
+            )
         runtime_blocked = (
             _kimi_runtime_preflight(
                 resolved_executable, working_dir, self.timeout_seconds

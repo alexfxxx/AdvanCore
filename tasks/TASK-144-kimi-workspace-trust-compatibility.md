@@ -92,12 +92,16 @@ access to any other credential.
   executable or trust file that escapes the canonical Kimi home.
 - Ignore recursively malformed trust JSON fail-closed instead of allowing an
   unhandled preflight exception.
+- Terminate and reject a version probe that leaves any descendant running even
+  when the direct process prints a valid version and exits successfully.
+- Apply Kimi-home symlink validation to every sandboxed ordinary and Swarm
+  launch, including proposal-only and PATH-resolved invocation modes.
 
 ### Live verification
 
-- Post-repair ordinary Kimi smoke: exit 0 in 14.46 seconds; repository
+- Final ordinary Kimi smoke: exit 0 in 26.96 seconds; repository
   unchanged.
-- Post-repair Agent Swarm test: exit 0 in 86.12 seconds; repository unchanged.
+- Final Agent Swarm test: exit 0 in 46.81 seconds; repository unchanged.
 - Kimi session evidence contained a main agent plus `agent-0` and `agent-1`,
   confirming that two Swarm sub-agents genuinely ran.
 - Raw prompts, output, PATH and credentials were not added to durable telemetry.
@@ -108,8 +112,8 @@ None.
 
 ### Automated verification
 
-- Focused worker, telemetry and runner tests: 104 passed.
-- Full isolated suite: 1,275 passed, 2 skipped.
+- Focused worker, telemetry and runner tests: 107 passed.
+- Full isolated suite: 1,278 passed, 2 skipped.
 - `git diff --check`: passed.
 
 ### Known bounded warning
