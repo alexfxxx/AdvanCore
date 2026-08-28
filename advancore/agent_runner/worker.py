@@ -268,6 +268,10 @@ def _sandbox_literal(path: Path) -> str:
     return str(path).replace("\\", "\\\\").replace('"', '\\"')
 
 
+def _sandbox_regex(value: str) -> str:
+    return value.replace("\\", "\\\\").replace('"', '\\"')
+
+
 def _kimi_workspace_id(working_dir: Path) -> str:
     """Return Kimi Code v0.38's deterministic ID for one resolved workspace."""
     root = working_dir.resolve(strict=True)
@@ -401,9 +405,18 @@ def _isolate_kimi_command(
         kimi_home / "workspaces.json",
         kimi_home / "workspace-trust" / workspace_id,
     )
+    atomic_targets = (
+        kimi_home / "workspaces.json",
+        kimi_home / "workspace-trust" / workspace_id,
+    )
+    writable_regexes = tuple(
+        rf"^{re.escape(str(path))}\.tmp\.[0-9]+\.[A-Za-z0-9]+$"
+        for path in atomic_targets
+    )
     allow_filters = " ".join(
         [f'(subpath "{_sandbox_literal(path)}")' for path in writable_subpaths]
         + [f'(literal "{_sandbox_literal(path)}")' for path in writable_literals]
+        + [f'(regex #"{_sandbox_regex(value)}")' for value in writable_regexes]
     )
     protected_subpaths = (
         protected_state_root,
