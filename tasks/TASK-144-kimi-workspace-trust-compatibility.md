@@ -1,6 +1,6 @@
 # TASK-144 — Kimi Workspace-Trust Compatibility
 
-STATUS: APPROVED
+STATUS: READY
 
 ## Objective
 
