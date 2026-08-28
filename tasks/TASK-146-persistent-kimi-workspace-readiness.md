@@ -1,6 +1,6 @@
 # TASK-146 — Persistent Kimi Workspace Readiness Foundation
 
-STATUS: READY
+STATUS: COMPLETE
 
 ## Objective
 
@@ -27,7 +27,7 @@ worktrees and the TASK-145 reservation boundary.
 - Require a real, owner-controlled, non-symlink worktree belonging to the same
   Git common directory as the controller repository.
 - Require a clean index/worktree, a non-detached governed feature branch, and
-  unchanged remote identity before the worktree is eligible.
+  the shared common-directory remote configuration before it is eligible.
 - Report bounded reason codes suitable for controller telemetry; store no
   prompts, Git URLs, environment values, credentials or command output.
 - Document the owner-attended one-time worktree creation and Kimi trust step.
@@ -55,17 +55,50 @@ None.
 
 ## Acceptance criteria
 
-- [ ] An eligible clean persistent Kimi worktree is identified without
+- [x] An eligible clean persistent Kimi worktree is identified without
       mutation.
-- [ ] Symlinked, foreign-repository, dirty, detached, base-branch or ambiguous
+- [x] Symlinked, foreign-repository, dirty, detached, base-branch or ambiguous
       worktrees fail closed with bounded reason codes.
-- [ ] No raw Git URL, environment, prompt, output or credential is returned or
+- [x] No raw Git URL, environment, prompt, output or credential is returned or
       persisted.
-- [ ] No helper can create, reset, clean, switch, trust or launch anything.
-- [ ] Focused tests, full tests and `git diff --check` pass.
+- [x] No helper can create, reset, clean, switch, trust or launch anything.
+- [x] Focused tests, full tests and `git diff --check` pass.
 
 ## Owner decisions
 
 Approved on 28 August 2026 as the non-account groundwork for the persistent
 Kimi worker-worktree approach. The one-time Kimi trust/authentication and any
 CLI upgrade remain owner-attended.
+
+## Completion report
+
+### Implemented
+
+- Added a read-only persistent-worktree inspector with bounded readiness reason
+  codes and no path, remote, environment, prompt or output projection.
+- Required the same Git common directory, a clean `task-*` branch, a real
+  owner-controlled non-symlink directory and successful bounded local probes.
+- Added an operations runbook that keeps creation, cleanup, branch switching,
+  Kimi trust, authentication, upgrades and worker launch outside this service.
+
+### Worker routing evidence
+
+- Codex implemented this controller-only prerequisite because a trusted
+  persistent Kimi worktree does not exist yet; creating and trusting that
+  worktree remains the later owner-attended step this task prepares.
+- No provider login, credential access, upgrade or worker launch was attempted.
+
+### Database changes
+
+None.
+
+### Verification
+
+- Focused tests: 5 passed.
+- Full isolated suite: 1,314 passed, 2 skipped.
+- `git diff --check`: passed.
+
+### Decisions required
+
+None for the readiness foundation. Actual worktree creation and Kimi trust are
+deliberately deferred to an owner-attended session.
