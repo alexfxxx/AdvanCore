@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+from contextlib import contextmanager
 from dataclasses import asdict, dataclass
 from datetime import datetime, timedelta, timezone
+import fcntl
 import json
 import os
 from pathlib import Path
@@ -15,6 +17,27 @@ import tempfile
 _WORKERS = frozenset({"kimi", "kimi-swarm", "gemini", "codex"})
 _TASK_ID = re.compile(r"^TASK-[0-9]{3}$")
 _SAFE_VALUE = re.compile(r"^[A-Za-z0-9_.-]{1,80}$")
+_TERMINAL_REASONS = frozenset(
+    {
+        "authority_blocked",
+        "cancelled",
+        "completed",
+        "credential_access_required",
+        "launch_failed",
+        "quota_or_capacity",
+        "runtime_error",
+        "timeout",
+    }
+)
+_FAILURE_CLASSIFICATIONS = frozenset(
+    {"EXECUTABLE_NOT_FOUND", "RUNTIME_ERROR", "SPAWN_ERROR", "UNAVAILABLE"}
+)
+_EXECUTABLE_RESOLUTIONS = frozenset(
+    {"configured_override", "owner_home_fallback", "system_path", "unavailable"}
+)
+_RUNTIME_PATH_PROFILES = frozenset(
+    {"codex_minimal", "controller_default", "gemini_minimal", "kimi_minimal"}
+)
 _MAX_BYTES = 512 * 1024
 _MAX_RECORDS = 500
 _RETENTION = timedelta(days=7)
@@ -88,13 +111,18 @@ class WorkerOperationsService:
             raise WorkerOperationsError("worker event identity is invalid")
         if not isinstance(event.success, bool):
             raise WorkerOperationsError("worker event success is invalid")
-        for value in (
-            event.terminal_reason,
-            event.failure_classification,
-            event.executable_resolution,
-            event.runtime_path_profile,
-        ):
-            if value is not None and not _SAFE_VALUE.fullmatch(value):
+        classified_values = (
+            (event.terminal_reason, _TERMINAL_REASONS),
+            (event.failure_classification, _FAILURE_CLASSIFICATIONS),
+            (event.executable_resolution, _EXECUTABLE_RESOLUTIONS),
+            (event.runtime_path_profile, _RUNTIME_PATH_PROFILES),
+        )
+        for value, allowed in classified_values:
+            if value is not None and (
+                not isinstance(value, str)
+                or not _SAFE_VALUE.fullmatch(value)
+                or value not in allowed
+            ):
                 raise WorkerOperationsError("worker event metadata is invalid")
         if event.returncode is not None and (
             isinstance(event.returncode, bool)
@@ -174,7 +202,13 @@ class WorkerOperationsService:
                     runtime_path_profile=raw.get("runtime_path_profile"),
                 )
                 events.append(self._validate(event, now))
-            except (KeyError, TypeError, ValueError, WorkerOperationsError):
+            except (
+                KeyError,
+                RecursionError,
+                TypeError,
+                ValueError,
+                WorkerOperationsError,
+            ):
                 continue
         events.sort(key=lambda item: item.occurred_at)
         return events[-_MAX_RECORDS:]
@@ -183,34 +217,69 @@ class WorkerOperationsService:
         current = _utc(now or datetime.now(timezone.utc))
         return self._load(current)
 
+    @contextmanager
+    def _exclusive_lock(self):
+        """Serialize the complete load/compact/replace transaction."""
+        lock_path = self.path.with_name(self.path.name + ".lock")
+        descriptor: int | None = None
+        try:
+            self.path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+            os.chmod(self.path.parent, 0o700)
+            if _has_symlink_component(lock_path):
+                raise WorkerOperationsError("worker timeline lock path is unsafe")
+            flags = os.O_CREAT | os.O_RDWR | getattr(os, "O_NOFOLLOW", 0)
+            descriptor = os.open(lock_path, flags, 0o600)
+            details = os.fstat(descriptor)
+            if (
+                not stat.S_ISREG(details.st_mode)
+                or details.st_uid != os.getuid()
+                or stat.S_IMODE(details.st_mode) & 0o077
+                or details.st_nlink != 1
+            ):
+                raise WorkerOperationsError("worker timeline lock file is unsafe")
+            fcntl.flock(descriptor, fcntl.LOCK_EX)
+            yield
+        except OSError as exc:
+            raise WorkerOperationsError("worker timeline lock failed") from exc
+        finally:
+            if descriptor is not None:
+                try:
+                    fcntl.flock(descriptor, fcntl.LOCK_UN)
+                except OSError:
+                    pass
+                os.close(descriptor)
+
     def record(
         self, event: WorkerOperationEvent, *, now: datetime | None = None
     ) -> WorkerOperationEvent:
         current = _utc(now or datetime.now(timezone.utc))
         validated = self._validate(event, current)
-        events = self._load(current)
-        events.append(validated)
-        events = events[-_MAX_RECORDS:]
-        temporary: Path | None = None
-        try:
-            self.path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
-            os.chmod(self.path.parent, 0o700)
-            with tempfile.NamedTemporaryFile(
-                "w", encoding="utf-8", dir=self.path.parent, delete=False
-            ) as handle:
-                temporary = Path(handle.name)
-                os.chmod(temporary, 0o600)
-                for item in events:
-                    handle.write(json.dumps(self._payload(item), sort_keys=True) + "\n")
-                handle.flush()
-                os.fsync(handle.fileno())
-            os.replace(temporary, self.path)
-            os.chmod(self.path, 0o600)
-        except OSError as exc:
+        with self._exclusive_lock():
+            events = self._load(current)
+            events.append(validated)
+            events = events[-_MAX_RECORDS:]
+            temporary: Path | None = None
             try:
-                if temporary is not None:
-                    temporary.unlink(missing_ok=True)
-            except OSError:
-                pass
-            raise WorkerOperationsError("worker timeline cannot be written") from exc
+                with tempfile.NamedTemporaryFile(
+                    "w", encoding="utf-8", dir=self.path.parent, delete=False
+                ) as handle:
+                    temporary = Path(handle.name)
+                    os.chmod(temporary, 0o600)
+                    for item in events:
+                        handle.write(
+                            json.dumps(self._payload(item), sort_keys=True) + "\n"
+                        )
+                    handle.flush()
+                    os.fsync(handle.fileno())
+                os.replace(temporary, self.path)
+                os.chmod(self.path, 0o600)
+            except OSError as exc:
+                try:
+                    if temporary is not None:
+                        temporary.unlink(missing_ok=True)
+                except OSError:
+                    pass
+                raise WorkerOperationsError(
+                    "worker timeline cannot be written"
+                ) from exc
         return validated

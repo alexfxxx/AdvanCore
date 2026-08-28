@@ -73,6 +73,10 @@ implementation worker; Codex remains controller and final fallback.
   commands, output, environment contents or executable paths.
 - Made timeline-write failure visible without changing the primary governed
   runner result.
+- Repaired independent-review findings by serializing the complete
+  load/compact/replace transaction with an owner-only advisory lock.
+- Replaced arbitrary safe-looking metadata with closed classification sets and
+  discard recursively malformed JSON without raising from timeline reads.
 
 ### Worker routing evidence
 
@@ -87,8 +91,8 @@ None.
 
 ### Verification
 
-- Focused tests: 67 passed.
-- Full isolated suite: 1,270 passed, 2 skipped.
+- Focused tests: 79 passed.
+- Full isolated suite: 1,273 passed, 2 skipped.
 - `git diff --check`: passed.
 
 ### Decisions required

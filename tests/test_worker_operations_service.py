@@ -1,8 +1,12 @@
 """Tests for the bounded worker operations timeline."""
 
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
 import json
 from pathlib import Path
+import threading
+import time
+from unittest.mock import patch
 
 import pytest
 
@@ -77,6 +81,13 @@ def test_compacts_old_malformed_and_future_records(tmp_path):
         _event("TASK-139", "shell"),
         WorkerOperationEvent(NOW, "TASK-139", "kimi", True, elapsed_seconds=-1),
         WorkerOperationEvent(NOW, "TASK-139", "kimi", True, terminal_reason="bad value"),
+        WorkerOperationEvent(
+            NOW,
+            "TASK-139",
+            "kimi",
+            True,
+            terminal_reason="github_pat_credential_shaped_metadata",
+        ),
         WorkerOperationEvent(NOW + timedelta(hours=1), "TASK-139", "kimi", True),
     ],
 )
@@ -103,3 +114,57 @@ def test_rejects_in_workspace_symlink_oversized_and_open_permissions(tmp_path):
     path.chmod(0o644)
     with pytest.raises(WorkerOperationsError):
         service.list_events(now=NOW)
+
+
+def test_recursively_malformed_json_is_discarded_fail_closed(tmp_path):
+    service, path = _service(tmp_path)
+    path.parent.mkdir(mode=0o700)
+    path.write_text("{}\n", encoding="utf-8")
+    path.chmod(0o600)
+    with patch(
+        "advancore.services.worker_operations_service.json.loads",
+        side_effect=RecursionError,
+    ):
+        assert service.list_events(now=NOW) == []
+
+
+def test_concurrent_record_transactions_do_not_overwrite_each_other(tmp_path):
+    service_one, path = _service(tmp_path)
+    repo = service_one.repo_root
+    service_two = WorkerOperationsService(repo, path)
+    original_load = WorkerOperationsService._load
+    active = 0
+    maximum_active = 0
+    counter_lock = threading.Lock()
+    start = threading.Barrier(2)
+
+    def slow_load(service, now):
+        nonlocal active, maximum_active
+        with counter_lock:
+            active += 1
+            maximum_active = max(maximum_active, active)
+        time.sleep(0.05)
+        try:
+            return original_load(service, now)
+        finally:
+            with counter_lock:
+                active -= 1
+
+    def record(service, task_id):
+        start.wait()
+        service.record(_event(task_id=task_id), now=NOW)
+
+    with patch.object(WorkerOperationsService, "_load", slow_load):
+        with ThreadPoolExecutor(max_workers=2) as executor:
+            futures = [
+                executor.submit(record, service_one, "TASK-139"),
+                executor.submit(record, service_two, "TASK-140"),
+            ]
+            for future in futures:
+                future.result()
+
+    assert maximum_active == 1
+    assert {event.task_id for event in service_one.list_events(now=NOW)} == {
+        "TASK-139",
+        "TASK-140",
+    }

@@ -17,6 +17,16 @@ Standing authority is consumed at actual launch. Fallback consumes a separate
 approved-fallback action. Neither route receives new credentials or approval,
 merge, `main`, deployment, business or compliance authority.
 
+Each completed implementation-worker attempt may project one controller-owned
+timeline event outside the repository. The load/retention/atomic-replace cycle
+is serialized with an owner-only lock so concurrent completions cannot overwrite
+one another. Stored metadata is restricted to registered workers and closed
+sets of known terminal, failure, executable-resolution and runtime-path
+classifications; arbitrary or credential-shaped strings are rejected. Malformed,
+oversized, future-dated and recursively nested JSON records are discarded
+fail-closed. Prompts, commands, paths, output and environment values are never
+stored.
+
 The registered Kimi and Kimi-Swarm adapters first use normal executable PATH
 discovery. If PATH does not contain `kimi`, they may launch only the fixed
 owner-home `.kimi-code/bin/kimi` path, and only when it is a non-symlink regular
