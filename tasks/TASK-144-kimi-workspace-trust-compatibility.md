@@ -1,6 +1,6 @@
 # TASK-144 — Kimi Workspace-Trust Compatibility
 
-STATUS: READY
+STATUS: COMPLETE
 
 ## Objective
 
@@ -56,13 +56,13 @@ None.
 
 ## Acceptance criteria
 
-- [ ] An isolated Kimi smoke test starts and exits successfully without changing
+- [x] An isolated Kimi smoke test starts and exits successfully without changing
       repository files.
-- [ ] Kimi-Swarm capability is probed only after ordinary Kimi succeeds.
-- [ ] Only the current worktree's trust record and required non-secret registry
+- [x] Kimi-Swarm capability is probed only after ordinary Kimi succeeds.
+- [x] Only the current worktree's trust record and required non-secret registry
       are writable; credentials and unrelated trust records remain protected.
-- [ ] Existing worker order, governance, scope and publication gates remain.
-- [ ] Focused tests, full tests and `git diff --check` pass.
+- [x] Existing worker order, governance, scope and publication gates remain.
+- [x] Focused tests, full tests and `git diff --check` pass.
 
 ## Owner decisions
 
@@ -70,3 +70,47 @@ The owner explicitly approved testing and repairing Kimi usage on 28 August
 2026, with the goal of using Kimi Agent Swarm. Kimi may refresh only its own
 existing OAuth token; this approval does not grant Kimi controller authority or
 access to any other credential.
+
+## Completion report
+
+### Implemented
+
+- Restored Kimi v0.38 startup in separate governed Git worktrees with exact
+  workspace registry/trust bookkeeping and atomic temporary-file patterns.
+- Permitted only Kimi's own OAuth token, matching lock and credential mirror to
+  refresh; other credentials, environment secrets and controller variables are
+  neither inherited nor added to the write allowlist.
+- Added fail-closed preflight checks for the fixed owner-home executable,
+  pre-warmed authentication and existing current/ancestor workspace trust.
+- Added isolated version telemetry reporting `Kimi v0.38.0`.
+- Proved the unsupported `KIMI_CODE_AGENT_SWARM_MAX_CONCURRENCY` variable is not
+  inherited on v0.38.0.
+
+### Live verification
+
+- Final ordinary Kimi smoke: exit 0 in 9.36 seconds; repository unchanged.
+- Final Agent Swarm test: exit 0 in 84.70 seconds; repository unchanged.
+- Kimi session evidence contained a main agent plus `agent-0` and `agent-1`,
+  confirming that two Swarm sub-agents genuinely ran.
+- Raw prompts, output, PATH and credentials were not added to durable telemetry.
+
+### Database changes
+
+None.
+
+### Automated verification
+
+- Focused worker, telemetry and runner tests: 89 passed.
+- Full isolated suite: 1,269 passed, 2 skipped.
+- `git diff --check`: passed.
+
+### Known bounded warning
+
+Kimi's optional query-store mirror attempts a hard-link operation inside its
+cache. The sandbox continues to block all hard links because allowing them could
+bypass protected-file read boundaries. Kimi and Agent Swarm both completed
+successfully despite this nonfatal cache warning.
+
+### Decisions required
+
+None for local completion. Independent review and publication remain required.
