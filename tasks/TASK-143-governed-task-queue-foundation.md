@@ -1,6 +1,6 @@
 # TASK-143 — Governed Task Queue Foundation
 
-STATUS: APPROVED
+STATUS: READY
 
 ## Objective
 
