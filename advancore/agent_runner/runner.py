@@ -37,6 +37,11 @@ from advancore.agent_runner.worker import (
     WorkerResult,
     build_worker_instruction,
 )
+from advancore.services.worker_operations_service import (
+    WorkerOperationEvent,
+    WorkerOperationsError,
+    WorkerOperationsService,
+)
 
 
 class RunnerStatus(str, Enum):
@@ -336,6 +341,34 @@ def _write_audit(result: RunnerResult, mode: str) -> None:
         result.audit_write_ok = False
         result.audit_write_error = str(exc)
         result.messages.append(f"WARNING: {exc}")
+
+    worker_result = result.worker_result
+    if (
+        mode == "execute"
+        and worker_result is not None
+        and result.task is not None
+        and result.worker_type not in {None, "dry-run"}
+    ):
+        try:
+            WorkerOperationsService(git_info.repo_root).record(
+                WorkerOperationEvent(
+                    occurred_at=datetime.now(timezone.utc),
+                    task_id=result.task.task_id,
+                    worker=result.worker_type,
+                    success=worker_result.success,
+                    started_at=worker_result.started_at,
+                    finished_at=worker_result.finished_at,
+                    elapsed_seconds=worker_result.elapsed_seconds,
+                    returncode=worker_result.returncode,
+                    terminal_reason=worker_result.terminal_reason,
+                    failure_classification=worker_result.failure_classification,
+                    executable_resolution=worker_result.executable_resolution,
+                    runtime_path_profile=worker_result.runtime_path_profile,
+                )
+            )
+            result.messages.append("Worker operations timeline updated")
+        except WorkerOperationsError as exc:
+            result.messages.append(f"WARNING: worker timeline not updated: {exc}")
 
 
 def plan(
