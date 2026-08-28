@@ -21,9 +21,12 @@ Each completed implementation-worker attempt may project one controller-owned
 timeline event outside the repository. The load/retention/atomic-replace cycle
 is serialized with an owner-only lock so concurrent completions cannot overwrite
 one another. The controller validates the state path before changing permissions,
-opens its owner directory without following the final symlink, and uses
+opens every owner-directory component without following symlinks, and uses
 descriptor-based ownership checks and permission changes before creating the
-lock. Stored metadata is restricted to registered workers and closed
+lock. Timeline reads, temporary creation, replacement, cleanup and directory
+sync all remain relative to that same verified descriptor, so an ancestor swap
+cannot redirect state into another directory. Stored metadata is restricted to
+registered workers and closed
 sets of known terminal, failure, executable-resolution and runtime-path
 classifications; arbitrary or credential-shaped strings are rejected. Malformed,
 oversized, future-dated and recursively nested JSON records are discarded

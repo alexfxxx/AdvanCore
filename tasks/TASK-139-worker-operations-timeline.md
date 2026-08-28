@@ -79,6 +79,9 @@ implementation worker; Codex remains controller and final fallback.
   discard recursively malformed JSON without raising from timeline reads.
 - Validate and permission the controller directory through a no-follow,
   owner-verified descriptor before creating the timeline lock.
+- Bind the complete read, temporary-write, replace, cleanup and directory-sync
+  transaction to that verified descriptor so an ancestor swap cannot redirect
+  state.
 - Reject future or logically impossible worker start/finish timestamps.
 
 ### Worker routing evidence
@@ -94,8 +97,8 @@ None.
 
 ### Verification
 
-- Focused tests: 82 passed.
-- Full isolated suite: 1,276 passed, 2 skipped.
+- Focused tests: 83 passed.
+- Full isolated suite: 1,277 passed, 2 skipped.
 - `git diff --check`: passed.
 
 ### Decisions required

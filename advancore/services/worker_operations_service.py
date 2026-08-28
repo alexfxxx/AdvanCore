@@ -10,8 +10,8 @@ import json
 import os
 from pathlib import Path
 import re
+import secrets
 import stat
-import tempfile
 
 
 _WORKERS = frozenset({"kimi", "kimi-swarm", "gemini", "codex"})
@@ -87,6 +87,43 @@ def _has_symlink_component(path: Path) -> bool:
         if stat.S_ISLNK(details.st_mode):
             return True
     return False
+
+
+def _open_verified_owner_directory(path: Path, *, create: bool) -> int:
+    """Open *path* component-by-component without following any symlink."""
+    absolute = path.absolute()
+    directory_flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0)
+    directory_flags |= getattr(os, "O_NOFOLLOW", 0)
+    descriptor = os.open(absolute.anchor, directory_flags)
+    try:
+        for part in absolute.parts[1:]:
+            try:
+                child = os.open(part, directory_flags, dir_fd=descriptor)
+            except FileNotFoundError:
+                if not create:
+                    raise
+                try:
+                    os.mkdir(part, 0o700, dir_fd=descriptor)
+                except FileExistsError:
+                    pass
+                child = os.open(part, directory_flags, dir_fd=descriptor)
+            os.close(descriptor)
+            descriptor = child
+        details = os.fstat(descriptor)
+        if (
+            not stat.S_ISDIR(details.st_mode)
+            or details.st_uid != os.getuid()
+            or (not create and stat.S_IMODE(details.st_mode) & 0o077)
+        ):
+            raise WorkerOperationsError("worker timeline parent directory is unsafe")
+        if create:
+            os.fchmod(descriptor, 0o700)
+        result = descriptor
+        descriptor = -1
+        return result
+    finally:
+        if descriptor >= 0:
+            os.close(descriptor)
 
 
 class WorkerOperationsService:
@@ -174,11 +211,25 @@ class WorkerOperationsService:
             payload[name] = value.isoformat() if isinstance(value, datetime) else None
         return payload
 
-    def _load(self, now: datetime) -> list[WorkerOperationEvent]:
-        if not self.path.exists():
-            return []
+    def _load(
+        self, now: datetime, *, parent_descriptor: int | None = None
+    ) -> list[WorkerOperationEvent]:
+        descriptor: int | None = None
         try:
-            details = self.path.lstat()
+            if parent_descriptor is None:
+                if not self.path.exists():
+                    return []
+                descriptor = os.open(
+                    self.path,
+                    os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0),
+                )
+            else:
+                descriptor = os.open(
+                    self.path.name,
+                    os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0),
+                    dir_fd=parent_descriptor,
+                )
+            details = os.fstat(descriptor)
             if (
                 not stat.S_ISREG(details.st_mode)
                 or details.st_uid != os.getuid()
@@ -187,9 +238,16 @@ class WorkerOperationsService:
                 or details.st_size > _MAX_BYTES
             ):
                 raise WorkerOperationsError("worker timeline file is unsafe")
-            lines = self.path.read_text(encoding="utf-8").splitlines()
+            with os.fdopen(descriptor, "r", encoding="utf-8") as handle:
+                descriptor = None
+                lines = handle.read().splitlines()
+        except FileNotFoundError:
+            return []
         except (OSError, UnicodeError) as exc:
             raise WorkerOperationsError("worker timeline cannot be read") from exc
+        finally:
+            if descriptor is not None:
+                os.close(descriptor)
         events: list[WorkerOperationEvent] = []
         for line in lines[-_MAX_RECORDS * 2 :]:
             try:
@@ -226,7 +284,18 @@ class WorkerOperationsService:
 
     def list_events(self, *, now: datetime | None = None) -> list[WorkerOperationEvent]:
         current = _utc(now or datetime.now(timezone.utc))
-        return self._load(current)
+        try:
+            parent_descriptor = _open_verified_owner_directory(
+                self.path.parent, create=False
+            )
+        except FileNotFoundError:
+            return []
+        except OSError as exc:
+            raise WorkerOperationsError("worker timeline path is unsafe") from exc
+        try:
+            return self._load(current, parent_descriptor=parent_descriptor)
+        finally:
+            os.close(parent_descriptor)
 
     @contextmanager
     def _exclusive_lock(self):
@@ -235,21 +304,9 @@ class WorkerOperationsService:
         descriptor: int | None = None
         parent_descriptor: int | None = None
         try:
-            self.path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
-            if _has_symlink_component(lock_path):
-                raise WorkerOperationsError("worker timeline lock path is unsafe")
-            directory_flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0)
-            directory_flags |= getattr(os, "O_NOFOLLOW", 0)
-            parent_descriptor = os.open(self.path.parent, directory_flags)
-            parent_details = os.fstat(parent_descriptor)
-            if (
-                not stat.S_ISDIR(parent_details.st_mode)
-                or parent_details.st_uid != os.getuid()
-            ):
-                raise WorkerOperationsError(
-                    "worker timeline parent directory is unsafe"
-                )
-            os.fchmod(parent_descriptor, 0o700)
+            parent_descriptor = _open_verified_owner_directory(
+                self.path.parent, create=True
+            )
             flags = os.O_CREAT | os.O_RDWR | getattr(os, "O_NOFOLLOW", 0)
             for attempt in range(3):
                 try:
@@ -271,7 +328,7 @@ class WorkerOperationsService:
             ):
                 raise WorkerOperationsError("worker timeline lock file is unsafe")
             fcntl.flock(descriptor, fcntl.LOCK_EX)
-            yield
+            yield parent_descriptor
         except OSError as exc:
             raise WorkerOperationsError("worker timeline lock failed") from exc
         finally:
@@ -289,32 +346,54 @@ class WorkerOperationsService:
     ) -> WorkerOperationEvent:
         current = _utc(now or datetime.now(timezone.utc))
         validated = self._validate(event, current)
-        with self._exclusive_lock():
-            events = self._load(current)
+        with self._exclusive_lock() as parent_descriptor:
+            events = self._load(current, parent_descriptor=parent_descriptor)
             events.append(validated)
             events = events[-_MAX_RECORDS:]
-            temporary: Path | None = None
+            temporary_name = (
+                f".{self.path.name}.{os.getpid()}.{secrets.token_hex(8)}.tmp"
+            )
+            temporary_descriptor: int | None = None
             try:
-                with tempfile.NamedTemporaryFile(
-                    "w", encoding="utf-8", dir=self.path.parent, delete=False
+                temporary_flags = (
+                    os.O_CREAT
+                    | os.O_EXCL
+                    | os.O_WRONLY
+                    | getattr(os, "O_NOFOLLOW", 0)
+                )
+                temporary_descriptor = os.open(
+                    temporary_name,
+                    temporary_flags,
+                    0o600,
+                    dir_fd=parent_descriptor,
+                )
+                os.fchmod(temporary_descriptor, 0o600)
+                with os.fdopen(
+                    temporary_descriptor, "w", encoding="utf-8"
                 ) as handle:
-                    temporary = Path(handle.name)
-                    os.chmod(temporary, 0o600)
+                    temporary_descriptor = None
                     for item in events:
                         handle.write(
                             json.dumps(self._payload(item), sort_keys=True) + "\n"
                         )
                     handle.flush()
                     os.fsync(handle.fileno())
-                os.replace(temporary, self.path)
-                os.chmod(self.path, 0o600)
+                os.replace(
+                    temporary_name,
+                    self.path.name,
+                    src_dir_fd=parent_descriptor,
+                    dst_dir_fd=parent_descriptor,
+                )
+                os.fsync(parent_descriptor)
             except OSError as exc:
                 try:
-                    if temporary is not None:
-                        temporary.unlink(missing_ok=True)
+                    os.unlink(temporary_name, dir_fd=parent_descriptor)
                 except OSError:
                     pass
                 raise WorkerOperationsError(
                     "worker timeline cannot be written"
                 ) from exc
+            finally:
+                if temporary_descriptor is not None:
+                    os.close(temporary_descriptor)
         return validated

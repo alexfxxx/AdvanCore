@@ -151,7 +151,7 @@ def test_parent_symlink_swap_is_rejected_before_chmod(tmp_path):
     original_mode = redirected.stat().st_mode & 0o777
     path.parent.symlink_to(redirected, target_is_directory=True)
 
-    with pytest.raises(WorkerOperationsError, match="lock path is unsafe"):
+    with pytest.raises(WorkerOperationsError, match="lock"):
         service.record(_event(), now=NOW)
 
     assert redirected.stat().st_mode & 0o777 == original_mode
@@ -168,14 +168,16 @@ def test_concurrent_record_transactions_do_not_overwrite_each_other(tmp_path):
     counter_lock = threading.Lock()
     start = threading.Barrier(2)
 
-    def slow_load(service, now):
+    def slow_load(service, now, *, parent_descriptor=None):
         nonlocal active, maximum_active
         with counter_lock:
             active += 1
             maximum_active = max(maximum_active, active)
         time.sleep(0.05)
         try:
-            return original_load(service, now)
+            return original_load(
+                service, now, parent_descriptor=parent_descriptor
+            )
         finally:
             with counter_lock:
                 active -= 1
@@ -198,3 +200,34 @@ def test_concurrent_record_transactions_do_not_overwrite_each_other(tmp_path):
         "TASK-139",
         "TASK-140",
     }
+
+
+def test_state_transaction_stays_bound_to_verified_parent_descriptor(tmp_path):
+    service, path = _service(tmp_path)
+    service.record(_event("TASK-139"), now=NOW)
+    original_parent = path.parent
+    moved_parent = tmp_path / "verified-parent-moved"
+    unrelated = tmp_path / "unrelated-owner-directory"
+    unrelated.mkdir(mode=0o700)
+    original_load = WorkerOperationsService._load
+    swapped = False
+
+    def swap_ancestor(service_instance, now, *, parent_descriptor=None):
+        nonlocal swapped
+        if not swapped:
+            original_parent.rename(moved_parent)
+            original_parent.symlink_to(unrelated, target_is_directory=True)
+            swapped = True
+        return original_load(
+            service_instance, now, parent_descriptor=parent_descriptor
+        )
+
+    with patch.object(WorkerOperationsService, "_load", swap_ancestor):
+        service.record(_event("TASK-140"), now=NOW)
+
+    assert not list(unrelated.iterdir())
+    records = [
+        json.loads(line)
+        for line in (moved_parent / path.name).read_text(encoding="utf-8").splitlines()
+    ]
+    assert {record["task_id"] for record in records} == {"TASK-139", "TASK-140"}
