@@ -7,6 +7,7 @@ from pathlib import Path
 
 import pytest
 
+from advancore.agent_runner import task_queue as task_queue_module
 from advancore.agent_runner.task_queue import (
     GovernedTaskQueue,
     TaskQueueError,
@@ -240,11 +241,16 @@ def test_multiple_persisted_running_claims_fail_closed(tmp_path):
         queue.list_records(now=_time(3))
 
 
-def test_deeply_nested_json_fails_as_queue_error(tmp_path):
+def test_deeply_nested_json_fails_as_queue_error(tmp_path, monkeypatch):
     queue, state_path = _queue(tmp_path)
     state_path.parent.mkdir(mode=0o700)
-    state_path.write_text("[" * 1200 + "]" * 1200, encoding="utf-8")
+    state_path.write_text("[]", encoding="utf-8")
     state_path.chmod(0o600)
+
+    def recursive_decode(_handle):
+        raise RecursionError("nested JSON exceeds decoder recursion")
+
+    monkeypatch.setattr(task_queue_module.json, "load", recursive_decode)
 
     with pytest.raises(TaskQueueError, match="cannot be read"):
         queue.list_records(now=_time(3))
