@@ -16,6 +16,15 @@ authority boundary.
 
 ## In scope
 
+- Create `advancore/agent_runner/task_queue.py` containing a bounded
+  `TaskQueueStatus` string enum, immutable JSON-safe queue record type and a
+  `GovernedTaskQueue` service. Implement explicit `enqueue`, `claim_next`,
+  `complete` and `block` methods; do not merely propose the design.
+- Create `tests/test_task_queue.py` with deterministic coverage for FIFO order,
+  duplicate rejection, invalid identifiers/paths/workers/transitions, stale
+  claims, corrupt or oversized state, permissions and atomic replacement.
+- Create `docs/runbooks/GOVERNED_TASK_QUEUE.md` explaining that the queue cannot
+  launch, approve, publish or merge work.
 - Add a local queue service with bounded `QUEUED`, `RUNNING`, `COMPLETED` and
   `BLOCKED` states.
 - Accept only canonical TASK identifiers, repository-relative governed task-file
