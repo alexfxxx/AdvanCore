@@ -41,7 +41,15 @@ def test_non_overlapping_scopes_persist_with_owner_only_permissions(tmp_path):
 
 @pytest.mark.parametrize(
     "paths",
-    [[], ["../a.py"], ["/tmp/a.py"], ["advancore/*.py"], ["a.py", "a.py"]],
+    [
+        [],
+        ["../a.py"],
+        ["./a.py"],
+        ["a/./b.py"],
+        ["/tmp/a.py"],
+        ["advancore/*.py"],
+        ["a.py", "a.py"],
+    ],
 )
 def test_invalid_scope_paths_fail_closed(tmp_path, paths):
     service, _ = _service(tmp_path)
@@ -239,3 +247,12 @@ def test_backward_reservation_timestamp_fails_without_corrupting_state(tmp_path)
     assert [item.task_id for item in service.list_reservations(now=NOW)] == [
         "TASK-139"
     ]
+
+
+def test_fifo_state_file_fails_without_blocking(tmp_path):
+    service, state = _service(tmp_path)
+    state.parent.mkdir(mode=0o700)
+    os.mkfifo(state, mode=0o600)
+
+    with pytest.raises(ScopeReservationError, match="state file is unsafe"):
+        service.list_reservations(now=NOW)

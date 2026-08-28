@@ -166,11 +166,12 @@ def _validate_scope_path(value: str) -> str:
     if not isinstance(value, str) or not _SAFE_PATH.fullmatch(value):
         raise ScopeReservationError("scope path is invalid")
     path = PurePosixPath(value)
+    raw_parts = value.split("/")
     if (
         path.is_absolute()
         or value.endswith("/")
-        or ".." in path.parts
-        or "." in path.parts
+        or ".." in raw_parts
+        or "." in raw_parts
         or "//" in value
         or any(character in value for character in "*?[]{}")
     ):
@@ -294,7 +295,9 @@ class ScopeReservationService:
         try:
             descriptor = os.open(
                 self.state_path.name,
-                os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0),
+                os.O_RDONLY
+                | getattr(os, "O_NOFOLLOW", 0)
+                | getattr(os, "O_NONBLOCK", 0),
                 dir_fd=parent_descriptor,
             )
             details = os.fstat(descriptor)
