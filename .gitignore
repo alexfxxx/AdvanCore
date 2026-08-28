@@ -5,6 +5,9 @@ __pycache__/
 .env
 .venv/
 *.pyc
+.kimi-scope
+.kimi-scope.lock
+.kimi-scope.*.tmp
 
 # Local agent-runner audit records
 .agent_runner/
