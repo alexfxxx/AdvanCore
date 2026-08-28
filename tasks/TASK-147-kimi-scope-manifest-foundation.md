@@ -1,6 +1,6 @@
 # TASK-147 — Kimi Scope Manifest Foundation
 
-STATUS: READY
+STATUS: COMPLETE
 
 ## Objective
 
@@ -55,16 +55,48 @@ None.
 
 ## Acceptance criteria
 
-- [ ] The controller can atomically prepare and verify an exact bounded
+- [x] The controller can atomically prepare and verify an exact bounded
       `.kimi-scope` manifest without dirtying Git status.
-- [ ] Unsafe, aliased, duplicate, malformed or oversized scope data fails
+- [x] Unsafe, aliased, duplicate, malformed or oversized scope data fails
       closed.
-- [ ] A stale or changed manifest cannot verify for a different task/scope.
-- [ ] The service cannot launch, trust, authenticate, approve or publish.
-- [ ] Focused tests, full tests and `git diff --check` pass.
+- [x] A stale or changed manifest cannot verify for a different task/scope.
+- [x] The service cannot launch, trust, authenticate, approve or publish.
+- [x] Focused tests, full tests and `git diff --check` pass.
 
 ## Owner decisions
 
 Approved on 28 August 2026 as part of the persistent Kimi worker-worktree plan.
 This artifact supplements but never replaces task-file scope, TASK-145
 reservations, post-run diff verification or `agent_runner` authority.
+
+## Completion report
+
+### Implemented
+
+- Added a bounded `.kimi-scope` JSON artifact containing only schema version,
+  TASK identifier and canonical allowed paths.
+- Added owner-only locking, no-follow root binding, strict saved-state parsing,
+  atomic replacement and exact before/after verification support.
+- Added ignore rules for the manifest, lock and atomic temporary files; tests
+  prove preparation leaves Git status clean.
+
+### Worker routing evidence
+
+- Codex implemented this controller-only artifact foundation while the
+  persistent Kimi worktree itself remains owner-attended and unavailable.
+- No worker, login, trust flow, CLI upgrade or credential access was attempted.
+
+### Database changes
+
+None.
+
+### Verification
+
+- Focused tests: 16 passed.
+- Full isolated suite: 1,350 passed, 2 skipped.
+- `git diff --check`: passed.
+
+### Decisions required
+
+None for the manifest foundation. Launch integration remains separately
+governed and is not part of TASK-147.
