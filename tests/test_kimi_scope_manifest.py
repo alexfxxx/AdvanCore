@@ -171,3 +171,38 @@ def test_non_git_directory_and_boolean_schema_fail_closed(tmp_path):
     (root / ".kimi-scope").chmod(0o600)
     with pytest.raises(KimiScopeManifestError):
         verify_kimi_scope_manifest(root, "TASK-147", ["a.py"])
+
+
+def test_string_paths_duplicate_keys_and_scope_aliases_fail_closed(tmp_path):
+    root = _worktree(tmp_path)
+    manifest = root / ".kimi-scope"
+    manifest.write_text(
+        '{"schema_version":1,"task_id":"TASK-147",'
+        '"allowed_paths":"ab"}',
+        encoding="utf-8",
+    )
+    manifest.chmod(0o600)
+    with pytest.raises(KimiScopeManifestError, match="JSON list"):
+        verify_kimi_scope_manifest(root, "TASK-147", ["a", "b"])
+
+    manifest.write_text(
+        '{"schema_version":1,"schema_version":1,'
+        '"task_id":"TASK-147","allowed_paths":["a.py"]}',
+        encoding="utf-8",
+    )
+    with pytest.raises(KimiScopeManifestError, match="duplicate JSON keys"):
+        verify_kimi_scope_manifest(root, "TASK-147", ["a.py"])
+
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    (root / "alias").symlink_to(outside, target_is_directory=True)
+    with pytest.raises(KimiScopeManifestError, match="symbolic-link alias"):
+        prepare_kimi_scope_manifest(root, "TASK-147", ["alias/file.py"])
+
+    first = root / "first.py"
+    first.write_text("x\n", encoding="utf-8")
+    os.link(first, root / "second.py")
+    with pytest.raises(KimiScopeManifestError, match="file alias"):
+        prepare_kimi_scope_manifest(
+            root, "TASK-147", ["first.py", "second.py"]
+        )

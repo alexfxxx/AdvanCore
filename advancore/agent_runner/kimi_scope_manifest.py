@@ -108,6 +108,69 @@ def _open_worktree_root(path: Path) -> int:
             os.close(descriptor)
 
 
+def _validate_scope_locations(
+    root_descriptor: int, paths: tuple[str, ...]
+) -> None:
+    identities: set[tuple[int, int]] = set()
+    for value in paths:
+        descriptor = os.dup(root_descriptor)
+        try:
+            parts = PurePosixPath(value).parts
+            missing = False
+            for index, part in enumerate(parts):
+                try:
+                    child = os.open(
+                        part,
+                        os.O_RDONLY
+                        | getattr(os, "O_NOFOLLOW", 0)
+                        | getattr(os, "O_NONBLOCK", 0),
+                        dir_fd=descriptor,
+                    )
+                except FileNotFoundError:
+                    missing = True
+                    break
+                details = os.fstat(child)
+                if index < len(parts) - 1 and not stat.S_ISDIR(details.st_mode):
+                    os.close(child)
+                    raise KimiScopeManifestError(
+                        "scope manifest parent path is unsafe"
+                    )
+                if index == len(parts) - 1 and not (
+                    stat.S_ISREG(details.st_mode) or stat.S_ISDIR(details.st_mode)
+                ):
+                    os.close(child)
+                    raise KimiScopeManifestError(
+                        "scope manifest target path is unsafe"
+                    )
+                os.close(descriptor)
+                descriptor = child
+            if not missing:
+                details = os.fstat(descriptor)
+                identity = (details.st_dev, details.st_ino)
+                if identity in identities:
+                    raise KimiScopeManifestError(
+                        "scope manifest paths contain a file alias"
+                    )
+                identities.add(identity)
+        except KimiScopeManifestError:
+            raise
+        except OSError as exc:
+            raise KimiScopeManifestError(
+                "scope manifest path contains a symbolic-link alias"
+            ) from exc
+        finally:
+            os.close(descriptor)
+
+
+def _unique_json_object(pairs: list[tuple[str, object]]) -> dict[str, object]:
+    result: dict[str, object] = {}
+    for key, value in pairs:
+        if key in result:
+            raise KimiScopeManifestError("scope manifest has duplicate JSON keys")
+        result[key] = value
+    return result
+
+
 @contextmanager
 def _locked_worktree(path: Path) -> Iterator[int]:
     root_descriptor: int | None = None
@@ -186,9 +249,20 @@ def _read_unlocked(root_descriptor: int) -> KimiScopeManifest:
             or details.st_size > _MAX_BYTES
         ):
             raise KimiScopeManifestError("scope manifest file is unsafe")
-        with os.fdopen(descriptor, "r", encoding="utf-8") as handle:
-            descriptor = None
-            raw = json.load(handle)
+        chunks: list[bytes] = []
+        remaining = _MAX_BYTES + 1
+        while remaining:
+            chunk = os.read(descriptor, min(4096, remaining))
+            if not chunk:
+                break
+            chunks.append(chunk)
+            remaining -= len(chunk)
+        content = b"".join(chunks)
+        if len(content) > _MAX_BYTES:
+            raise KimiScopeManifestError("scope manifest exceeds its size limit")
+        raw = json.loads(
+            content.decode("utf-8"), object_pairs_hook=_unique_json_object
+        )
     except FileNotFoundError as exc:
         raise KimiScopeManifestError("scope manifest is missing") from exc
     except KimiScopeManifestError:
@@ -204,6 +278,8 @@ def _read_unlocked(root_descriptor: int) -> KimiScopeManifest:
         "allowed_paths",
     }:
         raise KimiScopeManifestError("scope manifest shape is invalid")
+    if not isinstance(raw["allowed_paths"], list):
+        raise KimiScopeManifestError("scope manifest paths must be a JSON list")
     try:
         manifest = KimiScopeManifest(
             schema_version=raw["schema_version"],
@@ -212,7 +288,9 @@ def _read_unlocked(root_descriptor: int) -> KimiScopeManifest:
         )
     except (KeyError, TypeError) as exc:
         raise KimiScopeManifestError("scope manifest values are invalid") from exc
-    return _validate_manifest(manifest)
+    validated = _validate_manifest(manifest)
+    _validate_scope_locations(root_descriptor, validated.allowed_paths)
+    return validated
 
 
 def prepare_kimi_scope_manifest(
@@ -229,6 +307,7 @@ def prepare_kimi_scope_manifest(
         raise KimiScopeManifestError("scope manifest exceeds its size limit")
 
     with _locked_worktree(Path(worktree)) as root_descriptor:
+        _validate_scope_locations(root_descriptor, manifest.allowed_paths)
         try:
             _read_unlocked(root_descriptor)
         except KimiScopeManifestError as exc:
