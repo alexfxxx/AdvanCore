@@ -64,13 +64,14 @@ not reuse the example database password in production.
    .venv/bin/alembic upgrade head
    ```
 
-4. Start AdvanCore:
+4. Start both local AdvanCore interfaces:
 
    ```bash
-   .venv/bin/streamlit run app.py
+   ./scripts/start-advancore.sh
    ```
 
-Open the local address printed by Streamlit. The Settings page shows whether
+Open `http://127.0.0.1:8000` for the decoupled console or
+`http://127.0.0.1:8501` for the Streamlit transition app. The Settings page shows whether
 the database is configured and reachable without displaying its connection
 details. When finished, stop the local database with
 `./scripts/start-advancore.sh --stop`.

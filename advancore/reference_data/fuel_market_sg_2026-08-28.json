@@ -1,0 +1,22 @@
+{
+  "retrieved_on": "2026-08-28",
+  "currency": "SGD",
+  "unit": "litre",
+  "basis": "gross pump price before discounts",
+  "benchmark_grade": "Diesel",
+  "market_observations": [
+    {"provider": "Esso", "grade": "Diesel", "price_per_litre": "3.95", "source_name": "Motorist Singapore", "source_url": "https://www.motorist.sg/petrol-prices", "source_updated_at": "retrieved 2026-08-28"},
+    {"provider": "Shell", "grade": "Diesel", "price_per_litre": "3.95", "source_name": "Motorist Singapore", "source_url": "https://www.motorist.sg/petrol-prices", "source_updated_at": "retrieved 2026-08-28"},
+    {"provider": "SPC", "grade": "Diesel", "price_per_litre": "3.89", "source_name": "Motorist Singapore", "source_url": "https://www.motorist.sg/petrol-prices", "source_updated_at": "retrieved 2026-08-28"},
+    {"provider": "Caltex", "grade": "Diesel", "price_per_litre": "4.05", "source_name": "Motorist Singapore", "source_url": "https://www.motorist.sg/petrol-prices", "source_updated_at": "retrieved 2026-08-28"},
+    {"provider": "Sinopec", "grade": "Diesel", "price_per_litre": "3.89", "source_name": "Motorist Singapore", "source_url": "https://www.motorist.sg/petrol-prices", "source_updated_at": "retrieved 2026-08-28"}
+  ],
+  "official_confirmations": [
+    {"provider": "SPC", "grade": "LEVO Diesel", "price_per_litre": "3.89", "source_name": "SPC Singapore", "source_url": "https://www.spc.com.sg/", "source_updated_at": "2026-07-07 17:40 SGT"},
+    {"provider": "SPC", "grade": "LEVO 95", "price_per_litre": "3.36", "source_name": "SPC Singapore", "source_url": "https://www.spc.com.sg/", "source_updated_at": "2026-07-07 17:40 SGT"},
+    {"provider": "SPC", "grade": "LEVO 98", "price_per_litre": "3.88", "source_name": "SPC Singapore", "source_url": "https://www.spc.com.sg/", "source_updated_at": "2026-07-07 17:40 SGT"},
+    {"provider": "Shell", "grade": "Shell FuelSave Diesel", "price_per_litre": "3.95", "source_name": "Shell Singapore", "source_url": "https://www.shell.com.sg/fuels-oils-and-coolants/shell-fuels/shell-station-price-board.html", "source_updated_at": "2026-08-09 22:15 SGT"},
+    {"provider": "Shell", "grade": "Shell FuelSave 95", "price_per_litre": "3.37", "source_name": "Shell Singapore", "source_url": "https://www.shell.com.sg/fuels-oils-and-coolants/shell-fuels/shell-station-price-board.html", "source_updated_at": "2026-08-09 22:15 SGT"},
+    {"provider": "Shell", "grade": "Shell FuelSave 98", "price_per_litre": "3.89", "source_name": "Shell Singapore", "source_url": "https://www.shell.com.sg/fuels-oils-and-coolants/shell-fuels/shell-station-price-board.html", "source_updated_at": "2026-08-09 22:15 SGT"}
+  ]
+}
