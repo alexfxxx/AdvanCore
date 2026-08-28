@@ -98,6 +98,21 @@ def test_task_directory_symlink_swap_fails_closed(tmp_path):
         )
 
 
+def test_non_regular_task_leaf_fails_without_blocking(tmp_path):
+    queue, _ = _queue(tmp_path)
+    task = tmp_path / "repo" / "tasks" / "TASK-139-worker-timeline.md"
+    task.unlink()
+    os.mkfifo(task)
+
+    with pytest.raises(TaskQueueError, match="unsafe"):
+        queue.enqueue(
+            "TASK-139",
+            "tasks/TASK-139-worker-timeline.md",
+            "kimi",
+            now=_time(1),
+        )
+
+
 def test_duplicate_and_invalid_values_fail_closed(tmp_path):
     queue, _ = _queue(tmp_path)
     queue.enqueue("TASK-139", "tasks/TASK-139-worker-timeline.md", "kimi-swarm", now=_time(1))
@@ -222,6 +237,16 @@ def test_multiple_persisted_running_claims_fail_closed(tmp_path):
     state_path.chmod(0o600)
 
     with pytest.raises(TaskQueueError, match="multiple running claims"):
+        queue.list_records(now=_time(3))
+
+
+def test_deeply_nested_json_fails_as_queue_error(tmp_path):
+    queue, state_path = _queue(tmp_path)
+    state_path.parent.mkdir(mode=0o700)
+    state_path.write_text("[" * 1200 + "]" * 1200, encoding="utf-8")
+    state_path.chmod(0o600)
+
+    with pytest.raises(TaskQueueError, match="cannot be read"):
         queue.list_records(now=_time(3))
 
     state_path.write_text("x" * (600 * 1024), encoding="utf-8")

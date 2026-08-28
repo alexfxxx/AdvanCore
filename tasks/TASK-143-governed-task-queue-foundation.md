@@ -83,6 +83,8 @@ assigned implementation worker; Codex remains controller and final fallback.
   transition times before they can be persisted.
 - Bound task, lock and state operations to no-follow directory descriptors,
   rejected hard-linked locks, and enforced one active claim in loaded state.
+- Kept state paths lexical until descriptor binding, opened task leaves
+  non-blocking, and normalized deeply nested JSON failures.
 - Documented that the queue has no worker-launch, approval, publication, merge,
   database or deployment authority.
 
@@ -99,8 +101,8 @@ None.
 
 ### Verification
 
-- Focused tests: 12 passed.
-- Full isolated suite: 1,274 passed, 2 skipped.
+- Focused tests: 14 passed.
+- Full isolated suite: 1,276 passed, 2 skipped.
 - `git diff --check`: passed.
 
 ### Decisions required

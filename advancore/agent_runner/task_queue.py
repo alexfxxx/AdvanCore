@@ -134,9 +134,10 @@ class GovernedTaskQueue:
         proposed = Path(state_path)
         if not proposed.is_absolute():
             proposed = Path.cwd() / proposed
+        proposed = proposed.absolute()
         if _has_symlink_component(proposed):
             raise TaskQueueError("queue path contains a symbolic link")
-        self.state_path = proposed.resolve()
+        self.state_path = proposed
         if (
             self.state_path == self.repository_root
             or self.repository_root in self.state_path.parents
@@ -243,7 +244,9 @@ class GovernedTaskQueue:
             )
             descriptor = os.open(
                 PurePosixPath(task_path).name,
-                os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0),
+                os.O_RDONLY
+                | getattr(os, "O_NOFOLLOW", 0)
+                | getattr(os, "O_NONBLOCK", 0),
                 dir_fd=tasks_descriptor,
             )
             details = os.fstat(descriptor)
@@ -318,7 +321,7 @@ class GovernedTaskQueue:
             return []
         except TaskQueueError:
             raise
-        except (OSError, UnicodeError, json.JSONDecodeError) as exc:
+        except (OSError, UnicodeError, json.JSONDecodeError, RecursionError) as exc:
             raise TaskQueueError("queue state cannot be read") from exc
         finally:
             if descriptor is not None:
