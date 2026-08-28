@@ -286,7 +286,9 @@ def _kimi_workspace_id(working_dir: Path) -> str:
     return f"wd_{slug}_{digest}"
 
 
-def _safe_owner_file(path: Path, *, maximum_bytes: int) -> bool:
+def _safe_owner_file(
+    path: Path, *, maximum_bytes: int, allow_empty: bool = False
+) -> bool:
     try:
         details = path.lstat()
     except OSError:
@@ -296,7 +298,8 @@ def _safe_owner_file(path: Path, *, maximum_bytes: int) -> bool:
         and details.st_uid == os.getuid()
         and details.st_nlink == 1
         and not stat.S_IMODE(details.st_mode) & 0o022
-        and 0 < details.st_size <= maximum_bytes
+        and (allow_empty or details.st_size > 0)
+        and details.st_size <= maximum_bytes
     )
 
 
@@ -323,11 +326,14 @@ def _kimi_runtime_preflight(
         )
 
     kimi_home = account_home / ".kimi-code"
-    auth_files = (
-        kimi_home / "oauth" / "kimi-code",
-        kimi_home / "credentials" / "kimi-code.json",
-    )
-    if not all(_safe_owner_file(path, maximum_bytes=1024 * 1024) for path in auth_files):
+    oauth_marker = kimi_home / "oauth" / "kimi-code"
+    credential_mirror = kimi_home / "credentials" / "kimi-code.json"
+    if not (
+        _safe_owner_file(
+            oauth_marker, maximum_bytes=1024 * 1024, allow_empty=True
+        )
+        and _safe_owner_file(credential_mirror, maximum_bytes=1024 * 1024)
+    ):
         return WorkerResult(
             success=False,
             message="Kimi login required: pre-warmed authentication is unavailable",

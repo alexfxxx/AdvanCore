@@ -166,6 +166,9 @@ def _create_prewarmed_kimi_home(tmp_path):
 
 def test_kimi_runtime_preflight_accepts_prewarmed_auth_and_ancestor_trust(tmp_path):
     owner_home, executable, repository = _create_prewarmed_kimi_home(tmp_path)
+    (owner_home / ".kimi-code" / "oauth" / "kimi-code").write_text(
+        "", encoding="utf-8"
+    )
     with patch(
         "advancore.agent_runner.worker.pwd.getpwuid",
         return_value=SimpleNamespace(pw_dir=str(owner_home), pw_name="owner"),
