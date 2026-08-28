@@ -1,6 +1,6 @@
 # TASK-145 — Worker Scope Reservation Foundation
 
-STATUS: READY
+STATUS: COMPLETE
 
 ## Objective
 
@@ -48,14 +48,47 @@ None.
 
 ## Acceptance criteria
 
-- [ ] Non-overlapping task scopes can be reserved independently.
-- [ ] Overlapping, duplicate, malformed or unsafe reservations fail closed.
-- [ ] State updates are bounded, atomic, owner-only and concurrency-safe.
-- [ ] The service cannot launch, approve, publish or merge work.
-- [ ] Focused tests, full tests and `git diff --check` pass.
+- [x] Non-overlapping task scopes can be reserved independently.
+- [x] Overlapping, duplicate, malformed or unsafe reservations fail closed.
+- [x] State updates are bounded, atomic, owner-only and concurrency-safe.
+- [x] The service cannot launch, approve, publish or merge work.
+- [x] Focused tests, full tests and `git diff --check` pass.
 
 ## Owner decisions
 
 Approved for unattended safe implementation on 28 August 2026. Kimi and Gemini
 were attempted on earlier non-overlapping tasks; Codex is the approved final
 fallback while those providers are unavailable or nonproductive.
+
+## Completion report
+
+### Implemented
+
+- Added exact and ancestor/descendant changed-file overlap detection.
+- Added a concurrency-safe, owner-only state file and no-follow lock outside the
+  worker repository, with atomic replacement and bounded retention.
+- Added explicit reserve/release operations and four-hour stale expiry that can
+  never trigger execution or retry.
+- Documented the service's lack of approval, launch, Git, database, publication,
+  merge and deployment authority.
+
+### Worker routing evidence
+
+- Kimi remained unavailable behind its protected workspace-trust boundary.
+- Gemini had already produced three successful-but-empty attempts on TASK-143.
+- Codex implemented TASK-145 as the approved final fallback without relaxing
+  either provider boundary.
+
+### Database changes
+
+None.
+
+### Verification
+
+- Focused tests: 12 passed, including concurrent overlap contention.
+- Full isolated suite: 1,274 passed, 2 skipped.
+- `git diff --check`: passed.
+
+### Decisions required
+
+None for TASK-145.
