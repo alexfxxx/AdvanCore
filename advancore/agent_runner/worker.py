@@ -9,6 +9,7 @@ import math
 import os
 import pwd
 import re
+import selectors
 import signal
 import stat
 import subprocess
@@ -62,6 +63,8 @@ KIMI_EXECUTABLE = "kimi"
 GEMINI_EXECUTABLE = "agy"
 KIMI_SANDBOX_EXECUTABLE = Path("/usr/bin/sandbox-exec")
 KIMI_SANDBOX_PROBE_TIMEOUT_SECONDS = 5
+KIMI_VERSION_PROBE_TIMEOUT_SECONDS = 5
+KIMI_VERSION_OUTPUT_MAX_BYTES = 128
 KIMI_SANDBOX_PROBE_PROFILE = (
     '(version 1) (allow default) '
     '(deny file-write* (require-not (subpath "/private/tmp")))'
@@ -286,9 +289,34 @@ def _kimi_workspace_id(working_dir: Path) -> str:
     return f"wd_{slug}_{digest}"
 
 
+def _non_symlinked_path_within(path: Path, trusted_root: Path) -> bool:
+    """Return whether *path* is below *trusted_root* without symlink traversal."""
+    try:
+        root = trusted_root.absolute()
+        candidate = path.absolute()
+        relative = candidate.relative_to(root)
+        current = root
+        if stat.S_ISLNK(current.lstat().st_mode):
+            return False
+        for part in relative.parts:
+            current /= part
+            if stat.S_ISLNK(current.lstat().st_mode):
+                return False
+        candidate.resolve(strict=True).relative_to(root.resolve(strict=True))
+    except (OSError, ValueError):
+        return False
+    return True
+
+
 def _safe_owner_file(
-    path: Path, *, maximum_bytes: int, allow_empty: bool = False
+    path: Path,
+    *,
+    maximum_bytes: int,
+    allow_empty: bool = False,
+    trusted_root: Path,
 ) -> bool:
+    if not _non_symlinked_path_within(path, trusted_root):
+        return False
     try:
         details = path.lstat()
     except OSError:
@@ -313,10 +341,8 @@ def _kimi_runtime_preflight(
     expected_executable = account_home / ".kimi-code" / "bin" / "kimi"
     if Path(resolved_executable) != expected_executable:
         return None
-    try:
-        Path(resolved_executable).resolve(strict=True)
-        expected_executable.resolve(strict=True)
-    except OSError:
+    kimi_home = account_home / ".kimi-code"
+    if not _non_symlinked_path_within(expected_executable, kimi_home):
         return WorkerResult(
             success=False,
             message="Kimi executable preflight failed",
@@ -325,14 +351,20 @@ def _kimi_runtime_preflight(
             failure_classification=EXECUTABLE_NOT_FOUND,
         )
 
-    kimi_home = account_home / ".kimi-code"
     oauth_marker = kimi_home / "oauth" / "kimi-code"
     credential_mirror = kimi_home / "credentials" / "kimi-code.json"
     if not (
         _safe_owner_file(
-            oauth_marker, maximum_bytes=1024 * 1024, allow_empty=True
+            oauth_marker,
+            maximum_bytes=1024 * 1024,
+            allow_empty=True,
+            trusted_root=kimi_home,
         )
-        and _safe_owner_file(credential_mirror, maximum_bytes=1024 * 1024)
+        and _safe_owner_file(
+            credential_mirror,
+            maximum_bytes=1024 * 1024,
+            trusted_root=kimi_home,
+        )
     ):
         return WorkerResult(
             success=False,
@@ -350,7 +382,9 @@ def _kimi_runtime_preflight(
         candidates = []
     if len(candidates) <= 128:
         for candidate in candidates:
-            if not _safe_owner_file(candidate, maximum_bytes=4096):
+            if not _safe_owner_file(
+                candidate, maximum_bytes=4096, trusted_root=kimi_home
+            ):
                 continue
             try:
                 payload = json.loads(candidate.read_text(encoding="utf-8"))
@@ -361,7 +395,14 @@ def _kimi_runtime_preflight(
                     or candidate.name != _kimi_workspace_id(declared)
                 ):
                     continue
-            except (KeyError, OSError, TypeError, ValueError, json.JSONDecodeError):
+            except (
+                KeyError,
+                OSError,
+                RecursionError,
+                TypeError,
+                ValueError,
+                json.JSONDecodeError,
+            ):
                 continue
             if repo_root == declared or declared in repo_root.parents:
                 trusted = True
@@ -385,25 +426,70 @@ def _probe_kimi_cli_version(
     scratch_dir: Path,
     environment: dict[str, str],
 ) -> str | None:
-    """Return a bounded version using the same OS isolation as the worker."""
+    """Return optional bounded version telemetry using worker-equivalent isolation."""
     command = _isolate_kimi_command(
         [resolved_executable, "--version"], None, working_dir, scratch_dir
     )
+    process: subprocess.Popen[bytes] | None = None
+    selector = selectors.DefaultSelector()
+    output = bytearray()
+    deadline = time.monotonic() + KIMI_VERSION_PROBE_TIMEOUT_SECONDS
     try:
-        completed = subprocess.run(
+        process = subprocess.Popen(
             command,
             cwd=working_dir,
-            capture_output=True,
-            text=True,
-            check=False,
-            timeout=5,
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+            start_new_session=True,
             env=environment,
         )
+        if process.stdout is None:  # pragma: no cover - defensive
+            _terminate_process_group(process)
+            return None
+        selector.register(process.stdout, selectors.EVENT_READ)
+        reached_eof = False
+        while not reached_eof:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                _terminate_process_group(process)
+                return None
+            events = selector.select(timeout=remaining)
+            if not events:
+                _terminate_process_group(process)
+                return None
+            for key, _ in events:
+                chunk = os.read(
+                    key.fileobj.fileno(), KIMI_VERSION_OUTPUT_MAX_BYTES + 1
+                )
+                if not chunk:
+                    reached_eof = True
+                    break
+                output.extend(chunk)
+                if len(output) > KIMI_VERSION_OUTPUT_MAX_BYTES:
+                    _terminate_process_group(process)
+                    return None
+        remaining = max(0.0, deadline - time.monotonic())
+        try:
+            returncode = process.wait(timeout=remaining)
+        except subprocess.TimeoutExpired:
+            _terminate_process_group(process)
+            return None
     except (OSError, subprocess.SubprocessError):
+        if process is not None and process.poll() is None:
+            _terminate_process_group(process)
         return None
-    if completed.returncode != 0:
+    finally:
+        selector.close()
+        if process is not None and process.stdout is not None:
+            process.stdout.close()
+    if returncode != 0:
         return None
-    match = re.fullmatch(r"(?:kimi version )?(\d+\.\d+\.\d+)", completed.stdout.strip())
+    try:
+        text = output.decode("ascii").strip()
+    except UnicodeDecodeError:
+        return None
+    match = re.fullmatch(r"(?:kimi version )?(\d+\.\d+\.\d+)", text)
     return f"Kimi v{match.group(1)}" if match else None
 
 
@@ -991,19 +1077,6 @@ class KimiWorkerAdapter(WorkerAdapter):
                 cli_version = _probe_kimi_cli_version(
                     resolved_executable, working_dir, scratch_dir, environment
                 )
-                if cli_version is None:
-                    return _annotate_worker_result(
-                        WorkerResult(
-                            success=False,
-                            message="Kimi CLI version preflight failed",
-                            terminal_reason="launch_failed",
-                            timeout_seconds=self.timeout_seconds,
-                            failure_classification=SPAWN_ERROR,
-                        ),
-                        resolved_executable=resolved_executable,
-                        executable_resolution=executable_resolution,
-                        runtime_path_profile="kimi_minimal",
-                    )
             # Preserve the established injectable subprocess seam used by local
             # callers/tests; production uses the bounded Popen implementation.
             if (not self.implementation_worker
@@ -1189,19 +1262,6 @@ class KimiSwarmWorkerAdapter(WorkerAdapter):
                 cli_version = _probe_kimi_cli_version(
                     resolved_executable, working_dir, scratch_dir, environment
                 )
-                if cli_version is None:
-                    return _annotate_worker_result(
-                        WorkerResult(
-                            success=False,
-                            message="Kimi CLI version preflight failed",
-                            terminal_reason="launch_failed",
-                            timeout_seconds=self.timeout_seconds,
-                            failure_classification=SPAWN_ERROR,
-                        ),
-                        resolved_executable=resolved_executable,
-                        executable_resolution=executable_resolution,
-                        runtime_path_profile="kimi_minimal",
-                    )
             if (not self.implementation_worker
                     and getattr(subprocess.run, "__module__", "subprocess") != "subprocess"):
                 seam_started_at = datetime.now(timezone.utc)

@@ -138,4 +138,9 @@ and stderr remain available in memory long enough for immediate failure
 classification, but durable audit records deliberately exclude the command,
 prompt, environment, raw PATH and transcripts. This gives the owner useful
 timing and failure-stage evidence without turning the audit into a credential or
-business-data store.
+business-data store. A failed or unrecognized version probe leaves the optional
+field empty and does not block an otherwise valid Kimi launch. The probe has a
+small output ceiling, suppresses stderr, and terminates its complete process
+group on timeout. Authentication, credential-mirror, executable and trust files
+are accepted only when every path component below the canonical Kimi home is
+non-symlinked; malformed or recursively nested trust JSON is ignored fail-closed.

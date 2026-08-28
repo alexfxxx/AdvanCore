@@ -85,11 +85,19 @@ access to any other credential.
 - Added isolated version telemetry reporting `Kimi v0.38.0`.
 - Proved the unsupported `KIMI_CODE_AGENT_SWARM_MAX_CONCURRENCY` variable is not
   inherited on v0.38.0.
+- Repaired independent-review findings by making version discovery optional,
+  bounding its stdout, discarding stderr and terminating the whole isolated
+  process group on timeout.
+- Reject every symlinked Kimi path component and any resolved auth, credential,
+  executable or trust file that escapes the canonical Kimi home.
+- Ignore recursively malformed trust JSON fail-closed instead of allowing an
+  unhandled preflight exception.
 
 ### Live verification
 
-- Final ordinary Kimi smoke: exit 0 in 9.36 seconds; repository unchanged.
-- Final Agent Swarm test: exit 0 in 84.70 seconds; repository unchanged.
+- Post-repair ordinary Kimi smoke: exit 0 in 14.46 seconds; repository
+  unchanged.
+- Post-repair Agent Swarm test: exit 0 in 86.12 seconds; repository unchanged.
 - Kimi session evidence contained a main agent plus `agent-0` and `agent-1`,
   confirming that two Swarm sub-agents genuinely ran.
 - Raw prompts, output, PATH and credentials were not added to durable telemetry.
@@ -100,8 +108,8 @@ None.
 
 ### Automated verification
 
-- Focused worker, telemetry and runner tests: 89 passed.
-- Full isolated suite: 1,269 passed, 2 skipped.
+- Focused worker, telemetry and runner tests: 104 passed.
+- Full isolated suite: 1,275 passed, 2 skipped.
 - `git diff --check`: passed.
 
 ### Known bounded warning
