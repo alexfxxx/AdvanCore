@@ -17,6 +17,7 @@ from advancore.agent_runner.worker import (
     WorkerResult,
     _isolate_kimi_command,
     _kimi_environment,
+    _kimi_workspace_id,
     run_bounded_worker_process,
 )
 from advancore.services.worker_usage_service import WorkerUsageService
@@ -94,6 +95,34 @@ def test_kimi_sandbox_and_environment_still_protect_credentials(tmp_path, monkey
     assert environment["PATH"] == "/usr/bin:/bin:/usr/sbin:/sbin"
     assert "GITHUB_TOKEN" not in environment
     assert "DATABASE_URL" not in environment
+
+
+def test_kimi_workspace_id_matches_v038_storage_name(tmp_path):
+    workspace = tmp_path / "AdvanCore-task-144"
+    workspace.mkdir()
+    workspace_id = _kimi_workspace_id(workspace)
+    assert workspace_id.startswith("wd_advancore-task-144_")
+    assert len(workspace_id.rsplit("_", 1)[1]) == 12
+
+
+def test_kimi_sandbox_allows_only_current_workspace_bookkeeping(tmp_path):
+    from pathlib import Path
+
+    scratch = tmp_path.parent / "kimi-scratch"
+    scratch.mkdir()
+    command = _isolate_kimi_command(
+        ["/usr/bin/kimi", "--prompt", "instruction"], None, tmp_path, scratch
+    )
+    profile = command[2]
+    owner_home = Path.home()
+    workspace_id = _kimi_workspace_id(tmp_path)
+    exact_trust = owner_home / ".kimi-code" / "workspace-trust" / workspace_id
+    registry = owner_home / ".kimi-code" / "workspaces.json"
+    trust_root = owner_home / ".kimi-code" / "workspace-trust"
+    assert f'(literal "{exact_trust}")' in profile
+    assert f'(literal "{registry}")' in profile
+    assert f'(subpath "{trust_root}")' not in profile
+    assert "wd_unrelated_000000000000" not in profile
 
 
 @pytest.mark.parametrize("adapter_type", [KimiWorkerAdapter, KimiSwarmWorkerAdapter])

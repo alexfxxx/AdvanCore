@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import shutil
 import math
 import os
@@ -267,6 +268,16 @@ def _sandbox_literal(path: Path) -> str:
     return str(path).replace("\\", "\\\\").replace('"', '\\"')
 
 
+def _kimi_workspace_id(working_dir: Path) -> str:
+    """Return Kimi Code v0.38's deterministic ID for one resolved workspace."""
+    root = working_dir.resolve(strict=True)
+    slug = re.sub(r"[^a-z0-9_-]+", "-", root.name.lower()).strip("-")[:39]
+    if not slug:
+        slug = "workspace"
+    digest = hashlib.sha256(str(root).encode("utf-8")).hexdigest()[:12]
+    return f"wd_{slug}_{digest}"
+
+
 def _kimi_environment(scratch_dir: Path) -> dict[str, str]:
     """Return a minimal fixed environment for one governed Kimi launch.
 
@@ -384,7 +395,12 @@ def _isolate_kimi_command(
         kimi_home / "sessions",
         kimi_home / "user-history",
     )
-    writable_literals = (kimi_home / "session_index.jsonl",)
+    workspace_id = _kimi_workspace_id(repo_root)
+    writable_literals = (
+        kimi_home / "session_index.jsonl",
+        kimi_home / "workspaces.json",
+        kimi_home / "workspace-trust" / workspace_id,
+    )
     allow_filters = " ".join(
         [f'(subpath "{_sandbox_literal(path)}")' for path in writable_subpaths]
         + [f'(literal "{_sandbox_literal(path)}")' for path in writable_literals]

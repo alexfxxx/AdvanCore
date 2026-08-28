@@ -107,7 +107,11 @@ Provider balance or Dashboard usage evidence—whether missing, stale, above a
 local percentage threshold, or unreadable—neither disables a worker nor
 prevents selection, launch, or continuation. Kimi retains its macOS filesystem
 sandbox, minimal environment, credential screening, and runner-owned configured
-timeout. The fixed three-worker route, no-repetition and maximum-attempt
+timeout. Kimi Code v0.38 may update its non-secret `workspaces.json` registry
+and the single deterministic workspace-trust record for the current resolved
+worktree. The workspace-trust directory is not generally writable; unrelated
+trust records, credentials, OAuth state, plugins, skills and updates remain
+protected. The fixed three-worker route, no-repetition and maximum-attempt
 boundaries, standing and fallback authority consumption, database, production,
 deployment, protected-main, and Git-integrity safeguards remain unchanged.
 
