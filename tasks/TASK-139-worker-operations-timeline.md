@@ -83,6 +83,8 @@ implementation worker; Codex remains controller and final fallback.
   transaction to that verified descriptor so an ancestor swap cannot redirect
   state.
 - Reject future or logically impossible worker start/finish timestamps.
+- Re-sort delayed and concurrent events before truncation, using a deterministic
+  safe-payload tie-break so the cap always retains the newest evidence.
 
 ### Worker routing evidence
 
@@ -97,8 +99,8 @@ None.
 
 ### Verification
 
-- Focused tests: 83 passed.
-- Full isolated suite: 1,277 passed, 2 skipped.
+- Focused tests: 85 passed.
+- Full isolated suite: 1,279 passed, 2 skipped.
 - `git diff --check`: passed.
 
 ### Decisions required

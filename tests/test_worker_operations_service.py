@@ -1,6 +1,7 @@
 """Tests for the bounded worker operations timeline."""
 
 from concurrent.futures import ThreadPoolExecutor
+from dataclasses import replace
 from datetime import datetime, timedelta, timezone
 import json
 from pathlib import Path
@@ -231,3 +232,43 @@ def test_state_transaction_stays_bound_to_verified_parent_descriptor(tmp_path):
         for line in (moved_parent / path.name).read_text(encoding="utf-8").splitlines()
     ]
     assert {record["task_id"] for record in records} == {"TASK-139", "TASK-140"}
+
+
+def test_delayed_old_event_cannot_evict_newer_records_at_capacity(tmp_path):
+    service, _ = _service(tmp_path)
+    with patch("advancore.services.worker_operations_service._MAX_RECORDS", 3):
+        for offset, task_id in ((3, "TASK-139"), (2, "TASK-140"), (1, "TASK-141")):
+            service.record(
+                replace(
+                    _event(task_id),
+                    occurred_at=NOW - timedelta(seconds=offset),
+                    started_at=None,
+                    finished_at=None,
+                ),
+                now=NOW,
+            )
+        service.record(
+            replace(
+                _event("TASK-142"),
+                occurred_at=NOW - timedelta(seconds=4),
+                started_at=None,
+                finished_at=None,
+            ),
+            now=NOW,
+        )
+        task_ids = [event.task_id for event in service.list_events(now=NOW)]
+
+    assert task_ids == ["TASK-139", "TASK-140", "TASK-141"]
+
+
+def test_equal_timestamps_have_deterministic_capacity_order(tmp_path):
+    service, _ = _service(tmp_path)
+    with patch("advancore.services.worker_operations_service._MAX_RECORDS", 2):
+        for task_id in ("TASK-141", "TASK-139", "TASK-140"):
+            service.record(
+                replace(_event(task_id), started_at=None, finished_at=None),
+                now=NOW,
+            )
+        task_ids = [event.task_id for event in service.list_events(now=NOW)]
+
+    assert task_ids == ["TASK-140", "TASK-141"]

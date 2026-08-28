@@ -33,6 +33,10 @@ oversized, future-dated and recursively nested JSON records are discarded
 fail-closed. Start and finish timestamps must be within the retention window and
 cannot occur after their event timestamp. Prompts, commands, paths, output and
 environment values are never stored.
+Before enforcing the record cap, retained and newly arrived events are sorted
+again by occurrence time with a deterministic safe-payload tie-break. A delayed
+older completion therefore cannot evict newer evidence merely because it was
+written later.
 
 The registered Kimi and Kimi-Swarm adapters first use normal executable PATH
 discovery. If PATH does not contain `kimi`, they may launch only the fixed

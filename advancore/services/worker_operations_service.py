@@ -211,6 +211,14 @@ class WorkerOperationsService:
             payload[name] = value.isoformat() if isinstance(value, datetime) else None
         return payload
 
+    @classmethod
+    def _sort_key(cls, event: WorkerOperationEvent) -> tuple[datetime, str]:
+        """Order chronologically with a deterministic bounded-record tie-break."""
+        return (
+            event.occurred_at,
+            json.dumps(cls._payload(event), separators=(",", ":"), sort_keys=True),
+        )
+
     def _load(
         self, now: datetime, *, parent_descriptor: int | None = None
     ) -> list[WorkerOperationEvent]:
@@ -279,7 +287,7 @@ class WorkerOperationsService:
                 WorkerOperationsError,
             ):
                 continue
-        events.sort(key=lambda item: item.occurred_at)
+        events.sort(key=self._sort_key)
         return events[-_MAX_RECORDS:]
 
     def list_events(self, *, now: datetime | None = None) -> list[WorkerOperationEvent]:
@@ -349,6 +357,7 @@ class WorkerOperationsService:
         with self._exclusive_lock() as parent_descriptor:
             events = self._load(current, parent_descriptor=parent_descriptor)
             events.append(validated)
+            events.sort(key=self._sort_key)
             events = events[-_MAX_RECORDS:]
             temporary_name = (
                 f".{self.path.name}.{os.getpid()}.{secrets.token_hex(8)}.tmp"
