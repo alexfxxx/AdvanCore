@@ -1,6 +1,6 @@
 # TASK-143 — Governed Task Queue Foundation
 
-STATUS: READY
+STATUS: COMPLETE
 
 ## Objective
 
@@ -57,14 +57,46 @@ None.
 
 ## Acceptance criteria
 
-- [ ] Approved tasks can be queued and claimed in deterministic FIFO order.
-- [ ] State transitions are explicit, valid and fail closed.
-- [ ] Duplicate, malformed, stale or unsafe records cannot launch or authorize
+- [x] Approved tasks can be queued and claimed in deterministic FIFO order.
+- [x] State transitions are explicit, valid and fail closed.
+- [x] Duplicate, malformed, stale or unsafe records cannot launch or authorize
       anything.
-- [ ] Storage is bounded, atomic, owner-only and outside worker repositories.
-- [ ] Focused tests, full tests and `git diff --check` pass.
+- [x] Storage is bounded, atomic, owner-only and outside worker repositories.
+- [x] Focused tests, full tests and `git diff --check` pass.
 
 ## Owner decisions
 
 Approved for unattended implementation on 28 August 2026. Gemini is the
 assigned implementation worker; Codex remains controller and final fallback.
+
+## Completion report
+
+### Implemented
+
+- Added a bounded, owner-only queue with deterministic FIFO ordering and
+  explicit `QUEUED`, `RUNNING`, `COMPLETED` and `BLOCKED` transitions.
+- Added an owner-only lock, atomic replacement, strict record validation and a
+  two-hour stale-claim block that never silently retries work.
+- Documented that the queue has no worker-launch, approval, publication, merge,
+  database or deployment authority.
+
+### Worker routing evidence
+
+- Gemini was launched three times, including twice with exact file and method
+  context. Each invocation exited successfully but produced no repository
+  changes; the final attempt therefore failed the contract tests.
+- Codex completed the bounded implementation as the approved final fallback.
+
+### Database changes
+
+None.
+
+### Verification
+
+- Focused tests: 6 passed.
+- Full isolated suite: 1,268 passed, 2 skipped.
+- `git diff --check`: passed.
+
+### Decisions required
+
+None.
