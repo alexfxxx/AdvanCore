@@ -107,7 +107,16 @@ Provider balance or Dashboard usage evidence—whether missing, stale, above a
 local percentage threshold, or unreadable—neither disables a worker nor
 prevents selection, launch, or continuation. Kimi retains its macOS filesystem
 sandbox, minimal environment, credential screening, and runner-owned configured
-timeout. The fixed three-worker route, no-repetition and maximum-attempt
+timeout. Kimi Code v0.38 may update its non-secret `workspaces.json` registry
+and the single deterministic workspace-trust record for the current resolved
+worktree. The workspace-trust directory is not generally writable; unrelated
+trust records, credentials, OAuth state, plugins, skills and updates remain
+protected, except that the Kimi CLI may refresh its own exact `oauth/kimi-code`
+token and matching non-secret lock file needed for its existing authenticated
+session, and synchronize only its matching `credentials/kimi-code.json` mirror.
+Other files in both directories remain outside the write allowlist. No other
+provider, GitHub, database, SSH or controller credential is added.
+The fixed three-worker route, no-repetition and maximum-attempt
 boundaries, standing and fallback authority consumption, database, production,
 deployment, protected-main, and Git-integrity safeguards remain unchanged.
 
@@ -129,4 +138,13 @@ and stderr remain available in memory long enough for immediate failure
 classification, but durable audit records deliberately exclude the command,
 prompt, environment, raw PATH and transcripts. This gives the owner useful
 timing and failure-stage evidence without turning the audit into a credential or
-business-data store.
+business-data store. A failed or unrecognized version probe leaves the optional
+field empty and does not block an otherwise valid Kimi launch. The probe has a
+small output ceiling, suppresses stderr, and terminates its complete process
+group on timeout, excess output, failure, or unexpected surviving descendant.
+Every sandboxed Kimi or Kimi-Swarm launch validates all existing components of
+every Kimi-home path exposed by its write allowlist, including proposal-only and
+PATH-resolved launches. Authentication, credential-mirror, executable and trust
+files are accepted only when every path component below the canonical Kimi home
+is non-symlinked; malformed or recursively nested trust JSON is ignored
+fail-closed.

@@ -2,11 +2,14 @@
 
 from __future__ import annotations
 
+import hashlib
+import json
 import shutil
 import math
 import os
 import pwd
 import re
+import selectors
 import signal
 import stat
 import subprocess
@@ -60,6 +63,8 @@ KIMI_EXECUTABLE = "kimi"
 GEMINI_EXECUTABLE = "agy"
 KIMI_SANDBOX_EXECUTABLE = Path("/usr/bin/sandbox-exec")
 KIMI_SANDBOX_PROBE_TIMEOUT_SECONDS = 5
+KIMI_VERSION_PROBE_TIMEOUT_SECONDS = 5
+KIMI_VERSION_OUTPUT_MAX_BYTES = 128
 KIMI_SANDBOX_PROBE_PROFILE = (
     '(version 1) (allow default) '
     '(deny file-write* (require-not (subpath "/private/tmp")))'
@@ -114,11 +119,14 @@ def _annotate_worker_result(
     resolved_executable: str,
     executable_resolution: str,
     runtime_path_profile: str,
+    cli_version: str | None = None,
 ) -> WorkerResult:
     """Attach bounded adapter context without persisting commands or environment."""
     result.resolved_executable = resolved_executable
     result.executable_resolution = executable_resolution
     result.runtime_path_profile = runtime_path_profile
+    if cli_version is not None:
+        result.cli_version = cli_version
     return result
 
 
@@ -267,6 +275,293 @@ def _sandbox_literal(path: Path) -> str:
     return str(path).replace("\\", "\\\\").replace('"', '\\"')
 
 
+def _sandbox_regex(value: str) -> str:
+    return value.replace('"', '\\"')
+
+
+def _kimi_workspace_id(working_dir: Path) -> str:
+    """Return Kimi Code v0.38's deterministic ID for one resolved workspace."""
+    root = working_dir.resolve(strict=True)
+    slug = re.sub(r"[^a-z0-9_-]+", "-", root.name.lower()).strip("-")[:39]
+    if not slug:
+        slug = "workspace"
+    digest = hashlib.sha256(str(root).encode("utf-8")).hexdigest()[:12]
+    return f"wd_{slug}_{digest}"
+
+
+def _non_symlinked_path_within(path: Path, trusted_root: Path) -> bool:
+    """Return whether *path* is below *trusted_root* without symlink traversal."""
+    try:
+        root = trusted_root.absolute()
+        candidate = path.absolute()
+        relative = candidate.relative_to(root)
+        current = root
+        if stat.S_ISLNK(current.lstat().st_mode):
+            return False
+        for part in relative.parts:
+            current /= part
+            if stat.S_ISLNK(current.lstat().st_mode):
+                return False
+        candidate.resolve(strict=True).relative_to(root.resolve(strict=True))
+    except (OSError, ValueError):
+        return False
+    return True
+
+
+def _existing_path_components_non_symlinked(
+    path: Path, trusted_root: Path
+) -> bool:
+    """Reject symlinks in every existing component of a governed Kimi path."""
+    try:
+        root = trusted_root.absolute()
+        candidate = path.absolute()
+        relative = candidate.relative_to(root)
+    except ValueError:
+        return False
+    current = root
+    for part in (None, *relative.parts):
+        if part is not None:
+            current /= part
+        try:
+            details = current.lstat()
+        except FileNotFoundError:
+            return True
+        except OSError:
+            return False
+        if stat.S_ISLNK(details.st_mode):
+            return False
+    try:
+        candidate.resolve(strict=True).relative_to(root.resolve(strict=True))
+    except (OSError, ValueError):
+        return False
+    return True
+
+
+def _kimi_home_path_safety_preflight(
+    working_dir: Path, timeout_seconds: int
+) -> WorkerResult | None:
+    """Validate every existing Kimi-home component exposed by the sandbox."""
+    account_home = Path(pwd.getpwuid(os.getuid()).pw_dir).resolve()
+    kimi_home = account_home / ".kimi-code"
+    workspace_id = _kimi_workspace_id(working_dir)
+    governed_paths = (
+        kimi_home,
+        kimi_home / "cache",
+        kimi_home / "logs",
+        kimi_home / "sessions",
+        kimi_home / "user-history",
+        kimi_home / "session_index.jsonl",
+        kimi_home / "workspaces.json",
+        kimi_home / "workspace-trust",
+        kimi_home / "workspace-trust" / workspace_id,
+        kimi_home / "oauth",
+        kimi_home / "oauth" / "kimi-code",
+        kimi_home / "oauth" / "kimi-code.lock",
+        kimi_home / "credentials",
+        kimi_home / "credentials" / "kimi-code.json",
+    )
+    if all(
+        _existing_path_components_non_symlinked(path, kimi_home)
+        for path in governed_paths
+    ):
+        return None
+    return WorkerResult(
+        success=False,
+        message="Kimi home path-safety preflight failed",
+        terminal_reason="launch_failed",
+        timeout_seconds=timeout_seconds,
+        failure_classification=SPAWN_ERROR,
+    )
+
+
+def _safe_owner_file(
+    path: Path,
+    *,
+    maximum_bytes: int,
+    allow_empty: bool = False,
+    trusted_root: Path,
+) -> bool:
+    if not _non_symlinked_path_within(path, trusted_root):
+        return False
+    try:
+        details = path.lstat()
+    except OSError:
+        return False
+    return (
+        stat.S_ISREG(details.st_mode)
+        and details.st_uid == os.getuid()
+        and details.st_nlink == 1
+        and not stat.S_IMODE(details.st_mode) & 0o022
+        and (allow_empty or details.st_size > 0)
+        and details.st_size <= maximum_bytes
+    )
+
+
+def _kimi_runtime_preflight(
+    resolved_executable: str,
+    working_dir: Path,
+    timeout_seconds: int,
+) -> WorkerResult | None:
+    """Check pre-warmed Kimi auth and inherited/current workspace trust."""
+    account_home = Path(pwd.getpwuid(os.getuid()).pw_dir).resolve()
+    expected_executable = account_home / ".kimi-code" / "bin" / "kimi"
+    if Path(resolved_executable) != expected_executable:
+        return None
+    kimi_home = account_home / ".kimi-code"
+    if not _non_symlinked_path_within(expected_executable, kimi_home):
+        return WorkerResult(
+            success=False,
+            message="Kimi executable preflight failed",
+            terminal_reason="launch_failed",
+            timeout_seconds=timeout_seconds,
+            failure_classification=EXECUTABLE_NOT_FOUND,
+        )
+
+    oauth_marker = kimi_home / "oauth" / "kimi-code"
+    credential_mirror = kimi_home / "credentials" / "kimi-code.json"
+    if not (
+        _safe_owner_file(
+            oauth_marker,
+            maximum_bytes=1024 * 1024,
+            allow_empty=True,
+            trusted_root=kimi_home,
+        )
+        and _safe_owner_file(
+            credential_mirror,
+            maximum_bytes=1024 * 1024,
+            trusted_root=kimi_home,
+        )
+    ):
+        return WorkerResult(
+            success=False,
+            message="Kimi login required: pre-warmed authentication is unavailable",
+            terminal_reason="credential_access_required",
+            timeout_seconds=timeout_seconds,
+        )
+
+    repo_root = working_dir.resolve(strict=True)
+    trust_root = kimi_home / "workspace-trust"
+    trusted = False
+    try:
+        candidates = sorted(trust_root.iterdir())
+    except OSError:
+        candidates = []
+    if len(candidates) <= 128:
+        for candidate in candidates:
+            if not _safe_owner_file(
+                candidate, maximum_bytes=4096, trusted_root=kimi_home
+            ):
+                continue
+            try:
+                payload = json.loads(candidate.read_text(encoding="utf-8"))
+                declared = Path(payload["root"]).resolve(strict=True)
+                trusted_at = payload["trustedAt"]
+                if (
+                    not isinstance(trusted_at, int)
+                    or candidate.name != _kimi_workspace_id(declared)
+                ):
+                    continue
+            except (
+                KeyError,
+                OSError,
+                RecursionError,
+                TypeError,
+                ValueError,
+                json.JSONDecodeError,
+            ):
+                continue
+            if repo_root == declared or declared in repo_root.parents:
+                trusted = True
+                break
+    if not trusted:
+        return WorkerResult(
+            success=False,
+            message=(
+                "Kimi workspace trust required: trust this worktree in the Kimi "
+                "app or CLI before controller launch"
+            ),
+            terminal_reason="authority_blocked",
+            timeout_seconds=timeout_seconds,
+        )
+    return None
+
+
+def _probe_kimi_cli_version(
+    resolved_executable: str,
+    working_dir: Path,
+    scratch_dir: Path,
+    environment: dict[str, str],
+) -> str | None:
+    """Return optional bounded version telemetry using worker-equivalent isolation."""
+    command = _isolate_kimi_command(
+        [resolved_executable, "--version"], None, working_dir, scratch_dir
+    )
+    process: subprocess.Popen[bytes] | None = None
+    selector = selectors.DefaultSelector()
+    output = bytearray()
+    deadline = time.monotonic() + KIMI_VERSION_PROBE_TIMEOUT_SECONDS
+    try:
+        process = subprocess.Popen(
+            command,
+            cwd=working_dir,
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+            start_new_session=True,
+            env=environment,
+        )
+        if process.stdout is None:  # pragma: no cover - defensive
+            _terminate_process_group(process)
+            return None
+        selector.register(process.stdout, selectors.EVENT_READ)
+        reached_eof = False
+        while not reached_eof:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                _terminate_process_group(process)
+                return None
+            events = selector.select(timeout=remaining)
+            if not events:
+                _terminate_process_group(process)
+                return None
+            for key, _ in events:
+                chunk = os.read(
+                    key.fileobj.fileno(), KIMI_VERSION_OUTPUT_MAX_BYTES + 1
+                )
+                if not chunk:
+                    reached_eof = True
+                    break
+                output.extend(chunk)
+                if len(output) > KIMI_VERSION_OUTPUT_MAX_BYTES:
+                    _terminate_process_group(process)
+                    return None
+        remaining = max(0.0, deadline - time.monotonic())
+        try:
+            returncode = process.wait(timeout=remaining)
+        except subprocess.TimeoutExpired:
+            _terminate_process_group(process)
+            return None
+    except (OSError, subprocess.SubprocessError):
+        if process is not None and _process_group_exists(process.pid):
+            _terminate_process_group(process)
+        return None
+    finally:
+        selector.close()
+        if process is not None and process.stdout is not None:
+            process.stdout.close()
+    if process is not None and _process_group_exists(process.pid):
+        _terminate_process_group(process)
+        return None
+    if returncode != 0:
+        return None
+    try:
+        text = output.decode("ascii").strip()
+    except UnicodeDecodeError:
+        return None
+    match = re.fullmatch(r"(?:kimi version )?(\d+\.\d+\.\d+)", text)
+    return f"Kimi v{match.group(1)}" if match else None
+
+
 def _kimi_environment(scratch_dir: Path) -> dict[str, str]:
     """Return a minimal fixed environment for one governed Kimi launch.
 
@@ -384,10 +679,30 @@ def _isolate_kimi_command(
         kimi_home / "sessions",
         kimi_home / "user-history",
     )
-    writable_literals = (kimi_home / "session_index.jsonl",)
+    workspace_id = _kimi_workspace_id(repo_root)
+    writable_literals = (
+        kimi_home / "session_index.jsonl",
+        kimi_home / "workspaces.json",
+        kimi_home / "workspace-trust" / workspace_id,
+        kimi_home / "oauth" / "kimi-code",
+        kimi_home / "oauth" / "kimi-code.lock",
+        kimi_home / "credentials",
+        kimi_home / "credentials" / "kimi-code.json",
+    )
+    atomic_targets = (
+        kimi_home / "workspaces.json",
+        kimi_home / "workspace-trust" / workspace_id,
+        kimi_home / "oauth" / "kimi-code",
+        kimi_home / "credentials" / "kimi-code.json",
+    )
+    writable_regexes = tuple(
+        rf"^{re.escape(str(path))}\.tmp\.[0-9]+\.[A-Za-z0-9]+$"
+        for path in atomic_targets
+    )
     allow_filters = " ".join(
         [f'(subpath "{_sandbox_literal(path)}")' for path in writable_subpaths]
         + [f'(literal "{_sandbox_literal(path)}")' for path in writable_literals]
+        + [f'(regex #"{_sandbox_regex(value)}")' for value in writable_regexes]
     )
     protected_subpaths = (
         protected_state_root,
@@ -405,8 +720,6 @@ def _isolate_kimi_command(
         repo_root / ".kube",
         repo_root / ".docker",
         kimi_home / "bin",
-        kimi_home / "credentials",
-        kimi_home / "oauth",
         kimi_home / "plugins",
         kimi_home / "skills",
         kimi_home / "updates",
@@ -789,6 +1102,35 @@ class KimiWorkerAdapter(WorkerAdapter):
                 self.timeout_seconds,
                 "kimi_minimal",
             )
+        executable_resolution = _kimi_executable_resolution(
+            self.executable, resolved_executable
+        )
+        path_blocked = (
+            _kimi_home_path_safety_preflight(working_dir, self.timeout_seconds)
+            if self.executable == self.DEFAULT_EXECUTABLE
+            else None
+        )
+        if path_blocked is not None:
+            return _annotate_worker_result(
+                path_blocked,
+                resolved_executable=resolved_executable,
+                executable_resolution=executable_resolution,
+                runtime_path_profile="kimi_minimal",
+            )
+        runtime_blocked = (
+            _kimi_runtime_preflight(
+                resolved_executable, working_dir, self.timeout_seconds
+            )
+            if self.implementation_worker
+            else None
+        )
+        if runtime_blocked is not None:
+            return _annotate_worker_result(
+                runtime_blocked,
+                resolved_executable=resolved_executable,
+                executable_resolution=executable_resolution,
+                runtime_path_profile="kimi_minimal",
+            )
         command = self.build_command(
             _governed_instruction(instruction, self.allowed_scope), working_dir
         )
@@ -811,6 +1153,11 @@ class KimiWorkerAdapter(WorkerAdapter):
                 command, None, working_dir, scratch_dir
             )
             environment = _kimi_environment(scratch_dir)
+            cli_version = None
+            if executable_resolution == "owner_home_fallback" and self.implementation_worker:
+                cli_version = _probe_kimi_cli_version(
+                    resolved_executable, working_dir, scratch_dir, environment
+                )
             # Preserve the established injectable subprocess seam used by local
             # callers/tests; production uses the bounded Popen implementation.
             if (not self.implementation_worker
@@ -842,10 +1189,9 @@ class KimiWorkerAdapter(WorkerAdapter):
                 return _annotate_worker_result(
                     result,
                     resolved_executable=resolved_executable,
-                    executable_resolution=_kimi_executable_resolution(
-                        self.executable, resolved_executable
-                    ),
+                    executable_resolution=executable_resolution,
                     runtime_path_profile="kimi_minimal",
+                    cli_version=cli_version,
                 )
             result = run_bounded_worker_process(
                 command,
@@ -857,10 +1203,9 @@ class KimiWorkerAdapter(WorkerAdapter):
             return _annotate_worker_result(
                 result,
                 resolved_executable=resolved_executable,
-                executable_resolution=_kimi_executable_resolution(
-                    self.executable, resolved_executable
-                ),
+                executable_resolution=executable_resolution,
                 runtime_path_profile="kimi_minimal",
+                cli_version=cli_version,
             )
 
 
@@ -954,6 +1299,35 @@ class KimiSwarmWorkerAdapter(WorkerAdapter):
                 self.timeout_seconds,
                 "kimi_minimal",
             )
+        executable_resolution = _kimi_executable_resolution(
+            self.executable, resolved_executable
+        )
+        path_blocked = (
+            _kimi_home_path_safety_preflight(working_dir, self.timeout_seconds)
+            if self.executable == self.DEFAULT_EXECUTABLE
+            else None
+        )
+        if path_blocked is not None:
+            return _annotate_worker_result(
+                path_blocked,
+                resolved_executable=resolved_executable,
+                executable_resolution=executable_resolution,
+                runtime_path_profile="kimi_minimal",
+            )
+        runtime_blocked = (
+            _kimi_runtime_preflight(
+                resolved_executable, working_dir, self.timeout_seconds
+            )
+            if self.implementation_worker
+            else None
+        )
+        if runtime_blocked is not None:
+            return _annotate_worker_result(
+                runtime_blocked,
+                resolved_executable=resolved_executable,
+                executable_resolution=executable_resolution,
+                runtime_path_profile="kimi_minimal",
+            )
         command = self.build_command(
             _governed_instruction(instruction, self.allowed_scope), working_dir
         )
@@ -976,6 +1350,11 @@ class KimiSwarmWorkerAdapter(WorkerAdapter):
                 command, None, working_dir, scratch_dir
             )
             environment = _kimi_environment(scratch_dir)
+            cli_version = None
+            if executable_resolution == "owner_home_fallback" and self.implementation_worker:
+                cli_version = _probe_kimi_cli_version(
+                    resolved_executable, working_dir, scratch_dir, environment
+                )
             if (not self.implementation_worker
                     and getattr(subprocess.run, "__module__", "subprocess") != "subprocess"):
                 seam_started_at = datetime.now(timezone.utc)
@@ -1005,10 +1384,9 @@ class KimiSwarmWorkerAdapter(WorkerAdapter):
                 return _annotate_worker_result(
                     result,
                     resolved_executable=resolved_executable,
-                    executable_resolution=_kimi_executable_resolution(
-                        self.executable, resolved_executable
-                    ),
+                    executable_resolution=executable_resolution,
                     runtime_path_profile="kimi_minimal",
+                    cli_version=cli_version,
                 )
             result = run_bounded_worker_process(
                 command,
@@ -1020,10 +1398,9 @@ class KimiSwarmWorkerAdapter(WorkerAdapter):
             return _annotate_worker_result(
                 result,
                 resolved_executable=resolved_executable,
-                executable_resolution=_kimi_executable_resolution(
-                    self.executable, resolved_executable
-                ),
+                executable_resolution=executable_resolution,
                 runtime_path_profile="kimi_minimal",
+                cli_version=cli_version,
             )
 
 

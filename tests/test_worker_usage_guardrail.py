@@ -1,7 +1,11 @@
 """Worker-boundary tests for runtime-authoritative Kimi routing."""
 
 from datetime import datetime, timedelta, timezone
+import json
+from pathlib import Path
 import subprocess
+import sys
+from types import SimpleNamespace
 from unittest.mock import patch
 
 import pytest
@@ -17,6 +21,10 @@ from advancore.agent_runner.worker import (
     WorkerResult,
     _isolate_kimi_command,
     _kimi_environment,
+    _kimi_runtime_preflight,
+    _probe_kimi_cli_version,
+    _kimi_workspace_id,
+    _terminate_process_group,
     run_bounded_worker_process,
 )
 from advancore.services.worker_usage_service import WorkerUsageService
@@ -94,6 +102,271 @@ def test_kimi_sandbox_and_environment_still_protect_credentials(tmp_path, monkey
     assert environment["PATH"] == "/usr/bin:/bin:/usr/sbin:/sbin"
     assert "GITHUB_TOKEN" not in environment
     assert "DATABASE_URL" not in environment
+
+
+def test_kimi_workspace_id_matches_v038_storage_name(tmp_path):
+    workspace = tmp_path / "AdvanCore-task-144"
+    workspace.mkdir()
+    workspace_id = _kimi_workspace_id(workspace)
+    assert workspace_id.startswith("wd_advancore-task-144_")
+    assert len(workspace_id.rsplit("_", 1)[1]) == 12
+
+
+def test_kimi_sandbox_allows_only_current_workspace_bookkeeping(tmp_path):
+    scratch = tmp_path.parent / "kimi-scratch"
+    scratch.mkdir()
+    command = _isolate_kimi_command(
+        ["/usr/bin/kimi", "--prompt", "instruction"], None, tmp_path, scratch
+    )
+    profile = command[2]
+    owner_home = Path.home()
+    workspace_id = _kimi_workspace_id(tmp_path)
+    exact_trust = owner_home / ".kimi-code" / "workspace-trust" / workspace_id
+    registry = owner_home / ".kimi-code" / "workspaces.json"
+    kimi_oauth = owner_home / ".kimi-code" / "oauth" / "kimi-code"
+    kimi_oauth_lock = owner_home / ".kimi-code" / "oauth" / "kimi-code.lock"
+    kimi_credentials = owner_home / ".kimi-code" / "credentials"
+    kimi_credential_file = kimi_credentials / "kimi-code.json"
+    trust_root = owner_home / ".kimi-code" / "workspace-trust"
+    assert f'(literal "{exact_trust}")' in profile
+    assert f'(literal "{registry}")' in profile
+    assert f'(literal "{kimi_oauth}")' in profile
+    assert f'(literal "{kimi_oauth_lock}")' in profile
+    assert f'(literal "{kimi_credentials}")' in profile
+    assert f'(literal "{kimi_credential_file}")' in profile
+    assert f'(subpath "{trust_root}")' not in profile
+    assert f'(subpath "{owner_home / ".kimi-code" / "oauth"}")' not in profile
+    assert f'(subpath "{kimi_credentials}")' not in profile
+    assert "workspaces\\.json\\.tmp\\." in profile
+    assert workspace_id in profile
+    assert "wd_unrelated_000000000000" not in profile
+
+
+def _create_prewarmed_kimi_home(tmp_path):
+    owner_home = tmp_path / "owner"
+    executable = owner_home / ".kimi-code" / "bin" / "kimi"
+    executable.parent.mkdir(parents=True)
+    executable.write_text("binary", encoding="utf-8")
+    executable.chmod(0o700)
+    for relative in ("oauth/kimi-code", "credentials/kimi-code.json"):
+        target = owner_home / ".kimi-code" / relative
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text("prewarmed", encoding="utf-8")
+        target.chmod(0o600)
+    repository = owner_home / "work" / "AdvanCore"
+    repository.mkdir(parents=True)
+    trust_root = owner_home / ".kimi-code" / "workspace-trust"
+    trust_root.mkdir()
+    trust_file = trust_root / _kimi_workspace_id(owner_home)
+    trust_file.write_text(
+        json.dumps({"root": str(owner_home), "trustedAt": 1}),
+        encoding="utf-8",
+    )
+    trust_file.chmod(0o600)
+    return owner_home, executable, repository
+
+
+def test_kimi_runtime_preflight_accepts_prewarmed_auth_and_ancestor_trust(tmp_path):
+    owner_home, executable, repository = _create_prewarmed_kimi_home(tmp_path)
+    (owner_home / ".kimi-code" / "oauth" / "kimi-code").write_text(
+        "", encoding="utf-8"
+    )
+    with patch(
+        "advancore.agent_runner.worker.pwd.getpwuid",
+        return_value=SimpleNamespace(pw_dir=str(owner_home), pw_name="owner"),
+    ):
+        assert _kimi_runtime_preflight(str(executable), repository, 60) is None
+
+
+def test_kimi_runtime_preflight_requires_auth_without_starting_login(tmp_path):
+    owner_home, executable, repository = _create_prewarmed_kimi_home(tmp_path)
+    (owner_home / ".kimi-code" / "oauth" / "kimi-code").unlink()
+    with patch(
+        "advancore.agent_runner.worker.pwd.getpwuid",
+        return_value=SimpleNamespace(pw_dir=str(owner_home), pw_name="owner"),
+    ):
+        result = _kimi_runtime_preflight(str(executable), repository, 60)
+    assert result is not None
+    assert result.terminal_reason == "credential_access_required"
+    assert "login required" in result.message.lower()
+
+
+def test_kimi_runtime_preflight_requires_existing_workspace_trust(tmp_path):
+    owner_home, executable, repository = _create_prewarmed_kimi_home(tmp_path)
+    trust_file = next((owner_home / ".kimi-code" / "workspace-trust").iterdir())
+    trust_file.unlink()
+    with patch(
+        "advancore.agent_runner.worker.pwd.getpwuid",
+        return_value=SimpleNamespace(pw_dir=str(owner_home), pw_name="owner"),
+    ):
+        result = _kimi_runtime_preflight(str(executable), repository, 60)
+    assert result is not None
+    assert result.terminal_reason == "authority_blocked"
+
+
+def test_kimi_runtime_preflight_rejects_symlinked_auth_parent(tmp_path):
+    owner_home, executable, repository = _create_prewarmed_kimi_home(tmp_path)
+    oauth_root = owner_home / ".kimi-code" / "oauth"
+    (oauth_root / "kimi-code").unlink()
+    oauth_root.rmdir()
+    redirected = tmp_path / "redirected-oauth"
+    redirected.mkdir()
+    (redirected / "kimi-code").write_text("prewarmed", encoding="utf-8")
+    (redirected / "kimi-code").chmod(0o600)
+    oauth_root.symlink_to(redirected, target_is_directory=True)
+    with patch(
+        "advancore.agent_runner.worker.pwd.getpwuid",
+        return_value=SimpleNamespace(pw_dir=str(owner_home), pw_name="owner"),
+    ):
+        result = _kimi_runtime_preflight(str(executable), repository, 60)
+    assert result is not None
+    assert result.terminal_reason == "credential_access_required"
+
+
+def test_kimi_runtime_preflight_skips_recursively_malformed_trust(tmp_path):
+    owner_home, executable, repository = _create_prewarmed_kimi_home(tmp_path)
+    with patch(
+        "advancore.agent_runner.worker.pwd.getpwuid",
+        return_value=SimpleNamespace(pw_dir=str(owner_home), pw_name="owner"),
+    ), patch(
+        "advancore.agent_runner.worker.json.loads", side_effect=RecursionError
+    ):
+        result = _kimi_runtime_preflight(str(executable), repository, 60)
+    assert result is not None
+    assert result.terminal_reason == "authority_blocked"
+
+
+def test_kimi_version_probe_is_isolated_and_bounded(tmp_path):
+    scratch = tmp_path / "scratch"
+    scratch.mkdir()
+    with patch(
+        "advancore.agent_runner.worker._isolate_kimi_command",
+        return_value=[sys.executable, "-c", "print('0.38.0')"],
+    ) as isolate:
+        version = _probe_kimi_cli_version(
+            "/owner/.kimi-code/bin/kimi", tmp_path, scratch, {"HOME": "/owner"}
+        )
+    assert version == "Kimi v0.38.0"
+    isolate.assert_called_once()
+
+
+def test_kimi_version_probe_rejects_excessive_output(tmp_path):
+    scratch = tmp_path / "scratch"
+    scratch.mkdir()
+    with patch(
+        "advancore.agent_runner.worker._isolate_kimi_command",
+        return_value=[sys.executable, "-c", "print('x' * 1000)"],
+    ):
+        version = _probe_kimi_cli_version(
+            "/owner/.kimi-code/bin/kimi", tmp_path, scratch, {"HOME": "/owner"}
+        )
+    assert version is None
+
+
+def test_kimi_version_probe_terminates_timed_out_process_group(tmp_path):
+    scratch = tmp_path / "scratch"
+    scratch.mkdir()
+    with patch(
+        "advancore.agent_runner.worker._isolate_kimi_command",
+        return_value=[
+            sys.executable,
+            "-c",
+            "import time; time.sleep(10)",
+        ],
+    ), patch(
+        "advancore.agent_runner.worker.KIMI_VERSION_PROBE_TIMEOUT_SECONDS", 0.05
+    ), patch(
+        "advancore.agent_runner.worker._terminate_process_group",
+        wraps=_terminate_process_group,
+    ) as terminate:
+        version = _probe_kimi_cli_version(
+            "/owner/.kimi-code/bin/kimi", tmp_path, scratch, {"HOME": "/owner"}
+        )
+    assert version is None
+    terminate.assert_called_once()
+
+
+def test_kimi_version_probe_terminates_successful_background_descendant(tmp_path):
+    scratch = tmp_path / "scratch"
+    scratch.mkdir()
+    parent_code = (
+        "import subprocess,sys;"
+        "subprocess.Popen([sys.executable,'-c','import time;time.sleep(10)'],"
+        "stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL);"
+        "print('0.38.0')"
+    )
+    with patch(
+        "advancore.agent_runner.worker._isolate_kimi_command",
+        return_value=[sys.executable, "-c", parent_code],
+    ), patch(
+        "advancore.agent_runner.worker._terminate_process_group",
+        wraps=_terminate_process_group,
+    ) as terminate:
+        version = _probe_kimi_cli_version(
+            "/owner/.kimi-code/bin/kimi", tmp_path, scratch, {"HOME": "/owner"}
+        )
+    assert version is None
+    terminate.assert_called_once()
+
+
+@pytest.mark.parametrize("adapter_type", [KimiWorkerAdapter, KimiSwarmWorkerAdapter])
+def test_kimi_optional_version_probe_never_blocks_launch(tmp_path, adapter_type):
+    owner_home, executable, repository = _create_prewarmed_kimi_home(tmp_path)
+    expected = WorkerResult(True, message="attempted")
+    adapter = adapter_type()
+    with patch(
+        "advancore.agent_runner.worker.pwd.getpwuid",
+        return_value=SimpleNamespace(pw_dir=str(owner_home), pw_name="owner"),
+    ), patch(
+        "advancore.agent_runner.worker.shutil.which", return_value=None
+    ), patch(
+        "advancore.agent_runner.worker._kimi_isolation_preflight", return_value=None
+    ), patch(
+        "advancore.agent_runner.worker._probe_kimi_cli_version", return_value=None
+    ), patch(
+        "advancore.agent_runner.worker.run_bounded_worker_process",
+        return_value=expected,
+    ) as bounded:
+        result = adapter.run("instruction", repository)
+    assert result is expected
+    assert result.cli_version is None
+    bounded.assert_called_once()
+
+
+@pytest.mark.parametrize("adapter_type", [KimiWorkerAdapter, KimiSwarmWorkerAdapter])
+def test_every_sandboxed_kimi_launch_rejects_symlinked_auth_parent(
+    tmp_path, adapter_type
+):
+    owner_home, _, repository = _create_prewarmed_kimi_home(tmp_path)
+    oauth_root = owner_home / ".kimi-code" / "oauth"
+    (oauth_root / "kimi-code").unlink()
+    oauth_root.rmdir()
+    redirected = tmp_path / "redirected-proposal-oauth"
+    redirected.mkdir()
+    (redirected / "kimi-code").write_text("prewarmed", encoding="utf-8")
+    oauth_root.symlink_to(redirected, target_is_directory=True)
+    adapter = adapter_type(implementation_worker=False)
+    with patch(
+        "advancore.agent_runner.worker.pwd.getpwuid",
+        return_value=SimpleNamespace(pw_dir=str(owner_home), pw_name="owner"),
+    ), patch(
+        "advancore.agent_runner.worker.shutil.which", return_value="/usr/bin/kimi"
+    ), patch(
+        "advancore.agent_runner.worker.run_bounded_worker_process"
+    ) as bounded:
+        result = adapter.run("instruction", repository)
+    assert result.success is False
+    assert result.terminal_reason == "launch_failed"
+    assert "path-safety" in result.message
+    bounded.assert_not_called()
+
+
+def test_kimi_environment_never_inherits_unsupported_swarm_concurrency(
+    tmp_path, monkeypatch
+):
+    monkeypatch.setenv("KIMI_CODE_AGENT_SWARM_MAX_CONCURRENCY", "10")
+    environment = _kimi_environment(tmp_path)
+    assert "KIMI_CODE_AGENT_SWARM_MAX_CONCURRENCY" not in environment
 
 
 @pytest.mark.parametrize("adapter_type", [KimiWorkerAdapter, KimiSwarmWorkerAdapter])
