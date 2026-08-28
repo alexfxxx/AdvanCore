@@ -81,6 +81,8 @@ assigned implementation worker; Codex remains controller and final fallback.
   record is enqueued and immediately before it is claimed.
 - Preserved actual enqueue order for equal timestamps and rejected backward
   transition times before they can be persisted.
+- Bound task, lock and state operations to no-follow directory descriptors,
+  rejected hard-linked locks, and enforced one active claim in loaded state.
 - Documented that the queue has no worker-launch, approval, publication, merge,
   database or deployment authority.
 
@@ -97,8 +99,8 @@ None.
 
 ### Verification
 
-- Focused tests: 9 passed.
-- Full isolated suite: 1,271 passed, 2 skipped.
+- Focused tests: 12 passed.
+- Full isolated suite: 1,274 passed, 2 skipped.
 - `git diff --check`: passed.
 
 ### Decisions required

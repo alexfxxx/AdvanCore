@@ -15,8 +15,8 @@ import json
 import os
 from pathlib import Path, PurePosixPath
 import re
+import secrets
 import stat
-import tempfile
 from typing import Iterator
 
 
@@ -74,6 +74,58 @@ def _has_symlink_component(path: Path) -> bool:
     return False
 
 
+def _open_directory_no_follow(path: Path) -> int:
+    """Bind an existing directory without following any path-component link."""
+    absolute = path.absolute()
+    flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0)
+    flags |= getattr(os, "O_NOFOLLOW", 0)
+    descriptor = os.open(absolute.anchor, flags)
+    try:
+        for part in absolute.parts[1:]:
+            child = os.open(part, flags, dir_fd=descriptor)
+            os.close(descriptor)
+            descriptor = child
+        details = os.fstat(descriptor)
+        if not stat.S_ISDIR(details.st_mode):
+            raise TaskQueueError("queue directory path is unsafe")
+        result = descriptor
+        descriptor = -1
+        return result
+    finally:
+        if descriptor >= 0:
+            os.close(descriptor)
+
+
+def _open_verified_owner_directory(path: Path) -> int:
+    """Create and bind an owner-only directory tree without following links."""
+    absolute = path.absolute()
+    flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0)
+    flags |= getattr(os, "O_NOFOLLOW", 0)
+    descriptor = os.open(absolute.anchor, flags)
+    try:
+        for part in absolute.parts[1:]:
+            try:
+                child = os.open(part, flags, dir_fd=descriptor)
+            except FileNotFoundError:
+                try:
+                    os.mkdir(part, 0o700, dir_fd=descriptor)
+                except FileExistsError:
+                    pass
+                child = os.open(part, flags, dir_fd=descriptor)
+            os.close(descriptor)
+            descriptor = child
+        details = os.fstat(descriptor)
+        if not stat.S_ISDIR(details.st_mode) or details.st_uid != os.getuid():
+            raise TaskQueueError("queue directory owner is unsafe")
+        os.fchmod(descriptor, 0o700)
+        result = descriptor
+        descriptor = -1
+        return result
+    finally:
+        if descriptor >= 0:
+            os.close(descriptor)
+
+
 class GovernedTaskQueue:
     """Persist bounded task metadata; never launch or authorize a worker."""
 
@@ -93,31 +145,42 @@ class GovernedTaskQueue:
         self.lock_path = self.state_path.with_suffix(self.state_path.suffix + ".lock")
 
     @contextmanager
-    def _locked(self, *, exclusive: bool) -> Iterator[None]:
+    def _locked(self, *, exclusive: bool) -> Iterator[int]:
+        parent_descriptor: int | None = None
+        descriptor: int | None = None
         try:
-            self.state_path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
-            if _has_symlink_component(self.state_path.parent):
-                raise TaskQueueError("queue directory became unsafe")
-            os.chmod(self.state_path.parent, 0o700)
+            parent_descriptor = _open_verified_owner_directory(
+                self.state_path.parent
+            )
             flags = os.O_RDWR | os.O_CREAT
             if hasattr(os, "O_NOFOLLOW"):
                 flags |= os.O_NOFOLLOW
-            descriptor = os.open(self.lock_path, flags, 0o600)
-            os.fchmod(descriptor, 0o600)
+            descriptor = os.open(
+                self.lock_path.name, flags, 0o600, dir_fd=parent_descriptor
+            )
+            details = os.fstat(descriptor)
+            if (
+                not stat.S_ISREG(details.st_mode)
+                or details.st_uid != os.getuid()
+                or details.st_nlink != 1
+                or stat.S_IMODE(details.st_mode) & 0o077
+            ):
+                raise TaskQueueError("queue lock file is unsafe")
+            fcntl.flock(descriptor, fcntl.LOCK_EX if exclusive else fcntl.LOCK_SH)
+            yield parent_descriptor
         except TaskQueueError:
             raise
         except OSError as exc:
             raise TaskQueueError("queue lock cannot be opened safely") from exc
-        try:
-            fcntl.flock(descriptor, fcntl.LOCK_EX if exclusive else fcntl.LOCK_SH)
-            yield
-        except OSError as exc:
-            raise TaskQueueError("queue lock failed") from exc
         finally:
-            try:
-                fcntl.flock(descriptor, fcntl.LOCK_UN)
-            finally:
+            if descriptor is not None:
+                try:
+                    fcntl.flock(descriptor, fcntl.LOCK_UN)
+                except OSError:
+                    pass
                 os.close(descriptor)
+            if parent_descriptor is not None:
+                os.close(parent_descriptor)
 
     def _validate_record(self, record: TaskQueueRecord, now: datetime) -> TaskQueueRecord:
         match = _TASK_PATH.fullmatch(record.task_path)
@@ -168,17 +231,21 @@ class GovernedTaskQueue:
         match = _TASK_PATH.fullmatch(task_path)
         if match is None or match.group(1) != task_id:
             raise TaskQueueError("governed task path is invalid")
-        candidate = self.repository_root / PurePosixPath(task_path)
-        if _has_symlink_component(candidate):
-            raise TaskQueueError("governed task path contains a symbolic link")
-        flags = os.O_RDONLY
-        if hasattr(os, "O_NOFOLLOW"):
-            flags |= os.O_NOFOLLOW
+        root_descriptor: int | None = None
+        tasks_descriptor: int | None = None
+        descriptor: int | None = None
         try:
-            descriptor = os.open(candidate, flags)
-        except OSError as exc:
-            raise TaskQueueError("governed task file cannot be opened safely") from exc
-        try:
+            root_descriptor = _open_directory_no_follow(self.repository_root)
+            directory_flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0)
+            directory_flags |= getattr(os, "O_NOFOLLOW", 0)
+            tasks_descriptor = os.open(
+                "tasks", directory_flags, dir_fd=root_descriptor
+            )
+            descriptor = os.open(
+                PurePosixPath(task_path).name,
+                os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0),
+                dir_fd=tasks_descriptor,
+            )
             details = os.fstat(descriptor)
             if (
                 not stat.S_ISREG(details.st_mode)
@@ -201,9 +268,14 @@ class GovernedTaskQueue:
         except TaskQueueError:
             raise
         except (OSError, UnicodeError) as exc:
-            raise TaskQueueError("governed task file cannot be read") from exc
+            raise TaskQueueError("governed task file cannot be opened safely") from exc
         finally:
-            os.close(descriptor)
+            if descriptor is not None:
+                os.close(descriptor)
+            if tasks_descriptor is not None:
+                os.close(tasks_descriptor)
+            if root_descriptor is not None:
+                os.close(root_descriptor)
 
         statuses = [
             match.group(1).upper()
@@ -220,11 +292,17 @@ class GovernedTaskQueue:
         if len(statuses) != 1 or statuses[0] not in _EXECUTABLE_TASK_STATUSES:
             raise TaskQueueError("governed task is not approved for execution")
 
-    def _load_unlocked(self, now: datetime) -> list[TaskQueueRecord]:
-        if not self.state_path.exists():
-            return []
+    def _load_unlocked(
+        self, now: datetime, parent_descriptor: int
+    ) -> list[TaskQueueRecord]:
+        descriptor: int | None = None
         try:
-            details = self.state_path.lstat()
+            descriptor = os.open(
+                self.state_path.name,
+                os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0),
+                dir_fd=parent_descriptor,
+            )
+            details = os.fstat(descriptor)
             if (
                 not stat.S_ISREG(details.st_mode)
                 or details.st_uid != os.getuid()
@@ -233,11 +311,18 @@ class GovernedTaskQueue:
                 or details.st_size > _MAX_BYTES
             ):
                 raise TaskQueueError("queue state file is unsafe")
-            raw = json.loads(self.state_path.read_text(encoding="utf-8"))
+            with os.fdopen(descriptor, "r", encoding="utf-8") as handle:
+                descriptor = None
+                raw = json.load(handle)
+        except FileNotFoundError:
+            return []
         except TaskQueueError:
             raise
         except (OSError, UnicodeError, json.JSONDecodeError) as exc:
             raise TaskQueueError("queue state cannot be read") from exc
+        finally:
+            if descriptor is not None:
+                os.close(descriptor)
         if not isinstance(raw, list) or len(raw) > _MAX_RECORDS:
             raise TaskQueueError("queue state is not a bounded list")
         records: list[TaskQueueRecord] = []
@@ -283,10 +368,12 @@ class GovernedTaskQueue:
             for earlier, later in zip(records, records[1:])
         ):
             raise TaskQueueError("queue order is invalid")
+        if sum(record.status == TaskQueueStatus.RUNNING for record in records) > 1:
+            raise TaskQueueError("queue contains multiple running claims")
         return records
 
     def _write_unlocked(
-        self, records: list[TaskQueueRecord], now: datetime
+        self, records: list[TaskQueueRecord], now: datetime, parent_descriptor: int
     ) -> None:
         if len(records) > _MAX_RECORDS:
             raise TaskQueueError("queue record limit reached")
@@ -307,30 +394,46 @@ class GovernedTaskQueue:
         encoded = json.dumps(payload, sort_keys=True, separators=(",", ":")) + "\n"
         if len(encoded.encode("utf-8")) > _MAX_BYTES:
             raise TaskQueueError("queue state exceeds its size limit")
-        temporary: Path | None = None
+        temporary_name = (
+            f".{self.state_path.name}.{os.getpid()}.{secrets.token_hex(8)}.tmp"
+        )
+        temporary_descriptor: int | None = None
         try:
-            with tempfile.NamedTemporaryFile(
-                "w", encoding="utf-8", dir=self.state_path.parent, delete=False
-            ) as handle:
-                temporary = Path(handle.name)
-                os.chmod(temporary, 0o600)
+            temporary_descriptor = os.open(
+                temporary_name,
+                os.O_CREAT
+                | os.O_EXCL
+                | os.O_WRONLY
+                | getattr(os, "O_NOFOLLOW", 0),
+                0o600,
+                dir_fd=parent_descriptor,
+            )
+            with os.fdopen(temporary_descriptor, "w", encoding="utf-8") as handle:
+                temporary_descriptor = None
                 handle.write(encoded)
                 handle.flush()
                 os.fsync(handle.fileno())
-            os.replace(temporary, self.state_path)
-            os.chmod(self.state_path, 0o600)
+            os.replace(
+                temporary_name,
+                self.state_path.name,
+                src_dir_fd=parent_descriptor,
+                dst_dir_fd=parent_descriptor,
+            )
+            os.fsync(parent_descriptor)
         except OSError as exc:
-            if temporary is not None:
-                try:
-                    temporary.unlink(missing_ok=True)
-                except OSError:
-                    pass
+            try:
+                os.unlink(temporary_name, dir_fd=parent_descriptor)
+            except OSError:
+                pass
             raise TaskQueueError("queue state cannot be written") from exc
+        finally:
+            if temporary_descriptor is not None:
+                os.close(temporary_descriptor)
 
     def list_records(self, *, now: datetime | None = None) -> list[TaskQueueRecord]:
         current = _utc(now or datetime.now(timezone.utc))
-        with self._locked(exclusive=False):
-            return self._load_unlocked(current)
+        with self._locked(exclusive=False) as parent_descriptor:
+            return self._load_unlocked(current, parent_descriptor)
 
     def enqueue(
         self,
@@ -347,8 +450,8 @@ class GovernedTaskQueue:
             ),
             current,
         )
-        with self._locked(exclusive=True):
-            records = self._load_unlocked(current)
+        with self._locked(exclusive=True) as parent_descriptor:
+            records = self._load_unlocked(current, parent_descriptor)
             self._validate_governed_task_file(task_id, task_path)
             if any(item.task_id == task_id for item in records):
                 raise TaskQueueError("task is already present in the queue")
@@ -357,13 +460,13 @@ class GovernedTaskQueue:
             if records and current < records[-1].enqueued_at:
                 raise TaskQueueError("enqueue timestamp moved backward")
             records.append(record)
-            self._write_unlocked(records, current)
+            self._write_unlocked(records, current, parent_descriptor)
         return record
 
     def claim_next(self, *, now: datetime | None = None) -> TaskQueueRecord | None:
         current = _utc(now or datetime.now(timezone.utc))
-        with self._locked(exclusive=True):
-            records = self._load_unlocked(current)
+        with self._locked(exclusive=True) as parent_descriptor:
+            records = self._load_unlocked(current, parent_descriptor)
             changed = False
             for index, record in enumerate(records):
                 if record.status != TaskQueueStatus.RUNNING:
@@ -400,10 +503,10 @@ class GovernedTaskQueue:
                         current,
                     )
                     records[index] = claimed
-                    self._write_unlocked(records, current)
+                    self._write_unlocked(records, current, parent_descriptor)
                     return claimed
             if changed:
-                self._write_unlocked(records, current)
+                self._write_unlocked(records, current, parent_descriptor)
             return None
 
     def _finish(
@@ -411,8 +514,8 @@ class GovernedTaskQueue:
     ) -> TaskQueueRecord:
         if not _TASK_ID.fullmatch(task_id):
             raise TaskQueueError("task identifier is invalid")
-        with self._locked(exclusive=True):
-            records = self._load_unlocked(current)
+        with self._locked(exclusive=True) as parent_descriptor:
+            records = self._load_unlocked(current, parent_descriptor)
             for index, record in enumerate(records):
                 if record.task_id != task_id:
                     continue
@@ -431,7 +534,7 @@ class GovernedTaskQueue:
                     replace(record, status=status, finished_at=current), current
                 )
                 records[index] = finished
-                self._write_unlocked(records, current)
+                self._write_unlocked(records, current, parent_descriptor)
                 return finished
             raise TaskQueueError("task is not present in the queue")
 

@@ -2,6 +2,7 @@
 
 from datetime import datetime, timedelta, timezone
 import json
+import os
 from pathlib import Path
 
 import pytest
@@ -80,6 +81,23 @@ def test_enqueue_requires_existing_executable_governed_task(tmp_path):
     ).status == TaskQueueStatus.QUEUED
 
 
+def test_task_directory_symlink_swap_fails_closed(tmp_path):
+    queue, _ = _queue(tmp_path)
+    repository = tmp_path / "repo"
+    tasks = repository / "tasks"
+    real_tasks = repository / "real-tasks"
+    tasks.rename(real_tasks)
+    tasks.symlink_to(real_tasks, target_is_directory=True)
+
+    with pytest.raises(TaskQueueError, match="cannot be opened safely"):
+        queue.enqueue(
+            "TASK-139",
+            "tasks/TASK-139-worker-timeline.md",
+            "kimi",
+            now=_time(1),
+        )
+
+
 def test_duplicate_and_invalid_values_fail_closed(tmp_path):
     queue, _ = _queue(tmp_path)
     queue.enqueue("TASK-139", "tasks/TASK-139-worker-timeline.md", "kimi-swarm", now=_time(1))
@@ -152,6 +170,58 @@ def test_corrupt_oversized_future_and_in_repository_state_fail_closed(tmp_path):
     state_path.parent.mkdir(mode=0o700)
     state_path.write_text("not-json", encoding="utf-8")
     with pytest.raises(TaskQueueError):
+        queue.list_records(now=_time(3))
+
+
+def test_swapped_state_parent_and_hardlinked_lock_fail_closed(tmp_path):
+    repository = tmp_path / "repo"
+    repository.mkdir()
+    controller = tmp_path / "controller"
+    controller.mkdir(mode=0o700)
+    state_path = controller / "task-queue.json"
+    queue = GovernedTaskQueue(repository, state_path)
+
+    real_controller = tmp_path / "real-controller"
+    controller.rename(real_controller)
+    controller.symlink_to(real_controller, target_is_directory=True)
+    with pytest.raises(TaskQueueError):
+        queue.list_records(now=_time(1))
+
+    controller.unlink()
+    real_controller.rename(controller)
+    protected = tmp_path / "protected.txt"
+    protected.write_text("owner data", encoding="utf-8")
+    protected.chmod(0o600)
+    os.link(protected, state_path.with_suffix(".json.lock"))
+    with pytest.raises(TaskQueueError, match="lock file is unsafe"):
+        queue.list_records(now=_time(1))
+    assert protected.read_text(encoding="utf-8") == "owner data"
+    assert protected.stat().st_mode & 0o077 == 0
+
+
+def test_multiple_persisted_running_claims_fail_closed(tmp_path):
+    queue, state_path = _queue(tmp_path)
+    state_path.parent.mkdir(mode=0o700)
+    records = []
+    for task_id, task_path in (
+        ("TASK-139", "tasks/TASK-139-worker-timeline.md"),
+        ("TASK-140", "tasks/TASK-140-dashboard.md"),
+    ):
+        records.append(
+            {
+                "task_id": task_id,
+                "task_path": task_path,
+                "worker": "kimi",
+                "status": "RUNNING",
+                "enqueued_at": _time(1).isoformat(),
+                "claimed_at": _time(2).isoformat(),
+                "finished_at": None,
+            }
+        )
+    state_path.write_text(json.dumps(records), encoding="utf-8")
+    state_path.chmod(0o600)
+
+    with pytest.raises(TaskQueueError, match="multiple running claims"):
         queue.list_records(now=_time(3))
 
     state_path.write_text("x" * (600 * 1024), encoding="utf-8")
