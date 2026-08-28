@@ -169,3 +169,56 @@ PATH-resolved launches. Authentication, credential-mirror, executable and trust
 files are accepted only when every path component below the canonical Kimi home
 is non-symlinked; malformed or recursively nested trust JSON is ignored
 fail-closed.
+
+## Automatic persistent Kimi fallback bridge
+
+A pure controller-owned bridge connects a bounded persistent Kimi-Swarm launch
+result to the existing governed failover checkpoint. Its purpose is to decide
+whether Kimi-Swarm may be retired and Gemini selected next, or Gemini skipped in
+favour of Codex, after an eligible provider-availability failure and only while
+the repository fingerprint is unchanged.
+
+Inputs are the existing ``FailoverCheckpoint``, a
+``PersistentKimiLaunchResult``, the current repository fingerprint, and explicit
+bounded ``WorkerAvailabilityEvidence`` for the approved fallback workers. The
+bridge returns only whether a transition occurred, the selected next worker, the
+mapped ``ProviderFailure`` class, and the resulting checkpoint.
+
+Eligibility is strict and fail-closed:
+
+- The checkpoint must currently select ``kimi-swarm``.
+- The checkpoint role must be exactly ``IMPLEMENTATION``.
+- The launch result must report ``ok=False``, ``status=WORKER_FAILED``, and
+  ``reason=WORKER_FAILED``.
+- The repository fingerprint must equal the checkpoint fingerprint.
+
+Only three failure mappings are accepted:
+
+- ``worker_failure_classification`` of ``EXECUTABLE_NOT_FOUND`` or ``SPAWN_ERROR``
+  paired only with ``worker_terminal_reason=launch_failed`` maps to
+  ``EXECUTABLE_UNAVAILABLE``.
+- ``worker_terminal_reason`` of ``quota_or_capacity`` maps to ``QUOTA_OR_CAPACITY``.
+- ``worker_terminal_reason`` of ``credential_access_required`` maps to
+  ``AUTHENTICATION_UNAVAILABLE``.
+
+Only one mapping may be present; contradictory or incomplete metadata fails
+closed. Availability evidence must use exact bounded evidence and enum types,
+and Gemini's state must be explicitly present before Codex can be selected.
+Any other classification, terminal reason, or missing metadata fails closed with
+no transition. Preflight failures, postcheck failures, successful launches,
+worker exceptions, runtime errors, timeout, cancellation, authority block, and
+unknown or malformed evidence are all blocked.
+
+When eligible, the bridge delegates next-worker selection to the existing
+immutable failover checkpoint using ``failed_worker="kimi-swarm"`` and the
+mapped failure class. The fixed implementation route therefore selects Gemini
+before Codex, and the existing no-repetition logic prevents Kimi-Swarm from
+being selected again. If no approved worker is available, evidence is malformed,
+or the route is exhausted, the bridge returns the original checkpoint unchanged.
+
+The bridge itself never launches a worker, consumes standing authority, writes a
+checkpoint, modifies queue state, or performs Git or publication operations. When
+the bridge returns a selected next worker, the controller still launches that
+worker through the existing ``AuthorizedWorkerAdapter`` and
+``build_kimi_first_worker_route`` authority and integrity gates. Standing
+authority is consumed at launch, not by the bridge.
