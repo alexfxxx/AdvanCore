@@ -102,6 +102,10 @@ def test_gemini_missing_executable_and_credential_input_fail_closed(tmp_path: Pa
         missing = adapter.run("bounded work", tmp_path)
     assert not missing.success
     assert missing.terminal_reason == "launch_failed"
+    assert missing.failure_classification == "EXECUTABLE_NOT_FOUND"
+    assert missing.executable_resolution == "unavailable"
+    assert missing.runtime_path_profile == "gemini_minimal"
+    assert missing.elapsed_seconds == 0.0
     assert "not found in PATH" in missing.message
 
     blocked = adapter.run("OPENAI_API_KEY=definitely-real-secret-value", tmp_path)

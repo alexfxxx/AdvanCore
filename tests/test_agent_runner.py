@@ -1131,6 +1131,16 @@ class TestAuditRecords:
             "post_verification_ok",
             "final_status",
             "changed_paths",
+            "worker_started_at",
+            "worker_finished_at",
+            "worker_elapsed_seconds",
+            "worker_returncode",
+            "worker_terminal_reason",
+            "worker_failure_classification",
+            "worker_resolved_executable",
+            "worker_executable_resolution",
+            "worker_cli_version",
+            "worker_runtime_path_profile",
         }
         assert set(record.keys()) == expected_keys
         raw = json.dumps(record)

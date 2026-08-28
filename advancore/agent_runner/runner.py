@@ -285,6 +285,7 @@ def _write_audit(result: RunnerResult, mode: str) -> None:
     pre = result.pre_git_info or result.git_info
     post = result.post_git_info
     worker_success = None
+    worker_result = result.worker_result
     if result.worker_result is not None:
         worker_success = result.worker_result.success
 
@@ -306,6 +307,24 @@ def _write_audit(result: RunnerResult, mode: str) -> None:
         changed_paths=result.post_verification.changed_paths
         if result.post_verification is not None
         else None,
+        worker_started_at=worker_result.started_at if worker_result else None,
+        worker_finished_at=worker_result.finished_at if worker_result else None,
+        worker_elapsed_seconds=worker_result.elapsed_seconds if worker_result else None,
+        worker_returncode=worker_result.returncode if worker_result else None,
+        worker_terminal_reason=worker_result.terminal_reason if worker_result else None,
+        worker_failure_classification=(
+            worker_result.failure_classification if worker_result else None
+        ),
+        worker_resolved_executable=(
+            worker_result.resolved_executable if worker_result else None
+        ),
+        worker_executable_resolution=(
+            worker_result.executable_resolution if worker_result else None
+        ),
+        worker_cli_version=worker_result.cli_version if worker_result else None,
+        worker_runtime_path_profile=(
+            worker_result.runtime_path_profile if worker_result else None
+        ),
     )
 
     try:
