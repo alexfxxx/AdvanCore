@@ -155,6 +155,11 @@ from advancore.agent_runner.persistent_kimi_launch import (
     PersistentKimiLaunchStatus,
     PersistentKimiSwarmLaunchService,
 )
+from advancore.agent_runner.persistent_worker_failover import (
+    PersistentWorkerFailoverDecision,
+    PersistentWorkerFailoverError,
+    transition_persistent_kimi_failover,
+)
 from advancore.agent_runner.persistent_kimi_reporting import (
     format_persistent_kimi_launch_result,
 )
@@ -337,7 +342,10 @@ __all__ = [
     "PersistentKimiLaunchResult",
     "PersistentKimiLaunchStatus",
     "PersistentKimiSwarmLaunchService",
+    "PersistentWorkerFailoverDecision",
+    "PersistentWorkerFailoverError",
     "format_persistent_kimi_launch_result",
+    "transition_persistent_kimi_failover",
     "RehearsalCheck",
     "format_multi_worker_rehearsal",
     "run_multi_worker_governance_rehearsal",

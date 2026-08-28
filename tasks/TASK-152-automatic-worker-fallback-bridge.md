@@ -1,6 +1,6 @@
 # TASK-152 — Automatic Worker Fallback Bridge
 
-STATUS: READY
+STATUS: COMPLETE
 
 ## Objective
 
@@ -56,14 +56,28 @@ after an eligible provider-availability failure and unchanged repository state.
 
 ## Acceptance criteria
 
-- [ ] Eligible Kimi provider failures deterministically select Gemini, then
+- [x] Eligible Kimi provider failures deterministically select Gemini, then
   Codex only when Gemini has explicit unavailable evidence.
-- [ ] Unsafe, unknown or repository-changing Kimi outcomes never fall through
+- [x] Unsafe, unknown or repository-changing Kimi outcomes never fall through
   to another worker.
-- [ ] The bridge stores and returns bounded controller metadata only.
-- [ ] Focused tests and exact scope verification pass.
+- [x] The bridge stores and returns bounded controller metadata only.
+- [x] Focused tests and exact scope verification pass.
 
 ## Owner decisions
 
 None. This is the unattended, fail-closed TASK-152 behavior already approved by
 the owner.
+
+## Completion report
+
+- Kimi Swarm v0.39.0 implemented the four-file scope first and completed in
+  720.266 seconds without Gemini or Codex implementation fallback.
+- Bugbot reproduced strict role, explicit Gemini evidence, contradictory
+  metadata, forged evidence and malformed-checkpoint privacy defects. Bounded
+  controller repairs closed all findings; the final Bugbot review was clean.
+- Focused persistent failover, safe failover and bounded reporting tests:
+  68 passed.
+- Dependency-independent local regression suite: 1,478 passed, 2 skipped.
+- `py_compile`, `git diff --check` and exact changed-file scope checks passed.
+- The bridge has no worker launch, authority consumption, queue/state write,
+  Git mutation, approval or publication capability.
