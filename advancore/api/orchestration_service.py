@@ -239,26 +239,25 @@ class GovernedOrchestrationService:
             )
             self._jobs[job_id] = record
             self._active_job_id = job_id
-
-        thread = threading.Thread(
-            target=self._run_job,
-            args=(job_id, config, lock_token),
-            name=f"advancore-{job_id}",
-            daemon=False,
-        )
-        with self._lock:
+            thread = threading.Thread(
+                target=self._run_job,
+                args=(job_id, config, lock_token),
+                name=f"advancore-{job_id}",
+                daemon=False,
+            )
             self._active_thread = thread
-        try:
-            thread.start()
-        except Exception as exc:
-            with self._lock:
+            try:
+                # Registration and start are atomic with respect to shutdown.
+                # The worker blocks on this lock until the start state is visible.
+                thread.start()
+            except Exception as exc:
                 self._jobs.pop(job_id, None)
                 self._active_job_id = None
                 self._active_thread = None
-            self._release_repository_lock(job_id, lock_token)
-            raise OrchestrationJobBusy(
-                "The governed orchestration job could not start safely."
-            ) from exc
+                self._release_repository_lock(job_id, lock_token)
+                raise OrchestrationJobBusy(
+                    "The governed orchestration job could not start safely."
+                ) from exc
         return self.get_job(job_id)
 
     def _prepare_lock_parent(self) -> None:

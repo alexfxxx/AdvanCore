@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import ipaddress
 import re
 import secrets
 
@@ -39,7 +40,24 @@ def require_run_id(run_id: str) -> str:
     return run_id
 
 
+def require_loopback_peer(request: Request) -> None:
+    client = request.client
+    try:
+        address = ipaddress.ip_address(client.host if client is not None else "")
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Local controller access requires a verified loopback peer.",
+        ) from exc
+    if not address.is_loopback:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Local controller access requires a verified loopback peer.",
+        )
+
+
 def require_local_action(request: Request) -> None:
+    require_loopback_peer(request)
     origin = request.headers.get("origin")
     if origin not in request.app.state.allowed_origins:
         raise HTTPException(
@@ -68,7 +86,11 @@ def _job_error(exc: RuntimeError) -> HTTPException:
     return HTTPException(status.HTTP_404_NOT_FOUND, detail=str(exc))
 
 
-@router.get("/session", response_model=LocalActionSessionResponse)
+@router.get(
+    "/session",
+    response_model=LocalActionSessionResponse,
+    dependencies=[Depends(require_loopback_peer)],
+)
 def local_session(request: Request, response: Response) -> LocalActionSessionResponse:
     response.headers["Cache-Control"] = "no-store"
     return LocalActionSessionResponse(action_token=request.app.state.action_token)

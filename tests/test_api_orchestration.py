@@ -127,7 +127,8 @@ def _client(tmp_path: Path, service: FakeOrchestrationService):
             repo_root=tmp_path,
             frontend_dir=frontend,
             orchestration_service=service,
-        )
+        ),
+        client=("127.0.0.1", 50000),
     )
 
 
@@ -175,6 +176,33 @@ def test_start_requires_allowed_origin_token_and_confirmation(tmp_path):
     assert missing_origin.status_code == 403
     assert wrong_token.status_code == 403
     assert unconfirmed.status_code == 400
+    assert service.calls == []
+
+
+def test_session_and_mutations_require_actual_loopback_peer(tmp_path):
+    service = FakeOrchestrationService()
+    frontend = tmp_path / "frontend"
+    frontend.mkdir()
+    (frontend / "index.html").write_text("<!doctype html>", encoding="utf-8")
+    app = create_app(
+        repo_root=tmp_path,
+        frontend_dir=frontend,
+        orchestration_service=service,
+    )
+    with TestClient(app, client=("203.0.113.10", 50000)) as remote:
+        session = remote.get("/api/session")
+        mutation = remote.post(
+            "/api/orchestrations",
+            json={"goal": "Improve dispatch", "confirmed": True},
+            headers={
+                "Host": "localhost:8000",
+                "Origin": ORIGIN,
+                "X-AdvanCore-Action-Token": "unavailable",
+            },
+        )
+
+    assert session.status_code == 403
+    assert mutation.status_code == 403
     assert service.calls == []
 
 
@@ -411,6 +439,62 @@ def test_shutdown_waits_for_active_governed_work_and_stops_new_intake(tmp_path):
     assert shutdown_done.is_set()
     assert service.get_job(job.job_id).terminal
     assert not lock_path.exists()
+
+
+def test_shutdown_cannot_miss_or_join_an_unstarted_job(monkeypatch, tmp_path):
+    real_thread = Thread
+    start_entered = Event()
+    permit_start = Event()
+    submit_done = Event()
+    shutdown_done = Event()
+    errors = []
+
+    class DelayedStartThread(real_thread):
+        def start(self):
+            start_entered.set()
+            permit_start.wait(timeout=2)
+            return super().start()
+
+    monkeypatch.setattr(
+        orchestration_service_module.threading, "Thread", DelayedStartThread
+    )
+    service = GovernedOrchestrationService(
+        tmp_path,
+        runner=lambda *_args: _result(),
+        repository_lock_path=tmp_path / "controller-state" / "repository.lock",
+    )
+
+    def submit():
+        try:
+            service.start("Governed goal")
+        except Exception as exc:  # pragma: no cover - assertion captures detail
+            errors.append(exc)
+        finally:
+            submit_done.set()
+
+    def stop():
+        try:
+            service.shutdown()
+        except Exception as exc:  # pragma: no cover - assertion captures detail
+            errors.append(exc)
+        finally:
+            shutdown_done.set()
+
+    submit_thread = real_thread(target=submit)
+    submit_thread.start()
+    assert start_entered.wait(timeout=1)
+    shutdown_thread = real_thread(target=stop)
+    shutdown_thread.start()
+    time.sleep(0.05)
+    assert not shutdown_done.is_set()
+
+    permit_start.set()
+    submit_thread.join(timeout=2)
+    shutdown_thread.join(timeout=2)
+
+    assert submit_done.is_set()
+    assert shutdown_done.is_set()
+    assert errors == []
 
 
 def test_new_job_discovers_checkpoint_and_exposes_live_phase(monkeypatch, tmp_path):

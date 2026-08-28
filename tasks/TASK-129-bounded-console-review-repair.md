@@ -35,3 +35,13 @@ policy, publication, deployment, or `main` change occurred.
 Verification on 28 August 2026: 41 focused tests passed; the complete suite
 passed with 1,287 tests and 2 intentional skips; JavaScript and shell syntax
 checks passed; `git diff --check` passed.
+
+Post-rebase independent review found and repaired two additional bounded
+defects: authority-bearing HTTP requests now require the actual ASGI peer IP to
+be loopback before a session token is issued or a mutation is accepted, and
+worker-thread registration/start is atomic with graceful shutdown. Regression
+tests cover spoofed loopback headers and shutdown during delayed thread start.
+Bugbot's repair review was clean. The current base's pre-existing suite passed
+with 1,381 tests and 2 intentional skips; the complete dependency-installed
+suite is delegated to the isolated GitHub PR runner because no local package
+installation was authorized.
