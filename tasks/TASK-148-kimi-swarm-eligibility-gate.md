@@ -26,6 +26,10 @@ one deterministic gate combining those facts before future launch integration.
 - Require an active `kimi-swarm` TASK-145 reservation for exactly the same
   case-insensitive path set.
 - Require TASK-146 workspace readiness and exact TASK-147 manifest verification.
+- Bind manifest proof to the same task, exact path set, task-specific branch,
+  verification time and bounded verification identity.
+- Enforce the queue's two-hour claim-freshness boundary and TASK-145's four-hour
+  maximum reservation lease.
 - Treat work as suitable only when either:
   - the governed exact scope contains at least 11 paths; or
   - the controller explicitly classifies it as architecture work.
@@ -75,7 +79,7 @@ remain isolated through separate worktrees and TASK-145 reservations.
   TASK-146 workspace readiness and TASK-147 scope-manifest verification.
 - Kept worker launch, worker selection, repository mutation, credentials and
   approval actions outside this component.
-- Verification on 28 August 2026:
-  - focused suite: `14 passed`;
-  - full suite: `1377 passed, 2 skipped`;
+- Verification on 28 August 2026 (including the bounded Bugbot repair cycle):
+  - focused suite: `17 passed`;
+  - full suite: `1380 passed, 2 skipped`;
   - changed-file scope: the four allowed TASK-148 files only.

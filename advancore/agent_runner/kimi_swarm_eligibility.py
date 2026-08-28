@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from enum import Enum
 import re
 
@@ -25,7 +25,10 @@ from advancore.agent_runner.task_queue import TaskQueueRecord, TaskQueueStatus
 _TASK_ID = re.compile(r"^TASK-[0-9]{3}$")
 _TASK_PATH = re.compile(r"^tasks/(TASK-[0-9]{3})-[A-Za-z0-9_.-]+\.md$")
 _FEATURE_BRANCH = re.compile(r"^task-[a-z0-9][a-z0-9-]{0,100}$")
+_VERIFICATION_ID = re.compile(r"^[A-Za-z0-9_-]{16,128}$")
 _MULTI_FILE_MINIMUM = 11
+_MAX_QUEUE_CLAIM_AGE = timedelta(hours=2)
+_MAX_RESERVATION_LEASE = timedelta(hours=4)
 
 
 class SwarmWorkKind(str, Enum):
@@ -51,6 +54,17 @@ class SwarmEligibilityResult:
     scope_count: int = 0
 
 
+@dataclass(frozen=True)
+class ManifestVerificationEvidence:
+    """Identity-bound evidence produced after reading back one scope manifest."""
+
+    task_id: str
+    allowed_paths: tuple[str, ...]
+    workspace_branch: str
+    verified_at: datetime
+    verification_id: str
+
+
 def _utc(value: datetime) -> datetime | None:
     if not isinstance(value, datetime) or value.tzinfo is None:
         return None
@@ -65,7 +79,7 @@ def evaluate_kimi_swarm_eligibility(
     queue_record: TaskQueueRecord,
     reservation: ScopeReservation,
     workspace: PersistentWorkspaceReadiness,
-    manifest_verified: bool,
+    manifest_verification: ManifestVerificationEvidence,
     now: datetime,
 ) -> SwarmEligibilityResult:
     """Return a decision only; never mutate state, select or launch a worker."""
@@ -85,6 +99,7 @@ def evaluate_kimi_swarm_eligibility(
     if (
         not isinstance(queue_record, TaskQueueRecord)
         or queue_record.task_id != task_id
+        or not isinstance(queue_record.task_path, str)
         or (task_match := _TASK_PATH.fullmatch(queue_record.task_path)) is None
         or task_match.group(1) != task_id
         or queue_record.worker != "kimi-swarm"
@@ -102,6 +117,7 @@ def evaluate_kimi_swarm_eligibility(
         or claimed is None
         or claimed < enqueued
         or claimed > current
+        or current - claimed >= _MAX_QUEUE_CLAIM_AGE
     ):
         return SwarmEligibilityResult(
             False, SwarmEligibilityReason.TIME_INVALID, scope_count
@@ -137,22 +153,49 @@ def evaluate_kimi_swarm_eligibility(
         or expires <= reserved
         or reserved > current
         or current >= expires
+        or expires - reserved > _MAX_RESERVATION_LEASE
     ):
         return SwarmEligibilityResult(
             False, SwarmEligibilityReason.TIME_INVALID, scope_count
         )
 
+    expected_branch_prefix = f"task-{task_id.removeprefix('TASK-')}-".lower()
     if (
         not isinstance(workspace, PersistentWorkspaceReadiness)
         or not workspace.eligible
         or workspace.reason != WorkspaceReadinessReason.READY
         or not isinstance(workspace.branch, str)
         or not _FEATURE_BRANCH.fullmatch(workspace.branch)
+        or not workspace.branch.startswith(expected_branch_prefix)
     ):
         return SwarmEligibilityResult(
             False, SwarmEligibilityReason.WORKSPACE_NOT_READY, scope_count
         )
-    if manifest_verified is not True:
+    if not isinstance(manifest_verification, ManifestVerificationEvidence):
+        return SwarmEligibilityResult(
+            False, SwarmEligibilityReason.MANIFEST_NOT_VERIFIED, scope_count
+        )
+    verified = _utc(manifest_verification.verified_at)
+    try:
+        verified_manifest = build_kimi_scope_manifest(
+            manifest_verification.task_id,
+            manifest_verification.allowed_paths,
+        )
+    except KimiScopeManifestError:
+        return SwarmEligibilityResult(
+            False, SwarmEligibilityReason.MANIFEST_NOT_VERIFIED, scope_count
+        )
+    if (
+        manifest_verification.task_id != task_id
+        or verified_manifest != manifest
+        or manifest_verification.workspace_branch != workspace.branch
+        or verified is None
+        or verified < claimed
+        or verified < reserved
+        or verified > current
+        or not isinstance(manifest_verification.verification_id, str)
+        or not _VERIFICATION_ID.fullmatch(manifest_verification.verification_id)
+    ):
         return SwarmEligibilityResult(
             False, SwarmEligibilityReason.MANIFEST_NOT_VERIFIED, scope_count
         )

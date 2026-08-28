@@ -6,6 +6,7 @@ from datetime import datetime, timedelta, timezone
 import pytest
 
 from advancore.agent_runner.kimi_swarm_eligibility import (
+    ManifestVerificationEvidence,
     SwarmEligibilityReason,
     SwarmWorkKind,
     evaluate_kimi_swarm_eligibility,
@@ -45,11 +46,18 @@ def _evidence():
     workspace = PersistentWorkspaceReadiness(
         True, WorkspaceReadinessReason.READY, "task-148-swarm"
     )
-    return queue, reservation, workspace
+    verification = ManifestVerificationEvidence(
+        task_id="TASK-148",
+        allowed_paths=PATHS,
+        workspace_branch="task-148-swarm",
+        verified_at=NOW,
+        verification_id="verification-0001",
+    )
+    return queue, reservation, workspace, verification
 
 
 def _evaluate(**overrides):
-    queue, reservation, workspace = _evidence()
+    queue, reservation, workspace, verification = _evidence()
     values = {
         "task_id": "TASK-148",
         "work_kind": SwarmWorkKind.MULTI_FILE,
@@ -57,7 +65,7 @@ def _evaluate(**overrides):
         "queue_record": queue,
         "reservation": reservation,
         "workspace": workspace,
-        "manifest_verified": True,
+        "manifest_verification": verification,
         "now": NOW,
     }
     values.update(overrides)
@@ -73,14 +81,16 @@ def test_matching_multi_file_evidence_is_eligible():
 
 def test_explicit_architecture_work_can_have_small_scope():
     paths = ("docs/architecture/design.md",)
-    queue, reservation, workspace = _evidence()
+    queue, reservation, workspace, verification = _evidence()
     reservation = replace(reservation, paths=paths)
+    verification = replace(verification, allowed_paths=paths)
     result = _evaluate(
         work_kind=SwarmWorkKind.ARCHITECTURE,
         allowed_paths=paths,
         reservation=reservation,
         queue_record=queue,
         workspace=workspace,
+        manifest_verification=verification,
     )
     assert result.eligible is True
 
@@ -94,7 +104,7 @@ def test_explicit_architecture_work_can_have_small_scope():
             {"allowed_paths": ("Shared.py", "shared.py")},
             SwarmEligibilityReason.SCOPE_INVALID,
         ),
-        ({"manifest_verified": False}, SwarmEligibilityReason.MANIFEST_NOT_VERIFIED),
+        ({"manifest_verification": None}, SwarmEligibilityReason.MANIFEST_NOT_VERIFIED),
         (
             {"work_kind": SwarmWorkKind.MULTI_FILE, "allowed_paths": ("a.py",)},
             SwarmEligibilityReason.RESERVATION_MISMATCH,
@@ -107,7 +117,7 @@ def test_invalid_inputs_fail_closed(overrides, reason):
 
 
 def test_queue_mismatch_fails_closed():
-    queue, _, _ = _evidence()
+    queue, _, _, _ = _evidence()
     assert _evaluate(queue_record=replace(queue, worker="kimi")).reason == (
         SwarmEligibilityReason.QUEUE_MISMATCH
     )
@@ -120,7 +130,7 @@ def test_queue_mismatch_fails_closed():
 
 
 def test_reservation_mismatch_or_expiry_fails_closed():
-    _, reservation, _ = _evidence()
+    _, reservation, _, _ = _evidence()
     assert _evaluate(reservation=replace(reservation, worker="kimi")).reason == (
         SwarmEligibilityReason.RESERVATION_MISMATCH
     )
@@ -130,13 +140,13 @@ def test_reservation_mismatch_or_expiry_fails_closed():
 
 
 def test_matching_reservation_path_order_is_not_significant():
-    _, reservation, _ = _evidence()
+    _, reservation, _, _ = _evidence()
     result = _evaluate(reservation=replace(reservation, paths=tuple(reversed(PATHS))))
     assert result.eligible is True
 
 
 def test_workspace_must_be_ready():
-    _, _, workspace = _evidence()
+    _, _, workspace, _ = _evidence()
     result = _evaluate(
         workspace=replace(
             workspace,
@@ -148,20 +158,76 @@ def test_workspace_must_be_ready():
     assert _evaluate(workspace=replace(workspace, branch=None)).reason == (
         SwarmEligibilityReason.WORKSPACE_NOT_READY
     )
+    assert _evaluate(
+        workspace=replace(workspace, branch="task-999-unrelated")
+    ).reason == SwarmEligibilityReason.WORKSPACE_NOT_READY
 
 
 def test_small_multifile_scope_is_unsuitable_when_other_evidence_matches():
     paths = tuple(f"a{index}.py" for index in range(10))
-    _, reservation, _ = _evidence()
+    _, reservation, _, verification = _evidence()
     result = _evaluate(
         allowed_paths=paths,
         reservation=replace(reservation, paths=paths),
+        manifest_verification=replace(verification, allowed_paths=paths),
     )
     assert result.reason == SwarmEligibilityReason.WORK_UNSUITABLE
 
 
 def test_gate_does_not_mutate_input_evidence():
-    queue, reservation, workspace = _evidence()
-    before = (queue, reservation, workspace)
-    _evaluate(queue_record=queue, reservation=reservation, workspace=workspace)
-    assert (queue, reservation, workspace) == before
+    queue, reservation, workspace, verification = _evidence()
+    before = (queue, reservation, workspace, verification)
+    _evaluate(
+        queue_record=queue,
+        reservation=reservation,
+        workspace=workspace,
+        manifest_verification=verification,
+    )
+    assert (queue, reservation, workspace, verification) == before
+
+
+def test_manifest_verification_is_bound_to_task_scope_and_workspace():
+    _, _, _, verification = _evidence()
+    assert _evaluate(
+        manifest_verification=replace(verification, task_id="TASK-999")
+    ).reason == SwarmEligibilityReason.MANIFEST_NOT_VERIFIED
+    assert _evaluate(
+        manifest_verification=replace(verification, allowed_paths=("wrong.py",))
+    ).reason == SwarmEligibilityReason.MANIFEST_NOT_VERIFIED
+    assert _evaluate(
+        manifest_verification=replace(
+            verification, workspace_branch="task-148-other"
+        )
+    ).reason == SwarmEligibilityReason.MANIFEST_NOT_VERIFIED
+    assert _evaluate(
+        manifest_verification=replace(verification, verification_id="short")
+    ).reason == SwarmEligibilityReason.MANIFEST_NOT_VERIFIED
+
+
+def test_stale_claim_and_overlong_reservation_fail_closed():
+    queue, reservation, _, _ = _evidence()
+    stale_queue = replace(
+        queue,
+        enqueued_at=NOW - timedelta(hours=4),
+        claimed_at=NOW - timedelta(hours=3),
+    )
+    assert _evaluate(queue_record=stale_queue).reason == (
+        SwarmEligibilityReason.TIME_INVALID
+    )
+    assert _evaluate(
+        reservation=replace(
+            reservation,
+            reserved_at=NOW - timedelta(minutes=1),
+            expires_at=NOW + timedelta(days=365),
+        )
+    ).reason == SwarmEligibilityReason.TIME_INVALID
+
+
+def test_malformed_typed_evidence_returns_a_bounded_reason():
+    queue, reservation, _, _ = _evidence()
+    assert _evaluate(queue_record=replace(queue, task_path=None)).reason == (
+        SwarmEligibilityReason.QUEUE_MISMATCH
+    )
+    assert _evaluate(reservation=replace(reservation, paths=(None,))).reason == (
+        SwarmEligibilityReason.RESERVATION_MISMATCH
+    )
