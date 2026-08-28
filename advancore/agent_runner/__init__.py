@@ -218,6 +218,12 @@ from advancore.agent_runner.task import (
     find_task,
     parse_task,
 )
+from advancore.agent_runner.task_queue import (
+    GovernedTaskQueue,
+    TaskQueueError,
+    TaskQueueRecord,
+    TaskQueueStatus,
+)
 from advancore.agent_runner.validation import ValidationResult, validate
 from advancore.agent_runner.worker import (
     APPROVED_PLANNER_NAMES,
@@ -366,6 +372,7 @@ __all__ = [
     "validate_owner_goal",
     "validate_proposal",
     "write_goal_task_artifact",
+    "GovernedTaskQueue",
     "HandoffReconciliationResult",
     "HandoffState",
     "KimiSwarmWorkerAdapter",
@@ -424,6 +431,9 @@ __all__ = [
     "RunnerStatus",
     "Task",
     "TaskError",
+    "TaskQueueError",
+    "TaskQueueRecord",
+    "TaskQueueStatus",
     "TaskStatus",
     "ValidationResult",
     "WorkerAdapter",

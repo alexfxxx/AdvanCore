@@ -1,4 +1,4 @@
-"""Contract tests for the governed task queue (TASK-143)."""
+"""Contract tests for the governed task queue (TASK-143, TASK-151)."""
 
 from datetime import datetime, timedelta, timezone
 import json
@@ -34,6 +34,13 @@ def _queue(tmp_path: Path) -> tuple[GovernedTaskQueue, Path]:
 
 def _time(hour: int) -> datetime:
     return datetime(2026, 8, 28, hour, tzinfo=timezone.utc)
+
+
+def _set_status(tmp_path: Path, task_id: str, slug: str, status: str) -> None:
+    task_path = tmp_path / "repo" / "tasks" / f"{task_id}-{slug}.md"
+    task_path.write_text(
+        f"# {task_id} — Test task\n\nSTATUS: {status}\n", encoding="utf-8"
+    )
 
 
 def test_fifo_enqueue_claim_complete_and_persistence(tmp_path):
@@ -208,7 +215,10 @@ def test_swapped_state_parent_and_hardlinked_lock_fail_closed(tmp_path):
     protected = tmp_path / "protected.txt"
     protected.write_text("owner data", encoding="utf-8")
     protected.chmod(0o600)
-    os.link(protected, state_path.with_suffix(".json.lock"))
+    try:
+        os.link(protected, state_path.with_suffix(".json.lock"))
+    except PermissionError:
+        pytest.skip("hard links are not permitted in this environment")
     with pytest.raises(TaskQueueError, match="lock file is unsafe"):
         queue.list_records(now=_time(1))
     assert protected.read_text(encoding="utf-8") == "owner data"
@@ -277,3 +287,136 @@ def test_deeply_nested_json_fails_as_queue_error(tmp_path, monkeypatch):
     )
     with pytest.raises(TaskQueueError):
         queue.list_records(now=_time(3))
+
+
+def test_first_claim_sets_attempt_to_one(tmp_path):
+    queue, _ = _queue(tmp_path)
+    queue.enqueue("TASK-139", "tasks/TASK-139-worker-timeline.md", "kimi", now=_time(1))
+    claimed = queue.claim_next(now=_time(2))
+    assert claimed.attempt == 1
+    assert claimed.status == TaskQueueStatus.RUNNING
+
+
+def test_bounded_retries_allow_three_then_reject_fourth(tmp_path):
+    queue, _ = _queue(tmp_path)
+    queue.enqueue("TASK-139", "tasks/TASK-139-worker-timeline.md", "kimi", now=_time(1))
+
+    for attempt in (1, 2, 3):
+        claimed = queue.claim_next(now=_time(attempt))
+        assert claimed.attempt == attempt
+        _set_status(tmp_path, "TASK-139", "worker-timeline", "REWORK")
+        requeued = queue.requeue_for_rework("TASK-139", "kimi", now=_time(attempt))
+        assert requeued.status == TaskQueueStatus.QUEUED
+        assert requeued.attempt == attempt
+
+    with pytest.raises(TaskQueueError, match="attempt limit reached"):
+        queue.claim_next(now=_time(4))
+
+
+def test_requeue_for_rework_reassigns_worker(tmp_path):
+    queue, _ = _queue(tmp_path)
+    queue.enqueue("TASK-139", "tasks/TASK-139-worker-timeline.md", "kimi", now=_time(1))
+    queue.claim_next(now=_time(2))
+    _set_status(tmp_path, "TASK-139", "worker-timeline", "REWORK")
+    requeued = queue.requeue_for_rework("TASK-139", "gemini", now=_time(3))
+    assert requeued.worker == "gemini"
+    claimed = queue.claim_next(now=_time(4))
+    assert claimed.worker == "gemini"
+
+
+def test_requeue_for_rework_requires_rework_status_in_task_file(tmp_path):
+    queue, _ = _queue(tmp_path)
+    queue.enqueue("TASK-139", "tasks/TASK-139-worker-timeline.md", "kimi", now=_time(1))
+    queue.claim_next(now=_time(2))
+    with pytest.raises(TaskQueueError, match="not approved for rework"):
+        queue.requeue_for_rework("TASK-139", "kimi", now=_time(3))
+
+
+def test_completed_task_cannot_be_requeued_for_rework(tmp_path):
+    queue, _ = _queue(tmp_path)
+    queue.enqueue("TASK-139", "tasks/TASK-139-worker-timeline.md", "kimi", now=_time(1))
+    queue.claim_next(now=_time(2))
+    queue.complete("TASK-139", now=_time(3))
+    _set_status(tmp_path, "TASK-139", "worker-timeline", "REWORK")
+    with pytest.raises(TaskQueueError, match="requested queue transition is invalid"):
+        queue.requeue_for_rework("TASK-139", "kimi", now=_time(4))
+
+
+def test_blocked_task_can_be_requeued_for_rework(tmp_path):
+    queue, _ = _queue(tmp_path)
+    queue.enqueue("TASK-139", "tasks/TASK-139-worker-timeline.md", "kimi", now=_time(1))
+    queue.claim_next(now=_time(2))
+    queue.block("TASK-139", now=_time(3))
+    _set_status(tmp_path, "TASK-139", "worker-timeline", "REWORK")
+    requeued = queue.requeue_for_rework("TASK-139", "gemini", now=_time(4))
+    assert requeued.status == TaskQueueStatus.QUEUED
+    claimed = queue.claim_next(now=_time(5))
+    assert claimed.status == TaskQueueStatus.RUNNING
+    assert claimed.attempt == 2
+
+
+def test_malformed_attempt_counters_fail_closed_when_loaded(tmp_path):
+    queue, state_path = _queue(tmp_path)
+    state_path.parent.mkdir(mode=0o700)
+    for bad_attempt in (-1, 4, "one", True, False):
+        payload = [
+            {
+                "task_id": "TASK-139",
+                "task_path": "tasks/TASK-139-worker-timeline.md",
+                "worker": "kimi",
+                "status": "QUEUED",
+                "enqueued_at": _time(1).isoformat(),
+                "claimed_at": None,
+                "finished_at": None,
+                "attempt": bad_attempt,
+            }
+        ]
+        state_path.write_text(json.dumps(payload), encoding="utf-8")
+        state_path.chmod(0o600)
+        with pytest.raises(TaskQueueError, match="attempt count is invalid"):
+            queue.list_records(now=_time(2))
+
+
+def test_records_without_attempt_field_load_as_zero(tmp_path):
+    queue, state_path = _queue(tmp_path)
+    state_path.parent.mkdir(mode=0o700)
+    payload = [
+        {
+            "task_id": "TASK-139",
+            "task_path": "tasks/TASK-139-worker-timeline.md",
+            "worker": "kimi",
+            "status": "QUEUED",
+            "enqueued_at": _time(1).isoformat(),
+            "claimed_at": None,
+            "finished_at": None,
+        }
+    ]
+    state_path.write_text(json.dumps(payload), encoding="utf-8")
+    state_path.chmod(0o600)
+    records = queue.list_records(now=_time(2))
+    assert len(records) == 1
+    assert records[0].attempt == 0
+
+
+def test_requeue_time_cannot_precede_running_or_blocked_transition(tmp_path):
+    queue, _ = _queue(tmp_path)
+    queue.enqueue(
+        "TASK-139", "tasks/TASK-139-worker-timeline.md", "kimi", now=_time(1)
+    )
+    queue.claim_next(now=_time(3))
+    _set_status(tmp_path, "TASK-139", "worker-timeline", "REWORK")
+
+    with pytest.raises(TaskQueueError, match="rework predates queue transition"):
+        queue.requeue_for_rework(
+            "TASK-139", "kimi", now=_time(3) - timedelta(seconds=1)
+        )
+    assert queue.list_records(now=_time(3))[0].status == TaskQueueStatus.RUNNING
+
+    queue.block("TASK-139", now=_time(4))
+    with pytest.raises(TaskQueueError, match="rework predates queue transition"):
+        queue.requeue_for_rework(
+            "TASK-139", "gemini", now=_time(4) - timedelta(seconds=1)
+        )
+    blocked = queue.list_records(now=_time(4))[0]
+    assert blocked.status == TaskQueueStatus.BLOCKED
+    assert blocked.worker == "kimi"
