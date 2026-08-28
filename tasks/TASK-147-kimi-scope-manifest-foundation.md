@@ -93,7 +93,7 @@ None.
 ### Verification
 
 - Focused tests: 16 passed.
-- Full isolated suite: 1,350 passed, 2 skipped.
+- Full post-rebase suite: 1,357 passed, 2 skipped.
 - `git diff --check`: passed.
 
 ### Decisions required
