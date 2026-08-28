@@ -79,6 +79,8 @@ def _open_verified_owner_directory(path: Path) -> int:
     descriptor = os.open(absolute.anchor, flags)
     try:
         for part in absolute.parts[1:]:
+            if part in {".", ".."}:
+                raise ScopeReservationError("reservation directory path is unsafe")
             try:
                 child = os.open(part, flags, dir_fd=descriptor)
             except FileNotFoundError:
@@ -109,6 +111,8 @@ def _open_directory_no_follow(path: Path) -> int:
     descriptor = os.open(absolute.anchor, flags)
     try:
         for part in absolute.parts[1:]:
+            if part in {".", ".."}:
+                raise ScopeReservationError("repository path is unsafe")
             child = os.open(part, flags, dir_fd=descriptor)
             os.close(descriptor)
             descriptor = child
@@ -205,6 +209,8 @@ class ScopeReservationService:
         proposed = Path(
             state_path or default_scope_reservations_path(self.repository_root)
         )
+        if any(part in {".", ".."} for part in proposed.parts):
+            raise ScopeReservationError("reservation path contains a dot segment")
         if not proposed.is_absolute():
             proposed = Path.cwd() / proposed
         proposed = proposed.absolute()

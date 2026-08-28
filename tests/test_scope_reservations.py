@@ -142,8 +142,15 @@ def test_concurrent_overlap_allows_only_one_writer(tmp_path):
 def test_corrupt_nested_oversized_future_and_in_repo_state_fail_closed(tmp_path):
     repository = tmp_path / "repo"
     repository.mkdir()
+    original_mode = repository.stat().st_mode
     with pytest.raises(ScopeReservationError):
         ScopeReservationService(repository, repository / "state.json")
+    with pytest.raises(ScopeReservationError, match="dot segment"):
+        ScopeReservationService(
+            repository,
+            tmp_path / "controller" / ".." / "repo" / "reservations.json",
+        )
+    assert repository.stat().st_mode == original_mode
 
     service, state = _service(tmp_path)
     state.parent.mkdir(mode=0o700)

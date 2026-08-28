@@ -79,6 +79,8 @@ fallback while those providers are unavailable or nonproductive.
   aliases before reservation.
 - Treated case-only path variants and verified hard-link identities as the same
   scope, preventing duplicate worker ownership on macOS.
+- Rejected controller state paths containing dot segments before containment or
+  permission handling.
 - Documented the service's lack of approval, launch, Git, database, publication,
   merge and deployment authority.
 
