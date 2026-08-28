@@ -101,6 +101,67 @@ def _open_verified_owner_directory(path: Path) -> int:
             os.close(descriptor)
 
 
+def _open_directory_no_follow(path: Path) -> int:
+    """Bind an existing directory without following any path-component link."""
+    absolute = path.absolute()
+    flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0)
+    flags |= getattr(os, "O_NOFOLLOW", 0)
+    descriptor = os.open(absolute.anchor, flags)
+    try:
+        for part in absolute.parts[1:]:
+            child = os.open(part, flags, dir_fd=descriptor)
+            os.close(descriptor)
+            descriptor = child
+        details = os.fstat(descriptor)
+        if not stat.S_ISDIR(details.st_mode):
+            raise ScopeReservationError("repository path is unsafe")
+        result = descriptor
+        descriptor = -1
+        return result
+    finally:
+        if descriptor >= 0:
+            os.close(descriptor)
+
+
+def _validate_scope_location(repository_root: Path, value: str) -> None:
+    """Walk every existing scope component from a bound repository descriptor."""
+    descriptor: int | None = None
+    try:
+        descriptor = _open_directory_no_follow(repository_root)
+        parts = PurePosixPath(value).parts
+        for index, part in enumerate(parts):
+            try:
+                child = os.open(
+                    part,
+                    os.O_RDONLY
+                    | getattr(os, "O_NOFOLLOW", 0)
+                    | getattr(os, "O_NONBLOCK", 0),
+                    dir_fd=descriptor,
+                )
+            except FileNotFoundError:
+                return
+            details = os.fstat(child)
+            if index < len(parts) - 1 and not stat.S_ISDIR(details.st_mode):
+                os.close(child)
+                raise ScopeReservationError("reservation scope parent is unsafe")
+            if index == len(parts) - 1 and not (
+                stat.S_ISDIR(details.st_mode) or stat.S_ISREG(details.st_mode)
+            ):
+                os.close(child)
+                raise ScopeReservationError("reservation scope target is unsafe")
+            os.close(descriptor)
+            descriptor = child
+    except ScopeReservationError:
+        raise
+    except OSError as exc:
+        raise ScopeReservationError(
+            "reservation scope contains a symbolic-link alias"
+        ) from exc
+    finally:
+        if descriptor is not None:
+            os.close(descriptor)
+
+
 def _validate_scope_path(value: str) -> str:
     if not isinstance(value, str) or not _SAFE_PATH.fullmatch(value):
         raise ScopeReservationError("scope path is invalid")
@@ -139,9 +200,10 @@ class ScopeReservationService:
         )
         if not proposed.is_absolute():
             proposed = Path.cwd() / proposed
+        proposed = proposed.absolute()
         if _has_symlink_component(proposed):
             raise ScopeReservationError("reservation path contains a symbolic link")
-        self.state_path = proposed.resolve()
+        self.state_path = proposed
         if (
             self.state_path == self.repository_root
             or self.repository_root in self.state_path.parents
@@ -201,17 +263,7 @@ class ScopeReservationService:
         if len(set(paths)) != len(paths) or paths != tuple(sorted(paths)):
             raise ScopeReservationError("reservation paths must be unique and sorted")
         for value in paths:
-            candidate = self.repository_root / PurePosixPath(value)
-            if _has_symlink_component(candidate):
-                raise ScopeReservationError(
-                    "reservation scope contains a symbolic-link alias"
-                )
-            resolved = candidate.resolve(strict=False)
-            if (
-                resolved == self.repository_root
-                or self.repository_root not in resolved.parents
-            ):
-                raise ScopeReservationError("reservation scope escapes repository")
+            _validate_scope_location(self.repository_root, value)
         reserved = _utc(reservation.reserved_at)
         expires = _utc(reservation.expires_at)
         released = _utc(reservation.released_at) if reservation.released_at else None
@@ -435,6 +487,7 @@ class ScopeReservationService:
         with self._locked() as parent_descriptor:
             records = self._load_unlocked(current, parent_descriptor)
             records, _ = self._expire_and_compact(records, current)
+            proposed = self._validate(proposed, current)
             for record in records:
                 if record.status != ReservationStatus.ACTIVE:
                     continue
@@ -453,6 +506,8 @@ class ScopeReservationService:
             if records and current < records[-1].reserved_at:
                 raise ScopeReservationError("reservation timestamp moved backward")
             records.append(proposed)
+            for record in records:
+                self._validate(record, current)
             self._write_unlocked(records, parent_descriptor)
         return proposed
 

@@ -73,6 +73,8 @@ fallback while those providers are unavailable or nonproductive.
   into persisted state, and future-dated release timestamps.
 - Bound lock, read and atomic-replacement operations to a verified owner-only
   directory descriptor and rejected backward reservation timestamps.
+- Kept state paths lexical until descriptor binding and repeated no-follow
+  scope-component validation inside the locked reservation transaction.
 - Documented the service's lack of approval, launch, Git, database, publication,
   merge and deployment authority.
 
