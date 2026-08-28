@@ -78,6 +78,9 @@ CLI upgrade remain owner-attended.
   codes and no path, remote, environment, prompt or output projection.
 - Required the same Git common directory, a clean `task-*` branch, a real
   owner-controlled non-symlink directory and successful bounded local probes.
+- Required the exact registered worktree root, two consistent clean
+  branch/status snapshots, read-only Git settings and bounded process-group
+  output handling.
 - Added an operations runbook that keeps creation, cleanup, branch switching,
   Kimi trust, authentication, upgrades and worker launch outside this service.
 
@@ -94,8 +97,8 @@ None.
 
 ### Verification
 
-- Focused tests: 5 passed.
-- Full post-rebase suite: 1,334 passed, 2 skipped.
+- Focused tests: 9 passed.
+- Full post-rebase suite: 1,338 passed, 2 skipped.
 - `git diff --check`: passed.
 
 ### Decisions required

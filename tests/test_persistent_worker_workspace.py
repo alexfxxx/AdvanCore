@@ -1,8 +1,10 @@
 """Contract tests for persistent Kimi workspace readiness."""
 
 from pathlib import Path
+import os
 import subprocess
 
+from advancore.agent_runner import persistent_worker_workspace as workspace_module
 from advancore.agent_runner.persistent_worker_workspace import (
     WorkspaceReadinessReason,
     inspect_persistent_kimi_workspace,
@@ -101,3 +103,66 @@ def test_result_exposes_no_path_remote_or_output(tmp_path):
     assert str(tmp_path) not in projection
     assert "example.invalid" not in projection
     assert "https://" not in projection
+
+
+def test_nested_directory_is_not_accepted_as_worktree_root(tmp_path):
+    repository, worker = _repository_with_worktree(tmp_path)
+    nested = worker / "nested"
+    nested.mkdir()
+
+    assert inspect_persistent_kimi_workspace(repository, nested).reason == (
+        WorkspaceReadinessReason.WORKSPACE_UNSAFE
+    )
+
+
+def test_state_change_after_first_clean_probe_fails_closed(tmp_path, monkeypatch):
+    repository, worker = _repository_with_worktree(tmp_path)
+    original_git = workspace_module._git
+    status_calls = 0
+
+    def changing_git(repo: Path, *arguments: str) -> str:
+        nonlocal status_calls
+        result = original_git(repo, *arguments)
+        if arguments and arguments[0] == "status":
+            status_calls += 1
+            if status_calls == 1:
+                (worker / "appeared-after-probe.txt").write_text(
+                    "changed\n", encoding="utf-8"
+                )
+        return result
+
+    monkeypatch.setattr(workspace_module, "_git", changing_git)
+    result = inspect_persistent_kimi_workspace(repository, worker)
+
+    assert result.reason == WorkspaceReadinessReason.DIRTY_WORKTREE
+
+
+def test_git_probe_does_not_refresh_index_metadata(tmp_path):
+    repository, worker = _repository_with_worktree(tmp_path)
+    index = subprocess.run(
+        ["/usr/bin/git", "rev-parse", "--git-path", "index"],
+        cwd=worker,
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.strip()
+    index_path = Path(index)
+    if not index_path.is_absolute():
+        index_path = worker / index_path
+    before = index_path.stat().st_mtime_ns
+    os.utime(worker / "README.md", None)
+
+    assert inspect_persistent_kimi_workspace(repository, worker).eligible is True
+    assert index_path.stat().st_mtime_ns == before
+
+
+def test_large_status_output_fails_as_bounded_probe(tmp_path):
+    repository, worker = _repository_with_worktree(tmp_path)
+    for index in range(300):
+        (worker / f"untracked-file-{index:04d}-with-long-name.txt").write_text(
+            "x\n", encoding="utf-8"
+        )
+
+    result = inspect_persistent_kimi_workspace(repository, worker)
+
+    assert result.reason == WorkspaceReadinessReason.GIT_PROBE_FAILED

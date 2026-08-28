@@ -7,8 +7,11 @@ from enum import Enum
 import os
 from pathlib import Path
 import re
+import selectors
+import signal
 import stat
 import subprocess
+import time
 
 
 _GIT = "/usr/bin/git"
@@ -19,7 +22,9 @@ _GIT_ENV = {
     "PATH": "/usr/bin:/bin",
     "LC_ALL": "C",
     "GIT_CONFIG_NOSYSTEM": "1",
+    "GIT_CONFIG_GLOBAL": "/dev/null",
     "GIT_TERMINAL_PROMPT": "0",
+    "GIT_OPTIONAL_LOCKS": "0",
 }
 
 
@@ -73,23 +78,73 @@ def _open_directory_no_follow(path: Path) -> int:
 
 
 def _git(repo: Path, *arguments: str) -> str:
+    process: subprocess.Popen[bytes] | None = None
+    selector: selectors.BaseSelector | None = None
+    output = bytearray()
     try:
-        result = subprocess.run(
-            [_GIT, *arguments],
+        process = subprocess.Popen(
+            [
+                _GIT,
+                "-c",
+                "core.fsmonitor=false",
+                "-c",
+                "core.untrackedCache=false",
+                *arguments,
+            ],
             cwd=repo,
             env=_GIT_ENV,
             stdin=subprocess.DEVNULL,
             stdout=subprocess.PIPE,
             stderr=subprocess.DEVNULL,
-            check=False,
-            timeout=_GIT_TIMEOUT_SECONDS,
+            start_new_session=True,
         )
-    except (OSError, subprocess.SubprocessError) as exc:
+        if process.stdout is None:  # pragma: no cover - defensive
+            raise _ProbeFailure
+        selector = selectors.DefaultSelector()
+        selector.register(process.stdout, selectors.EVENT_READ)
+        deadline = time.monotonic() + _GIT_TIMEOUT_SECONDS
+        stream_open = True
+        while stream_open or process.poll() is None:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise _ProbeFailure
+            for key, _ in selector.select(timeout=min(0.1, remaining)):
+                chunk = os.read(key.fileobj.fileno(), 4096)
+                if not chunk:
+                    selector.unregister(key.fileobj)
+                    stream_open = False
+                    continue
+                output.extend(chunk)
+                if len(output) > _MAX_OUTPUT_BYTES:
+                    raise _ProbeFailure
+        returncode = process.wait(timeout=0.1)
+        if returncode != 0:
+            raise _ProbeFailure
+    except (OSError, subprocess.SubprocessError, _ProbeFailure) as exc:
+        if process is not None:
+            try:
+                os.killpg(process.pid, signal.SIGTERM)
+            except OSError:
+                pass
+            try:
+                process.wait(timeout=0.2)
+            except subprocess.TimeoutExpired:
+                try:
+                    os.killpg(process.pid, signal.SIGKILL)
+                except OSError:
+                    pass
+                try:
+                    process.wait(timeout=0.2)
+                except subprocess.TimeoutExpired:
+                    pass
         raise _ProbeFailure from exc
-    if result.returncode != 0 or len(result.stdout) > _MAX_OUTPUT_BYTES:
-        raise _ProbeFailure
+    finally:
+        if selector is not None:
+            selector.close()
+        if process is not None and process.stdout is not None:
+            process.stdout.close()
     try:
-        return result.stdout.decode("utf-8", errors="strict").strip()
+        return bytes(output).decode("utf-8", errors="strict").strip()
     except UnicodeError as exc:
         raise _ProbeFailure from exc
 
@@ -152,6 +207,15 @@ def inspect_persistent_kimi_workspace(
             raise _ProbeFailure
         if _git(candidate.path, "rev-parse", "--is-inside-work-tree") != "true":
             raise _ProbeFailure
+        top_level = _git(candidate.path, "rev-parse", "--show-toplevel")
+        top_binding, _ = _safe_directory(Path(top_level))
+        if top_binding is None or (
+            top_binding.device,
+            top_binding.inode,
+        ) != (candidate.device, candidate.inode):
+            return PersistentWorkspaceReadiness(
+                False, WorkspaceReadinessReason.WORKSPACE_UNSAFE
+            )
         if _common_directory(source.path) != _common_directory(candidate.path):
             return PersistentWorkspaceReadiness(
                 False, WorkspaceReadinessReason.FOREIGN_REPOSITORY
@@ -168,9 +232,10 @@ def inspect_persistent_kimi_workspace(
             return PersistentWorkspaceReadiness(
                 False, WorkspaceReadinessReason.UNSAFE_BRANCH
             )
-        if _git(
+        first_status = _git(
             candidate.path, "status", "--porcelain=v1", "--untracked-files=all"
-        ):
+        )
+        if first_status:
             return PersistentWorkspaceReadiness(
                 False, WorkspaceReadinessReason.DIRTY_WORKTREE, branch
             )
@@ -181,6 +246,20 @@ def inspect_persistent_kimi_workspace(
         ) != (candidate.device, candidate.inode):
             return PersistentWorkspaceReadiness(
                 False, WorkspaceReadinessReason.WORKSPACE_UNSAFE
+            )
+        final_branch = _git(
+            candidate.path, "symbolic-ref", "--quiet", "--short", "HEAD"
+        )
+        final_status = _git(
+            candidate.path, "status", "--porcelain=v1", "--untracked-files=all"
+        )
+        if final_branch != branch:
+            return PersistentWorkspaceReadiness(
+                False, WorkspaceReadinessReason.WORKSPACE_UNSAFE
+            )
+        if final_status:
+            return PersistentWorkspaceReadiness(
+                False, WorkspaceReadinessReason.DIRTY_WORKTREE, final_branch
             )
     except (OSError, _ProbeFailure):
         return PersistentWorkspaceReadiness(
