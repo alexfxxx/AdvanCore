@@ -404,10 +404,12 @@ def _isolate_kimi_command(
         kimi_home / "session_index.jsonl",
         kimi_home / "workspaces.json",
         kimi_home / "workspace-trust" / workspace_id,
+        kimi_home / "oauth" / "kimi-code",
     )
     atomic_targets = (
         kimi_home / "workspaces.json",
         kimi_home / "workspace-trust" / workspace_id,
+        kimi_home / "oauth" / "kimi-code",
     )
     writable_regexes = tuple(
         rf"^{re.escape(str(path))}\.tmp\.[0-9]+\.[A-Za-z0-9]+$"
@@ -435,7 +437,6 @@ def _isolate_kimi_command(
         repo_root / ".docker",
         kimi_home / "bin",
         kimi_home / "credentials",
-        kimi_home / "oauth",
         kimi_home / "plugins",
         kimi_home / "skills",
         kimi_home / "updates",

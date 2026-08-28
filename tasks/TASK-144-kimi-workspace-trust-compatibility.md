@@ -21,6 +21,8 @@ the current worktree's trust record.
 - Derive Kimi's deterministic workspace ID from the resolved worktree path.
 - Permit writes to Kimi's non-secret workspace registry and only the current
   worktree's trust record required for startup.
+- Permit the Kimi CLI to refresh only its own existing `oauth/kimi-code` token;
+  no GitHub, database, Codex, Gemini, SSH or other credential is allowed.
 - Keep credential, OAuth, plugin, skill, update, Git metadata, controller state,
   environment-secret and unrelated-home protections unchanged.
 - Add tests proving other workspace-trust records remain outside the allowlist.
@@ -61,5 +63,6 @@ None.
 ## Owner decisions
 
 The owner explicitly approved testing and repairing Kimi usage on 28 August
-2026, with the goal of using Kimi Agent Swarm. This approval does not grant Kimi
-controller authority or credential access.
+2026, with the goal of using Kimi Agent Swarm. Kimi may refresh only its own
+existing OAuth token; this approval does not grant Kimi controller authority or
+access to any other credential.
