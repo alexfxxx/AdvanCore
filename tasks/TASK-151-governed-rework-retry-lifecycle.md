@@ -1,6 +1,6 @@
 # TASK-151 — Governed Rework and Retry Lifecycle
 
-STATUS: READY
+STATUS: COMPLETE
 
 ## Objective
 
@@ -45,12 +45,26 @@ duplicate task record or bypassing task approval.
 
 ## Acceptance criteria
 
-- [ ] At most three attempts can be claimed for one governed task.
-- [ ] Rework requires an explicit `STATUS: REWORK` task specification.
-- [ ] Completed tasks cannot be reopened.
-- [ ] Existing queue files remain readable with attempt count zero.
-- [ ] Focused tests and controller exact-scope postchecks pass.
+- [x] At most three attempts can be claimed for one governed task.
+- [x] Rework requires an explicit `STATUS: REWORK` task specification.
+- [x] Completed tasks cannot be reopened.
+- [x] Existing queue files remain readable with attempt count zero.
+- [x] Focused tests and final controller scope verification pass.
 
 ## Owner decisions
 
 None. This is the bounded retry behavior approved for unattended TASK-151.
+
+## Completion report
+
+- Kimi Swarm v0.39.0 ran first for 1,202.497 seconds. Its result was correctly
+  rejected because it created an unapproved 16 MB `.tmp-venv`; that directory
+  was moved intact to `/private/tmp/AdvanCore-task151-kimi-tmp-venv-quarantine`
+  rather than deleted.
+- The four intended files were retained for controller review. Bugbot found two
+  fail-closed defects; both received bounded controller repair and the final
+  Bugbot review was clean.
+- No Gemini or Codex implementation-worker fallback was launched.
+- Focused queue, launch and reporting tests: 63 passed.
+- Local dependency-independent regression suite: 1,436 passed, 2 skipped.
+- `py_compile` and `git diff --check`: passed.

@@ -53,6 +53,7 @@ class TaskQueueRecord:
     enqueued_at: datetime
     claimed_at: datetime | None = None
     finished_at: datetime | None = None
+    attempt: int = 0
 
 
 def _utc(value: datetime) -> datetime:
@@ -196,6 +197,8 @@ class GovernedTaskQueue:
             or not isinstance(record.status, TaskQueueStatus)
         ):
             raise TaskQueueError("queue record identity is invalid")
+        if type(record.attempt) is not int or not (0 <= record.attempt <= 3):
+            raise TaskQueueError("queue record attempt count is invalid")
         enqueued = _utc(record.enqueued_at)
         claimed = _utc(record.claimed_at) if record.claimed_at else None
         finished = _utc(record.finished_at) if record.finished_at else None
@@ -227,8 +230,11 @@ class GovernedTaskQueue:
             finished_at=finished,
         )
 
-    def _validate_governed_task_file(self, task_id: str, task_path: str) -> None:
-        """Require a real, direct, approved task specification before queueing."""
+    def _validate_governed_task_file(self, task_id: str, task_path: str) -> str:
+        """Require a real, direct, approved task specification before queueing.
+
+        Returns the single normalized task status (e.g. "READY" or "REWORK").
+        """
         match = _TASK_PATH.fullmatch(task_path)
         if match is None or match.group(1) != task_id:
             raise TaskQueueError("governed task path is invalid")
@@ -294,6 +300,7 @@ class GovernedTaskQueue:
             raise TaskQueueError("governed task title is missing or mismatched")
         if len(statuses) != 1 or statuses[0] not in _EXECUTABLE_TASK_STATUSES:
             raise TaskQueueError("governed task is not approved for execution")
+        return statuses[0]
 
     def _load_unlocked(
         self, now: datetime, parent_descriptor: int
@@ -330,17 +337,21 @@ class GovernedTaskQueue:
             raise TaskQueueError("queue state is not a bounded list")
         records: list[TaskQueueRecord] = []
         seen: set[str] = set()
+        _REQUIRED_KEYS = {
+            "task_id",
+            "task_path",
+            "worker",
+            "status",
+            "enqueued_at",
+            "claimed_at",
+            "finished_at",
+        }
         try:
             for item in raw:
-                if not isinstance(item, dict) or set(item) != {
-                    "task_id",
-                    "task_path",
-                    "worker",
-                    "status",
-                    "enqueued_at",
-                    "claimed_at",
-                    "finished_at",
-                }:
+                if not isinstance(item, dict) or set(item) not in (
+                    _REQUIRED_KEYS,
+                    _REQUIRED_KEYS | {"attempt"},
+                ):
                     raise TaskQueueError("queue record shape is invalid")
                 record = TaskQueueRecord(
                     task_id=item["task_id"],
@@ -358,6 +369,7 @@ class GovernedTaskQueue:
                         if item["finished_at"]
                         else None
                     ),
+                    attempt=item.get("attempt", 0),
                 )
                 record = self._validate_record(record, now)
                 if record.task_id in seen:
@@ -494,6 +506,8 @@ class GovernedTaskQueue:
                 if record.status == TaskQueueStatus.QUEUED:
                     if current < record.enqueued_at:
                         raise TaskQueueError("claim predates enqueue")
+                    if record.attempt >= 3:
+                        raise TaskQueueError("task attempt limit reached")
                     self._validate_governed_task_file(
                         record.task_id, record.task_path
                     )
@@ -502,6 +516,7 @@ class GovernedTaskQueue:
                             record,
                             status=TaskQueueStatus.RUNNING,
                             claimed_at=current,
+                            attempt=record.attempt + 1,
                         ),
                         current,
                     )
@@ -558,3 +573,51 @@ class GovernedTaskQueue:
             TaskQueueStatus.BLOCKED,
             _utc(now or datetime.now(timezone.utc)),
         )
+
+    def requeue_for_rework(
+        self,
+        task_id: str,
+        worker: str,
+        *,
+        now: datetime | None = None,
+    ) -> TaskQueueRecord:
+        """Return a previously claimed task to the queue for another attempt."""
+        current = _utc(now or datetime.now(timezone.utc))
+        if not _TASK_ID.fullmatch(task_id):
+            raise TaskQueueError("task identifier is invalid")
+        if worker not in _WORKERS:
+            raise TaskQueueError("worker is not approved")
+        with self._locked(exclusive=True) as parent_descriptor:
+            records = self._load_unlocked(current, parent_descriptor)
+            for index, record in enumerate(records):
+                if record.task_id != task_id:
+                    continue
+                if record.status not in {
+                    TaskQueueStatus.RUNNING,
+                    TaskQueueStatus.BLOCKED,
+                }:
+                    raise TaskQueueError("requested queue transition is invalid")
+                transition_time = (
+                    record.finished_at or record.claimed_at or record.enqueued_at
+                )
+                if current < transition_time:
+                    raise TaskQueueError("rework predates queue transition")
+                task_status = self._validate_governed_task_file(
+                    task_id, record.task_path
+                )
+                if task_status != "REWORK":
+                    raise TaskQueueError("governed task is not approved for rework")
+                requeued = self._validate_record(
+                    replace(
+                        record,
+                        status=TaskQueueStatus.QUEUED,
+                        claimed_at=None,
+                        finished_at=None,
+                        worker=worker,
+                    ),
+                    current,
+                )
+                records[index] = requeued
+                self._write_unlocked(records, current, parent_descriptor)
+                return requeued
+            raise TaskQueueError("task is not present in the queue")
