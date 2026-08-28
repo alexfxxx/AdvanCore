@@ -269,7 +269,7 @@ def _sandbox_literal(path: Path) -> str:
 
 
 def _sandbox_regex(value: str) -> str:
-    return value.replace("\\", "\\\\").replace('"', '\\"')
+    return value.replace('"', '\\"')
 
 
 def _kimi_workspace_id(working_dir: Path) -> str:

@@ -122,7 +122,7 @@ def test_kimi_sandbox_allows_only_current_workspace_bookkeeping(tmp_path):
     assert f'(literal "{exact_trust}")' in profile
     assert f'(literal "{registry}")' in profile
     assert f'(subpath "{trust_root}")' not in profile
-    assert "workspaces\\\\.json\\\\.tmp\\\\." in profile
+    assert "workspaces\\.json\\.tmp\\." in profile
     assert workspace_id in profile
     assert "wd_unrelated_000000000000" not in profile
 
