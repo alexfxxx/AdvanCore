@@ -20,12 +20,16 @@ merge, `main`, deployment, business or compliance authority.
 Each completed implementation-worker attempt may project one controller-owned
 timeline event outside the repository. The load/retention/atomic-replace cycle
 is serialized with an owner-only lock so concurrent completions cannot overwrite
-one another. Stored metadata is restricted to registered workers and closed
+one another. The controller validates the state path before changing permissions,
+opens its owner directory without following the final symlink, and uses
+descriptor-based ownership checks and permission changes before creating the
+lock. Stored metadata is restricted to registered workers and closed
 sets of known terminal, failure, executable-resolution and runtime-path
 classifications; arbitrary or credential-shaped strings are rejected. Malformed,
 oversized, future-dated and recursively nested JSON records are discarded
-fail-closed. Prompts, commands, paths, output and environment values are never
-stored.
+fail-closed. Start and finish timestamps must be within the retention window and
+cannot occur after their event timestamp. Prompts, commands, paths, output and
+environment values are never stored.
 
 The registered Kimi and Kimi-Swarm adapters first use normal executable PATH
 discovery. If PATH does not contain `kimi`, they may launch only the fixed

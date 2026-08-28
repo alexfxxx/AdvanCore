@@ -77,6 +77,9 @@ implementation worker; Codex remains controller and final fallback.
   load/compact/replace transaction with an owner-only advisory lock.
 - Replaced arbitrary safe-looking metadata with closed classification sets and
   discard recursively malformed JSON without raising from timeline reads.
+- Validate and permission the controller directory through a no-follow,
+  owner-verified descriptor before creating the timeline lock.
+- Reject future or logically impossible worker start/finish timestamps.
 
 ### Worker routing evidence
 
@@ -91,8 +94,8 @@ None.
 
 ### Verification
 
-- Focused tests: 79 passed.
-- Full isolated suite: 1,273 passed, 2 skipped.
+- Focused tests: 82 passed.
+- Full isolated suite: 1,276 passed, 2 skipped.
 - `git diff --check`: passed.
 
 ### Decisions required

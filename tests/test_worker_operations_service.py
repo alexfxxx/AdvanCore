@@ -88,6 +88,22 @@ def test_compacts_old_malformed_and_future_records(tmp_path):
             True,
             terminal_reason="github_pat_credential_shaped_metadata",
         ),
+        WorkerOperationEvent(
+            NOW,
+            "TASK-139",
+            "kimi",
+            True,
+            started_at=NOW + timedelta(days=30),
+            finished_at=NOW + timedelta(days=30, seconds=1),
+        ),
+        WorkerOperationEvent(
+            NOW,
+            "TASK-139",
+            "kimi",
+            True,
+            started_at=NOW - timedelta(seconds=1),
+            finished_at=NOW + timedelta(seconds=1),
+        ),
         WorkerOperationEvent(NOW + timedelta(hours=1), "TASK-139", "kimi", True),
     ],
 )
@@ -126,6 +142,20 @@ def test_recursively_malformed_json_is_discarded_fail_closed(tmp_path):
         side_effect=RecursionError,
     ):
         assert service.list_events(now=NOW) == []
+
+
+def test_parent_symlink_swap_is_rejected_before_chmod(tmp_path):
+    service, path = _service(tmp_path)
+    redirected = tmp_path / "unrelated-target"
+    redirected.mkdir(mode=0o755)
+    original_mode = redirected.stat().st_mode & 0o777
+    path.parent.symlink_to(redirected, target_is_directory=True)
+
+    with pytest.raises(WorkerOperationsError, match="lock path is unsafe"):
+        service.record(_event(), now=NOW)
+
+    assert redirected.stat().st_mode & 0o777 == original_mode
+    assert not (redirected / "events.jsonl.lock").exists()
 
 
 def test_concurrent_record_transactions_do_not_overwrite_each_other(tmp_path):

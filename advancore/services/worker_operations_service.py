@@ -138,8 +138,19 @@ class WorkerOperationsService:
             raise WorkerOperationsError("worker elapsed duration is invalid")
         started = _utc(event.started_at) if event.started_at else None
         finished = _utc(event.finished_at) if event.finished_at else None
+        for timestamp in (started, finished):
+            if timestamp is not None and not (
+                now - _RETENTION <= timestamp <= now + _FUTURE_SKEW
+            ):
+                raise WorkerOperationsError(
+                    "worker timing timestamp is outside the safe window"
+                )
         if started and finished and finished < started:
             raise WorkerOperationsError("worker timing order is invalid")
+        if started and started > occurred:
+            raise WorkerOperationsError("worker start is after event occurrence")
+        if finished and finished > occurred:
+            raise WorkerOperationsError("worker finish is after event occurrence")
         return WorkerOperationEvent(
             occurred,
             event.task_id,
@@ -222,13 +233,35 @@ class WorkerOperationsService:
         """Serialize the complete load/compact/replace transaction."""
         lock_path = self.path.with_name(self.path.name + ".lock")
         descriptor: int | None = None
+        parent_descriptor: int | None = None
         try:
             self.path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
-            os.chmod(self.path.parent, 0o700)
             if _has_symlink_component(lock_path):
                 raise WorkerOperationsError("worker timeline lock path is unsafe")
+            directory_flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0)
+            directory_flags |= getattr(os, "O_NOFOLLOW", 0)
+            parent_descriptor = os.open(self.path.parent, directory_flags)
+            parent_details = os.fstat(parent_descriptor)
+            if (
+                not stat.S_ISDIR(parent_details.st_mode)
+                or parent_details.st_uid != os.getuid()
+            ):
+                raise WorkerOperationsError(
+                    "worker timeline parent directory is unsafe"
+                )
+            os.fchmod(parent_descriptor, 0o700)
             flags = os.O_CREAT | os.O_RDWR | getattr(os, "O_NOFOLLOW", 0)
-            descriptor = os.open(lock_path, flags, 0o600)
+            for attempt in range(3):
+                try:
+                    descriptor = os.open(
+                        lock_path.name, flags, 0o600, dir_fd=parent_descriptor
+                    )
+                    break
+                except FileNotFoundError:
+                    if attempt == 2:
+                        raise
+            if descriptor is None:  # pragma: no cover - defensive
+                raise WorkerOperationsError("worker timeline lock file is unavailable")
             details = os.fstat(descriptor)
             if (
                 not stat.S_ISREG(details.st_mode)
@@ -248,6 +281,8 @@ class WorkerOperationsService:
                 except OSError:
                     pass
                 os.close(descriptor)
+            if parent_descriptor is not None:
+                os.close(parent_descriptor)
 
     def record(
         self, event: WorkerOperationEvent, *, now: datetime | None = None
