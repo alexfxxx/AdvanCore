@@ -149,6 +149,12 @@ from advancore.agent_runner.worker_rehearsal import (
     format_multi_worker_rehearsal,
     run_multi_worker_governance_rehearsal,
 )
+from advancore.agent_runner.persistent_kimi_launch import (
+    PersistentKimiLaunchReason,
+    PersistentKimiLaunchResult,
+    PersistentKimiLaunchStatus,
+    PersistentKimiSwarmLaunchService,
+)
 from advancore.agent_runner.owner_notifications import (
     OwnerNotification,
     OwnerNotificationFeed,
@@ -318,6 +324,10 @@ __all__ = [
     "governed_worker_preferences",
     "select_governed_worker",
     "MultiWorkerRehearsalReport",
+    "PersistentKimiLaunchReason",
+    "PersistentKimiLaunchResult",
+    "PersistentKimiLaunchStatus",
+    "PersistentKimiSwarmLaunchService",
     "RehearsalCheck",
     "format_multi_worker_rehearsal",
     "run_multi_worker_governance_rehearsal",
