@@ -43,22 +43,33 @@ class PersistentWorkspaceReadiness:
     branch: str | None = None
 
 
+@dataclass(frozen=True)
+class _DirectoryBinding:
+    path: Path
+    device: int
+    inode: int
+
+
 class _ProbeFailure(RuntimeError):
     pass
 
 
-def _has_symlink_component(path: Path) -> bool:
+def _open_directory_no_follow(path: Path) -> int:
     absolute = path.absolute()
-    current = Path(absolute.anchor)
-    for part in absolute.parts[1:]:
-        current /= part
-        try:
-            details = os.lstat(current)
-        except FileNotFoundError:
-            return False
-        if stat.S_ISLNK(details.st_mode):
-            return True
-    return False
+    flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0)
+    flags |= getattr(os, "O_NOFOLLOW", 0)
+    descriptor = os.open(absolute.anchor, flags)
+    try:
+        for part in absolute.parts[1:]:
+            child = os.open(part, flags, dir_fd=descriptor)
+            os.close(descriptor)
+            descriptor = child
+        result = descriptor
+        descriptor = -1
+        return result
+    finally:
+        if descriptor >= 0:
+            os.close(descriptor)
 
 
 def _git(repo: Path, *arguments: str) -> str:
@@ -83,26 +94,33 @@ def _git(repo: Path, *arguments: str) -> str:
         raise _ProbeFailure from exc
 
 
-def _safe_directory(path: Path) -> Path | None:
+def _safe_directory(path: Path) -> tuple[_DirectoryBinding | None, bool]:
     lexical = path.absolute()
-    if _has_symlink_component(lexical):
-        return None
+    descriptor: int | None = None
     try:
-        resolved = lexical.resolve(strict=True)
-        details = resolved.stat()
+        descriptor = _open_directory_no_follow(lexical)
+        details = os.fstat(descriptor)
+    except FileNotFoundError:
+        return None, True
     except OSError:
-        return None
+        return None, False
+    finally:
+        if descriptor is not None:
+            os.close(descriptor)
     if not stat.S_ISDIR(details.st_mode) or details.st_uid != os.getuid():
-        return None
-    return resolved
+        return None, False
+    return _DirectoryBinding(lexical, details.st_dev, details.st_ino), False
 
 
-def _common_directory(repo: Path) -> Path:
+def _common_directory(repo: Path) -> tuple[int, int]:
     value = _git(repo, "rev-parse", "--git-common-dir")
     candidate = Path(value)
     if not candidate.is_absolute():
         candidate = repo / candidate
-    return candidate.resolve(strict=True)
+    binding, _ = _safe_directory(candidate)
+    if binding is None:
+        raise _ProbeFailure
+    return binding.device, binding.inode
 
 
 def inspect_persistent_kimi_workspace(
@@ -114,29 +132,34 @@ def inspect_persistent_kimi_workspace(
     this function deliberately cannot create, clean, reset, switch or trust a
     worktree.
     """
-    source = _safe_directory(Path(controller_repository))
-    candidate_path = Path(worker_workspace)
-    if not candidate_path.exists():
+    source, _ = _safe_directory(Path(controller_repository))
+    candidate, candidate_missing = _safe_directory(Path(worker_workspace))
+    if candidate_missing:
         return PersistentWorkspaceReadiness(
             False, WorkspaceReadinessReason.WORKSPACE_MISSING
         )
-    candidate = _safe_directory(candidate_path)
-    if source is None or candidate is None or candidate == source:
+    if (
+        source is None
+        or candidate is None
+        or (candidate.device, candidate.inode) == (source.device, source.inode)
+    ):
         return PersistentWorkspaceReadiness(
             False, WorkspaceReadinessReason.WORKSPACE_UNSAFE
         )
 
     try:
-        if _git(source, "rev-parse", "--is-inside-work-tree") != "true":
+        if _git(source.path, "rev-parse", "--is-inside-work-tree") != "true":
             raise _ProbeFailure
-        if _git(candidate, "rev-parse", "--is-inside-work-tree") != "true":
+        if _git(candidate.path, "rev-parse", "--is-inside-work-tree") != "true":
             raise _ProbeFailure
-        if _common_directory(source) != _common_directory(candidate):
+        if _common_directory(source.path) != _common_directory(candidate.path):
             return PersistentWorkspaceReadiness(
                 False, WorkspaceReadinessReason.FOREIGN_REPOSITORY
             )
         try:
-            branch = _git(candidate, "symbolic-ref", "--quiet", "--short", "HEAD")
+            branch = _git(
+                candidate.path, "symbolic-ref", "--quiet", "--short", "HEAD"
+            )
         except _ProbeFailure:
             return PersistentWorkspaceReadiness(
                 False, WorkspaceReadinessReason.DETACHED_HEAD
@@ -145,9 +168,19 @@ def inspect_persistent_kimi_workspace(
             return PersistentWorkspaceReadiness(
                 False, WorkspaceReadinessReason.UNSAFE_BRANCH
             )
-        if _git(candidate, "status", "--porcelain=v1", "--untracked-files=all"):
+        if _git(
+            candidate.path, "status", "--porcelain=v1", "--untracked-files=all"
+        ):
             return PersistentWorkspaceReadiness(
                 False, WorkspaceReadinessReason.DIRTY_WORKTREE, branch
+            )
+        final_candidate, _ = _safe_directory(candidate.path)
+        if final_candidate is None or (
+            final_candidate.device,
+            final_candidate.inode,
+        ) != (candidate.device, candidate.inode):
+            return PersistentWorkspaceReadiness(
+                False, WorkspaceReadinessReason.WORKSPACE_UNSAFE
             )
     except (OSError, _ProbeFailure):
         return PersistentWorkspaceReadiness(
