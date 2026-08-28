@@ -90,7 +90,7 @@ None.
 ### Verification
 
 - Focused tests: 16 passed, including concurrent overlap contention.
-- Full isolated suite: 1,278 passed, 2 skipped.
+- Full post-rebase suite: 1,325 passed, 2 skipped.
 - `git diff --check`: passed.
 
 ### Decisions required
