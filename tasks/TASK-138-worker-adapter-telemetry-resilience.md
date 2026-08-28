@@ -1,6 +1,6 @@
 # TASK-138 — Worker Adapter and Telemetry Resilience
 
-STATUS: APPROVED
+STATUS: COMPLETE
 
 ## Objective
 
@@ -75,23 +75,78 @@ None.
 
 ## Acceptance criteria
 
-- [ ] Kimi resolves from PATH or the governed owner-home fallback and missing
+- [x] Kimi resolves from PATH or the governed owner-home fallback and missing
       resolution fails once with `EXECUTABLE_NOT_FOUND`.
-- [ ] Gemini uses exactly one `--print=<prompt>` argument with its existing
+- [x] Gemini uses exactly one `--print=<prompt>` argument with its existing
       verified safety flags.
-- [ ] Launch exceptions and executable-style exits are `SPAWN_ERROR`; other
+- [x] Launch exceptions and executable-style exits are `SPAWN_ERROR`; other
       non-zero exits, timeout and cancellation are `RUNTIME_ERROR`.
-- [ ] Non-zero results retain raw stdout/stderr only in memory for immediate
+- [x] Non-zero results retain raw stdout/stderr only in memory for immediate
       bounded classification.
-- [ ] Audit metadata reports timing, exit code, terminal reason, failure class
+- [x] Audit metadata reports timing, exit code, terminal reason, failure class
       and executable resolution without raw command, prompt, PATH, stdout,
       stderr, credentials or business content. Optional CLI-version evidence is
       never collected through an unisolated provider launch.
-- [ ] Existing fail-closed isolation, credential screening, repository checks,
+- [x] Existing fail-closed isolation, credential screening, repository checks,
       approval gates and worker order remain unchanged.
-- [ ] Focused tests, full tests and `git diff --check` pass.
+- [x] Focused tests, full tests and `git diff --check` pass.
 
 ## Owner decisions
 
 None. The owner approved this bounded repair and requested Bugbot review on
 28 August 2026.
+
+## Completion report
+
+### Implemented
+
+- Preserved governed Kimi owner-home executable resolution and Gemini's
+  unambiguous `--print=<prompt>` invocation.
+- Added explicit executable, spawn and runtime failure classifications plus
+  start, finish and elapsed timing metadata.
+- Added bounded audit and auto-pipeline projections without persisting prompts,
+  commands, environment contents or worker transcripts.
+- Removed the unsafe secondary CLI-version launch and corrected provider/runtime
+  profile and quota-classification edge cases found during independent review.
+
+### Files changed
+
+- `advancore/agent_runner/worker.py`
+- `advancore/agent_runner/audit.py`
+- `advancore/agent_runner/runner.py`
+- `advancore/agent_runner/auto_pipeline.py`
+- `tests/test_worker_execution_telemetry.py`
+- `tests/test_agent_runner.py`
+- `tests/test_gemini_worker_foundation.py`
+- `docs/runbooks/WORKER_ROUTING.md`
+- `tasks/TASK-138-worker-adapter-telemetry-resilience.md`
+
+### Database changes
+
+None.
+
+### Tests executed and results
+
+- Focused adapter, telemetry, routing and fallback suites: passed.
+- Full isolated suite: 1,262 passed, 2 skipped.
+- `git diff --check`: passed.
+- Final Bugbot review: clean.
+
+### Assumptions
+
+- CLI-version evidence remains optional until it can be supplied without a
+  second provider process outside the governed isolation boundary.
+
+### Risks / unresolved issues
+
+- Provider authentication, quota and capacity remain external runtime facts;
+  TASK-138 improves diagnosis but cannot guarantee provider availability.
+
+### Decisions required
+
+None.
+
+### Recommended next step
+
+Publish the reviewed feature branch into `projects-lifecycle-recovery`, never
+`main`, then proceed with the separately approved worker-operations tasks.
