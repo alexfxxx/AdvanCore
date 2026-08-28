@@ -155,6 +155,9 @@ from advancore.agent_runner.persistent_kimi_launch import (
     PersistentKimiLaunchStatus,
     PersistentKimiSwarmLaunchService,
 )
+from advancore.agent_runner.persistent_kimi_reporting import (
+    format_persistent_kimi_launch_result,
+)
 from advancore.agent_runner.owner_notifications import (
     OwnerNotification,
     OwnerNotificationFeed,
@@ -328,6 +331,7 @@ __all__ = [
     "PersistentKimiLaunchResult",
     "PersistentKimiLaunchStatus",
     "PersistentKimiSwarmLaunchService",
+    "format_persistent_kimi_launch_result",
     "RehearsalCheck",
     "format_multi_worker_rehearsal",
     "run_multi_worker_governance_rehearsal",

@@ -1,6 +1,6 @@
 # TASK-150 — Real Governed Kimi Swarm Pilot
 
-STATUS: READY
+STATUS: COMPLETE
 
 ## Objective
 
@@ -46,13 +46,24 @@ non-database implementation: a deterministic controller-facing formatter for
 
 ## Acceptance criteria
 
-- [ ] The implementation stays within the exact four-file scope.
-- [ ] Formatter output is deterministic and contains bounded metadata only.
-- [ ] Invalid input fails without exposing the input value.
-- [ ] Focused tests pass.
-- [ ] Controller postchecks accept the exact-scope worker result.
+- [x] The implementation stays within the exact four-file scope.
+- [x] Formatter output is deterministic and contains bounded metadata only.
+- [x] Invalid input fails without exposing the input value.
+- [x] Focused tests pass.
+- [x] Controller postchecks accept the exact-scope worker result.
 
 ## Owner decisions
 
 None. The owner approved proceeding with the controlled real Kimi Swarm pilot
 after TASK-149 merged into `projects-lifecycle-recovery`.
+
+## Completion report
+
+- Kimi Swarm v0.39.0 completed through the TASK-149 governed service in
+  697.819 seconds and changed exactly the four approved files.
+- Gemini and Codex fallback workers were not used.
+- Bugbot identified two formatter-boundary issues; both were repaired under the
+  approved bounded repair cycle, and the final Bugbot review was clean.
+- Focused launch and formatter tests: 40 passed.
+- Local dependency-independent regression suite: 1,427 passed, 2 skipped.
+- `py_compile` and `git diff --check`: passed.
