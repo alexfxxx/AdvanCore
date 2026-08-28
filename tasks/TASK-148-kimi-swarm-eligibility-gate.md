@@ -80,6 +80,6 @@ remain isolated through separate worktrees and TASK-145 reservations.
 - Kept worker launch, worker selection, repository mutation, credentials and
   approval actions outside this component.
 - Verification on 28 August 2026 (including the bounded Bugbot repair cycle):
-  - focused suite: `17 passed`;
-  - full suite: `1380 passed, 2 skipped`;
+  - focused suite: `18 passed`;
+  - full suite: `1381 passed, 2 skipped`;
   - changed-file scope: the four allowed TASK-148 files only.

@@ -231,3 +231,8 @@ def test_malformed_typed_evidence_returns_a_bounded_reason():
     assert _evaluate(reservation=replace(reservation, paths=(None,))).reason == (
         SwarmEligibilityReason.RESERVATION_MISMATCH
     )
+
+
+def test_extreme_aware_timestamp_returns_a_bounded_reason():
+    extreme = datetime.min.replace(tzinfo=timezone(timedelta(hours=14)))
+    assert _evaluate(now=extreme).reason == SwarmEligibilityReason.TIME_INVALID

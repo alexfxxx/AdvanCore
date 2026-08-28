@@ -68,7 +68,11 @@ class ManifestVerificationEvidence:
 def _utc(value: datetime) -> datetime | None:
     if not isinstance(value, datetime) or value.tzinfo is None:
         return None
-    return value.astimezone(timezone.utc)
+    try:
+        return value.astimezone(timezone.utc)
+    except Exception:
+        # Timestamp evidence is untrusted even when it is a datetime instance.
+        return None
 
 
 def evaluate_kimi_swarm_eligibility(
