@@ -16,6 +16,16 @@ from advancore.agent_runner.task_queue import (
 def _queue(tmp_path: Path) -> tuple[GovernedTaskQueue, Path]:
     repository = tmp_path / "repo"
     repository.mkdir(parents=True, exist_ok=True)
+    tasks = repository / "tasks"
+    tasks.mkdir()
+    for task_id, slug in (
+        ("TASK-139", "worker-timeline"),
+        ("TASK-140", "dashboard"),
+        ("TASK-143", "task-queue"),
+    ):
+        (tasks / f"{task_id}-{slug}.md").write_text(
+            f"# {task_id} — Test task\n\nSTATUS: READY\n", encoding="utf-8"
+        )
     state_path = tmp_path / "controller" / "task-queue.json"
     return GovernedTaskQueue(repository, state_path), state_path
 
@@ -44,6 +54,30 @@ def test_fifo_enqueue_claim_complete_and_persistence(tmp_path):
     ]
     assert state_path.stat().st_mode & 0o077 == 0
     assert state_path.parent.stat().st_mode & 0o077 == 0
+
+
+def test_equal_timestamps_preserve_enqueue_call_order(tmp_path):
+    queue, _ = _queue(tmp_path)
+    queue.enqueue("TASK-143", "tasks/TASK-143-task-queue.md", "gemini", now=_time(1))
+    queue.enqueue("TASK-139", "tasks/TASK-139-worker-timeline.md", "kimi", now=_time(1))
+
+    assert queue.claim_next(now=_time(2)).task_id == "TASK-143"
+
+
+def test_enqueue_requires_existing_executable_governed_task(tmp_path):
+    queue, _ = _queue(tmp_path)
+    with pytest.raises(TaskQueueError, match="cannot be opened safely"):
+        queue.enqueue("TASK-141", "tasks/TASK-141-missing.md", "kimi", now=_time(1))
+
+    draft = tmp_path / "repo" / "tasks" / "TASK-141-draft.md"
+    draft.write_text("# TASK-141 — Draft task\n\nSTATUS: DRAFT\n", encoding="utf-8")
+    with pytest.raises(TaskQueueError, match="not approved"):
+        queue.enqueue("TASK-141", "tasks/TASK-141-draft.md", "kimi", now=_time(1))
+
+    draft.write_text("# TASK-141 — Rework task\n\nSTATUS: REWORK\n", encoding="utf-8")
+    assert queue.enqueue(
+        "TASK-141", "tasks/TASK-141-draft.md", "kimi", now=_time(1)
+    ).status == TaskQueueStatus.QUEUED
 
 
 def test_duplicate_and_invalid_values_fail_closed(tmp_path):
@@ -75,6 +109,17 @@ def test_invalid_transitions_fail_closed(tmp_path):
     queue.complete("TASK-139", now=_time(3))
     with pytest.raises(TaskQueueError):
         queue.complete("TASK-139", now=_time(4))
+
+
+def test_backward_transition_timestamps_fail_without_mutation(tmp_path):
+    queue, _ = _queue(tmp_path)
+    queue.enqueue("TASK-139", "tasks/TASK-139-worker-timeline.md", "kimi", now=_time(2))
+    with pytest.raises(TaskQueueError, match="predates enqueue"):
+        queue.claim_next(now=_time(2) - timedelta(minutes=1))
+    assert queue.claim_next(now=_time(3)).status == TaskQueueStatus.RUNNING
+    with pytest.raises(TaskQueueError, match="predates queue transition"):
+        queue.complete("TASK-139", now=_time(3) - timedelta(minutes=1))
+    assert queue.list_records(now=_time(3))[0].status == TaskQueueStatus.RUNNING
 
 
 def test_stale_running_claim_is_blocked_before_next_claim(tmp_path):

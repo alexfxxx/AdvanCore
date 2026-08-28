@@ -77,6 +77,10 @@ assigned implementation worker; Codex remains controller and final fallback.
   explicit `QUEUED`, `RUNNING`, `COMPLETED` and `BLOCKED` transitions.
 - Added an owner-only lock, atomic replacement, strict record validation and a
   two-hour stale-claim block that never silently retries work.
+- Required a real, direct `READY` or `REWORK` governed task file both when a
+  record is enqueued and immediately before it is claimed.
+- Preserved actual enqueue order for equal timestamps and rejected backward
+  transition times before they can be persisted.
 - Documented that the queue has no worker-launch, approval, publication, merge,
   database or deployment authority.
 
@@ -93,8 +97,8 @@ None.
 
 ### Verification
 
-- Focused tests: 6 passed.
-- Full isolated suite: 1,268 passed, 2 skipped.
+- Focused tests: 9 passed.
+- Full isolated suite: 1,271 passed, 2 skipped.
 - `git diff --check`: passed.
 
 ### Decisions required

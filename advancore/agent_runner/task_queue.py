@@ -22,8 +22,12 @@ from typing import Iterator
 
 _TASK_ID = re.compile(r"^TASK-[0-9]{3}$")
 _TASK_PATH = re.compile(r"^tasks/(TASK-[0-9]{3})-[A-Za-z0-9_.-]+\.md$")
+_TASK_STATUS = re.compile(r"^STATUS:\s*(\w+)\s*$", re.IGNORECASE)
+_TASK_TITLE = re.compile(r"^#\s+(TASK-[0-9]{3})\s*[—–-]\s+.+$", re.IGNORECASE)
 _WORKERS = frozenset({"kimi", "kimi-swarm", "gemini", "codex"})
+_EXECUTABLE_TASK_STATUSES = frozenset({"READY", "REWORK"})
 _MAX_BYTES = 512 * 1024
+_MAX_TASK_BYTES = 256 * 1024
 _MAX_RECORDS = 256
 _FUTURE_SKEW = timedelta(minutes=5)
 _STALE_CLAIM = timedelta(hours=2)
@@ -159,6 +163,63 @@ class GovernedTaskQueue:
             finished_at=finished,
         )
 
+    def _validate_governed_task_file(self, task_id: str, task_path: str) -> None:
+        """Require a real, direct, approved task specification before queueing."""
+        match = _TASK_PATH.fullmatch(task_path)
+        if match is None or match.group(1) != task_id:
+            raise TaskQueueError("governed task path is invalid")
+        candidate = self.repository_root / PurePosixPath(task_path)
+        if _has_symlink_component(candidate):
+            raise TaskQueueError("governed task path contains a symbolic link")
+        flags = os.O_RDONLY
+        if hasattr(os, "O_NOFOLLOW"):
+            flags |= os.O_NOFOLLOW
+        try:
+            descriptor = os.open(candidate, flags)
+        except OSError as exc:
+            raise TaskQueueError("governed task file cannot be opened safely") from exc
+        try:
+            details = os.fstat(descriptor)
+            if (
+                not stat.S_ISREG(details.st_mode)
+                or details.st_nlink != 1
+                or details.st_size > _MAX_TASK_BYTES
+            ):
+                raise TaskQueueError("governed task file is unsafe")
+            chunks: list[bytes] = []
+            remaining = _MAX_TASK_BYTES + 1
+            while remaining:
+                chunk = os.read(descriptor, min(64 * 1024, remaining))
+                if not chunk:
+                    break
+                chunks.append(chunk)
+                remaining -= len(chunk)
+            content = b"".join(chunks)
+            if len(content) > _MAX_TASK_BYTES:
+                raise TaskQueueError("governed task file exceeds its size limit")
+            text = content.decode("utf-8")
+        except TaskQueueError:
+            raise
+        except (OSError, UnicodeError) as exc:
+            raise TaskQueueError("governed task file cannot be read") from exc
+        finally:
+            os.close(descriptor)
+
+        statuses = [
+            match.group(1).upper()
+            for line in text.splitlines()
+            if (match := _TASK_STATUS.fullmatch(line)) is not None
+        ]
+        title_ids = [
+            match.group(1).upper()
+            for line in text.splitlines()
+            if (match := _TASK_TITLE.fullmatch(line)) is not None
+        ]
+        if title_ids != [task_id]:
+            raise TaskQueueError("governed task title is missing or mismatched")
+        if len(statuses) != 1 or statuses[0] not in _EXECUTABLE_TASK_STATUSES:
+            raise TaskQueueError("governed task is not approved for execution")
+
     def _load_unlocked(self, now: datetime) -> list[TaskQueueRecord]:
         if not self.state_path.exists():
             return []
@@ -217,15 +278,26 @@ class GovernedTaskQueue:
                 records.append(record)
         except (KeyError, TypeError, ValueError) as exc:
             raise TaskQueueError("queue record is malformed") from exc
-        if records != sorted(records, key=lambda item: (item.enqueued_at, item.task_id)):
+        if any(
+            later.enqueued_at < earlier.enqueued_at
+            for earlier, later in zip(records, records[1:])
+        ):
             raise TaskQueueError("queue order is invalid")
         return records
 
-    def _write_unlocked(self, records: list[TaskQueueRecord]) -> None:
+    def _write_unlocked(
+        self, records: list[TaskQueueRecord], now: datetime
+    ) -> None:
         if len(records) > _MAX_RECORDS:
             raise TaskQueueError("queue record limit reached")
         payload: list[dict[str, object]] = []
-        for record in records:
+        validated = [self._validate_record(record, now) for record in records]
+        if any(
+            later.enqueued_at < earlier.enqueued_at
+            for earlier, later in zip(validated, validated[1:])
+        ):
+            raise TaskQueueError("queue order is invalid")
+        for record in validated:
             item = asdict(record)
             item["status"] = record.status.value
             for name in ("enqueued_at", "claimed_at", "finished_at"):
@@ -277,13 +349,15 @@ class GovernedTaskQueue:
         )
         with self._locked(exclusive=True):
             records = self._load_unlocked(current)
+            self._validate_governed_task_file(task_id, task_path)
             if any(item.task_id == task_id for item in records):
                 raise TaskQueueError("task is already present in the queue")
             if len(records) >= _MAX_RECORDS:
                 raise TaskQueueError("queue record limit reached")
+            if records and current < records[-1].enqueued_at:
+                raise TaskQueueError("enqueue timestamp moved backward")
             records.append(record)
-            records.sort(key=lambda item: (item.enqueued_at, item.task_id))
-            self._write_unlocked(records)
+            self._write_unlocked(records, current)
         return record
 
     def claim_next(self, *, now: datetime | None = None) -> TaskQueueRecord | None:
@@ -296,27 +370,40 @@ class GovernedTaskQueue:
                     continue
                 if record.claimed_at is None:
                     raise TaskQueueError("running queue record lacks claim time")
+                if current < record.claimed_at:
+                    raise TaskQueueError("claim evaluation time moved backward")
                 if current - record.claimed_at >= _STALE_CLAIM:
-                    records[index] = replace(
-                        record,
-                        status=TaskQueueStatus.BLOCKED,
-                        finished_at=current,
+                    records[index] = self._validate_record(
+                        replace(
+                            record,
+                            status=TaskQueueStatus.BLOCKED,
+                            finished_at=current,
+                        ),
+                        current,
                     )
                     changed = True
                 else:
                     return None
             for index, record in enumerate(records):
                 if record.status == TaskQueueStatus.QUEUED:
-                    claimed = replace(
-                        record,
-                        status=TaskQueueStatus.RUNNING,
-                        claimed_at=current,
+                    if current < record.enqueued_at:
+                        raise TaskQueueError("claim predates enqueue")
+                    self._validate_governed_task_file(
+                        record.task_id, record.task_path
+                    )
+                    claimed = self._validate_record(
+                        replace(
+                            record,
+                            status=TaskQueueStatus.RUNNING,
+                            claimed_at=current,
+                        ),
+                        current,
                     )
                     records[index] = claimed
-                    self._write_unlocked(records)
+                    self._write_unlocked(records, current)
                     return claimed
             if changed:
-                self._write_unlocked(records)
+                self._write_unlocked(records, current)
             return None
 
     def _finish(
@@ -337,9 +424,14 @@ class GovernedTaskQueue:
                 )
                 if not allowed:
                     raise TaskQueueError("requested queue transition is invalid")
-                finished = replace(record, status=status, finished_at=current)
+                transition_time = record.claimed_at or record.enqueued_at
+                if current < transition_time:
+                    raise TaskQueueError("finish predates queue transition")
+                finished = self._validate_record(
+                    replace(record, status=status, finished_at=current), current
+                )
                 records[index] = finished
-                self._write_unlocked(records)
+                self._write_unlocked(records, current)
                 return finished
             raise TaskQueueError("task is not present in the queue")
 
