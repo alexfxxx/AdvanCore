@@ -2,6 +2,7 @@
 
 from datetime import datetime, timedelta, timezone
 import json
+import os
 from pathlib import Path
 import threading
 
@@ -66,6 +67,16 @@ def test_exact_and_ancestor_overlaps_fail_closed(tmp_path):
         service.reserve("TASK-140", "gemini", ["advancore/agent_runner/a.py"], now=NOW)
     with pytest.raises(ScopeReservationError):
         service.reserve("TASK-141", "codex", ["advancore/agent_runner"], now=NOW)
+
+
+def test_symlink_scope_alias_fails_closed(tmp_path):
+    service, _ = _service(tmp_path)
+    repository = tmp_path / "repo"
+    (repository / "real").mkdir()
+    (repository / "alias").symlink_to(repository / "real", target_is_directory=True)
+
+    with pytest.raises(ScopeReservationError, match="symbolic-link alias"):
+        service.reserve("TASK-139", "kimi", ["alias/a.py"], now=NOW)
 
 
 def test_release_and_expiry_allow_later_reservation(tmp_path):
@@ -149,3 +160,82 @@ def test_state_contains_only_bounded_operational_metadata(tmp_path):
     raw = state.read_text(encoding="utf-8")
     for forbidden in ("prompt", "command", "stdout", "stderr", "credential"):
         assert forbidden not in raw.lower()
+
+
+def test_persisted_overlap_and_future_release_fail_closed(tmp_path):
+    service, state = _service(tmp_path)
+    state.parent.mkdir(mode=0o700)
+    base = {
+        "worker": "kimi",
+        "status": "ACTIVE",
+        "reserved_at": NOW.isoformat(),
+        "expires_at": (NOW + timedelta(hours=4)).isoformat(),
+        "released_at": None,
+    }
+    state.write_text(
+        json.dumps(
+            [
+                {**base, "task_id": "TASK-139", "paths": ["advancore"]},
+                {
+                    **base,
+                    "task_id": "TASK-140",
+                    "worker": "gemini",
+                    "paths": ["advancore/a.py"],
+                },
+            ]
+        ),
+        encoding="utf-8",
+    )
+    state.chmod(0o600)
+    with pytest.raises(ScopeReservationError, match="scopes overlap"):
+        service.list_reservations(now=NOW)
+
+    released = {
+        **base,
+        "task_id": "TASK-139",
+        "paths": ["a.py"],
+        "status": "RELEASED",
+        "released_at": (NOW + timedelta(hours=1)).isoformat(),
+    }
+    state.write_text(json.dumps([released]), encoding="utf-8")
+    state.chmod(0o600)
+    with pytest.raises(ScopeReservationError, match="timing is invalid"):
+        service.list_reservations(now=NOW)
+
+
+def test_swapped_state_parent_and_hardlinked_lock_fail_closed(tmp_path):
+    repository = tmp_path / "repo"
+    repository.mkdir()
+    controller = tmp_path / "controller"
+    controller.mkdir(mode=0o700)
+    state = controller / "reservations.json"
+    service = ScopeReservationService(repository, state)
+
+    real_controller = tmp_path / "real-controller"
+    controller.rename(real_controller)
+    controller.symlink_to(real_controller, target_is_directory=True)
+    with pytest.raises(ScopeReservationError):
+        service.list_reservations(now=NOW)
+
+    controller.unlink()
+    real_controller.rename(controller)
+    protected = tmp_path / "protected.txt"
+    protected.write_text("owner data", encoding="utf-8")
+    protected.chmod(0o600)
+    os.link(protected, state.with_suffix(".json.lock"))
+    with pytest.raises(ScopeReservationError, match="lock is unsafe"):
+        service.list_reservations(now=NOW)
+    assert protected.read_text(encoding="utf-8") == "owner data"
+
+
+def test_backward_reservation_timestamp_fails_without_corrupting_state(tmp_path):
+    service, _ = _service(tmp_path)
+    service.reserve("TASK-139", "kimi", ["a.py"], now=NOW)
+
+    with pytest.raises(ScopeReservationError, match="moved backward"):
+        service.reserve(
+            "TASK-140", "gemini", ["b.py"], now=NOW - timedelta(minutes=1)
+        )
+    assert [item.task_id for item in service.list_reservations(now=NOW)] == [
+        "TASK-139"
+    ]

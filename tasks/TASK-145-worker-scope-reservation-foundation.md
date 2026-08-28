@@ -69,6 +69,10 @@ fallback while those providers are unavailable or nonproductive.
   worker repository, with atomic replacement and bounded retention.
 - Added explicit reserve/release operations and four-hour stale expiry that can
   never trigger execution or retry.
+- Rejected symbolic-link scope aliases, overlapping active records injected
+  into persisted state, and future-dated release timestamps.
+- Bound lock, read and atomic-replacement operations to a verified owner-only
+  directory descriptor and rejected backward reservation timestamps.
 - Documented the service's lack of approval, launch, Git, database, publication,
   merge and deployment authority.
 
@@ -85,8 +89,8 @@ None.
 
 ### Verification
 
-- Focused tests: 12 passed, including concurrent overlap contention.
-- Full isolated suite: 1,274 passed, 2 skipped.
+- Focused tests: 16 passed, including concurrent overlap contention.
+- Full isolated suite: 1,278 passed, 2 skipped.
 - `git diff --check`: passed.
 
 ### Decisions required

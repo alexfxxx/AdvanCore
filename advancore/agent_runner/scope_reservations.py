@@ -11,8 +11,8 @@ import json
 import os
 from pathlib import Path, PurePosixPath
 import re
+import secrets
 import stat
-import tempfile
 from typing import Iterator
 
 
@@ -71,6 +71,36 @@ def _has_symlink_component(path: Path) -> bool:
     return False
 
 
+def _open_verified_owner_directory(path: Path) -> int:
+    """Create and bind an owner-only directory tree without following links."""
+    absolute = path.absolute()
+    flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0)
+    flags |= getattr(os, "O_NOFOLLOW", 0)
+    descriptor = os.open(absolute.anchor, flags)
+    try:
+        for part in absolute.parts[1:]:
+            try:
+                child = os.open(part, flags, dir_fd=descriptor)
+            except FileNotFoundError:
+                try:
+                    os.mkdir(part, 0o700, dir_fd=descriptor)
+                except FileExistsError:
+                    pass
+                child = os.open(part, flags, dir_fd=descriptor)
+            os.close(descriptor)
+            descriptor = child
+        details = os.fstat(descriptor)
+        if not stat.S_ISDIR(details.st_mode) or details.st_uid != os.getuid():
+            raise ScopeReservationError("reservation directory owner is unsafe")
+        os.fchmod(descriptor, 0o700)
+        result = descriptor
+        descriptor = -1
+        return result
+    finally:
+        if descriptor >= 0:
+            os.close(descriptor)
+
+
 def _validate_scope_path(value: str) -> str:
     if not isinstance(value, str) or not _SAFE_PATH.fullmatch(value):
         raise ScopeReservationError("scope path is invalid")
@@ -120,20 +150,19 @@ class ScopeReservationService:
         self.lock_path = self.state_path.with_suffix(self.state_path.suffix + ".lock")
 
     @contextmanager
-    def _locked(self) -> Iterator[None]:
+    def _locked(self) -> Iterator[int]:
+        parent_descriptor: int | None = None
         descriptor: int | None = None
         try:
-            self.state_path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
-            if _has_symlink_component(self.state_path.parent):
-                raise ScopeReservationError("reservation directory became unsafe")
-            parent_details = self.state_path.parent.stat()
-            if parent_details.st_uid != os.getuid():
-                raise ScopeReservationError("reservation directory owner is unsafe")
-            os.chmod(self.state_path.parent, 0o700)
+            parent_descriptor = _open_verified_owner_directory(
+                self.state_path.parent
+            )
             flags = os.O_RDWR | os.O_CREAT
             if hasattr(os, "O_NOFOLLOW"):
                 flags |= os.O_NOFOLLOW
-            descriptor = os.open(self.lock_path, flags, 0o600)
+            descriptor = os.open(
+                self.lock_path.name, flags, 0o600, dir_fd=parent_descriptor
+            )
             details = os.fstat(descriptor)
             if (
                 not stat.S_ISREG(details.st_mode)
@@ -143,7 +172,7 @@ class ScopeReservationService:
             ):
                 raise ScopeReservationError("reservation lock is unsafe")
             fcntl.flock(descriptor, fcntl.LOCK_EX)
-            yield
+            yield parent_descriptor
         except ScopeReservationError:
             raise
         except OSError as exc:
@@ -154,6 +183,8 @@ class ScopeReservationService:
                     fcntl.flock(descriptor, fcntl.LOCK_UN)
                 finally:
                     os.close(descriptor)
+            if parent_descriptor is not None:
+                os.close(parent_descriptor)
 
     def _validate(
         self, reservation: ScopeReservation, now: datetime
@@ -169,10 +200,26 @@ class ScopeReservationService:
         paths = tuple(_validate_scope_path(value) for value in reservation.paths)
         if len(set(paths)) != len(paths) or paths != tuple(sorted(paths)):
             raise ScopeReservationError("reservation paths must be unique and sorted")
+        for value in paths:
+            candidate = self.repository_root / PurePosixPath(value)
+            if _has_symlink_component(candidate):
+                raise ScopeReservationError(
+                    "reservation scope contains a symbolic-link alias"
+                )
+            resolved = candidate.resolve(strict=False)
+            if (
+                resolved == self.repository_root
+                or self.repository_root not in resolved.parents
+            ):
+                raise ScopeReservationError("reservation scope escapes repository")
         reserved = _utc(reservation.reserved_at)
         expires = _utc(reservation.expires_at)
         released = _utc(reservation.released_at) if reservation.released_at else None
-        if reserved > now + _FUTURE_SKEW or expires > reserved + _LEASE:
+        if (
+            reserved > now + _FUTURE_SKEW
+            or expires > reserved + _LEASE
+            or (released is not None and released > now + _FUTURE_SKEW)
+        ):
             raise ScopeReservationError("reservation timing is invalid")
         if expires <= reserved or (released is not None and released < reserved):
             raise ScopeReservationError("reservation timing order is invalid")
@@ -188,11 +235,17 @@ class ScopeReservationService:
             released_at=released,
         )
 
-    def _load_unlocked(self, now: datetime) -> list[ScopeReservation]:
-        if not self.state_path.exists():
-            return []
+    def _load_unlocked(
+        self, now: datetime, parent_descriptor: int
+    ) -> list[ScopeReservation]:
+        descriptor: int | None = None
         try:
-            details = self.state_path.lstat()
+            descriptor = os.open(
+                self.state_path.name,
+                os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0),
+                dir_fd=parent_descriptor,
+            )
+            details = os.fstat(descriptor)
             if (
                 not stat.S_ISREG(details.st_mode)
                 or details.st_uid != os.getuid()
@@ -201,11 +254,18 @@ class ScopeReservationService:
                 or details.st_size > _MAX_BYTES
             ):
                 raise ScopeReservationError("reservation state file is unsafe")
-            raw = json.loads(self.state_path.read_text(encoding="utf-8"))
+            with os.fdopen(descriptor, "r", encoding="utf-8") as handle:
+                descriptor = None
+                raw = json.load(handle)
+        except FileNotFoundError:
+            return []
         except ScopeReservationError:
             raise
         except (OSError, UnicodeError, json.JSONDecodeError, RecursionError) as exc:
             raise ScopeReservationError("reservation state cannot be read") from exc
+        finally:
+            if descriptor is not None:
+                os.close(descriptor)
         if not isinstance(raw, list) or len(raw) > _MAX_RECORDS:
             raise ScopeReservationError("reservation state is not a bounded list")
         records: list[ScopeReservation] = []
@@ -246,9 +306,24 @@ class ScopeReservationService:
         ]
         if len(active_tasks) != len(set(active_tasks)):
             raise ScopeReservationError("duplicate active task reservation")
+        active = [
+            record for record in records if record.status == ReservationStatus.ACTIVE
+        ]
+        for index, left in enumerate(active):
+            for right in active[index + 1 :]:
+                if any(
+                    _paths_overlap(left_path, right_path)
+                    for left_path in left.paths
+                    for right_path in right.paths
+                ):
+                    raise ScopeReservationError(
+                        "persisted active reservation scopes overlap"
+                    )
         return records
 
-    def _write_unlocked(self, records: list[ScopeReservation]) -> None:
+    def _write_unlocked(
+        self, records: list[ScopeReservation], parent_descriptor: int
+    ) -> None:
         if len(records) > _MAX_RECORDS:
             raise ScopeReservationError("reservation record limit reached")
         payload: list[dict[str, object]] = []
@@ -263,25 +338,41 @@ class ScopeReservationService:
         encoded = json.dumps(payload, sort_keys=True, separators=(",", ":")) + "\n"
         if len(encoded.encode("utf-8")) > _MAX_BYTES:
             raise ScopeReservationError("reservation state exceeds its size limit")
-        temporary: Path | None = None
+        temporary_name = (
+            f".{self.state_path.name}.{os.getpid()}.{secrets.token_hex(8)}.tmp"
+        )
+        temporary_descriptor: int | None = None
         try:
-            with tempfile.NamedTemporaryFile(
-                "w", encoding="utf-8", dir=self.state_path.parent, delete=False
-            ) as handle:
-                temporary = Path(handle.name)
-                os.chmod(temporary, 0o600)
+            temporary_descriptor = os.open(
+                temporary_name,
+                os.O_CREAT
+                | os.O_EXCL
+                | os.O_WRONLY
+                | getattr(os, "O_NOFOLLOW", 0),
+                0o600,
+                dir_fd=parent_descriptor,
+            )
+            with os.fdopen(temporary_descriptor, "w", encoding="utf-8") as handle:
+                temporary_descriptor = None
                 handle.write(encoded)
                 handle.flush()
                 os.fsync(handle.fileno())
-            os.replace(temporary, self.state_path)
-            os.chmod(self.state_path, 0o600)
+            os.replace(
+                temporary_name,
+                self.state_path.name,
+                src_dir_fd=parent_descriptor,
+                dst_dir_fd=parent_descriptor,
+            )
+            os.fsync(parent_descriptor)
         except OSError as exc:
-            if temporary is not None:
-                try:
-                    temporary.unlink(missing_ok=True)
-                except OSError:
-                    pass
+            try:
+                os.unlink(temporary_name, dir_fd=parent_descriptor)
+            except OSError:
+                pass
             raise ScopeReservationError("reservation state cannot be written") from exc
+        finally:
+            if temporary_descriptor is not None:
+                os.close(temporary_descriptor)
 
     @staticmethod
     def _expire_and_compact(
@@ -314,11 +405,11 @@ class ScopeReservationService:
         self, *, now: datetime | None = None
     ) -> list[ScopeReservation]:
         current = _utc(now or datetime.now(timezone.utc))
-        with self._locked():
-            records = self._load_unlocked(current)
+        with self._locked() as parent_descriptor:
+            records = self._load_unlocked(current, parent_descriptor)
             records, changed = self._expire_and_compact(records, current)
             if changed:
-                self._write_unlocked(records)
+                self._write_unlocked(records, parent_descriptor)
             return records
 
     def reserve(
@@ -341,8 +432,8 @@ class ScopeReservationService:
             ),
             current,
         )
-        with self._locked():
-            records = self._load_unlocked(current)
+        with self._locked() as parent_descriptor:
+            records = self._load_unlocked(current, parent_descriptor)
             records, _ = self._expire_and_compact(records, current)
             for record in records:
                 if record.status != ReservationStatus.ACTIVE:
@@ -359,8 +450,10 @@ class ScopeReservationService:
                     )
             if len(records) >= _MAX_RECORDS:
                 raise ScopeReservationError("reservation record limit reached")
+            if records and current < records[-1].reserved_at:
+                raise ScopeReservationError("reservation timestamp moved backward")
             records.append(proposed)
-            self._write_unlocked(records)
+            self._write_unlocked(records, parent_descriptor)
         return proposed
 
     def release(
@@ -369,8 +462,8 @@ class ScopeReservationService:
         current = _utc(now or datetime.now(timezone.utc))
         if not _TASK_ID.fullmatch(task_id):
             raise ScopeReservationError("task identifier is invalid")
-        with self._locked():
-            records = self._load_unlocked(current)
+        with self._locked() as parent_descriptor:
+            records = self._load_unlocked(current, parent_descriptor)
             records, _ = self._expire_and_compact(records, current)
             for index, record in enumerate(records):
                 if record.task_id != task_id or record.status != ReservationStatus.ACTIVE:
@@ -384,6 +477,6 @@ class ScopeReservationService:
                     current,
                 )
                 records[index] = released
-                self._write_unlocked(records)
+                self._write_unlocked(records, parent_descriptor)
                 return released
             raise ScopeReservationError("active task reservation was not found")

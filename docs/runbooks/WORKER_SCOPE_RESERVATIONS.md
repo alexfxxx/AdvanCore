@@ -4,6 +4,9 @@ The controller may reserve the exact changed-file scope of an already governed
 task before assigning separate work to Kimi, Gemini or Codex. An active exact or
 ancestor/descendant overlap fails closed, including when two controller
 processes race for the same scope.
+Existing symbolic-link path components are rejected so different textual paths
+cannot reserve aliases of the same repository location. Persisted active
+records are rechecked pairwise for overlap whenever state is loaded.
 
 This is a metadata safety service, not an authority boundary. A reservation does
 not approve a task, launch a worker, run `agent_runner`, grant access, stage or
