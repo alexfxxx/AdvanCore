@@ -300,6 +300,14 @@ def inspect_persistent_kimi_workspace(
             return PersistentWorkspaceReadiness(
                 False, WorkspaceReadinessReason.DIRTY_WORKTREE, final_branch
             )
+        last_candidate, _ = _safe_directory(candidate.path)
+        if last_candidate is None or (
+            last_candidate.device,
+            last_candidate.inode,
+        ) != (candidate.device, candidate.inode):
+            return PersistentWorkspaceReadiness(
+                False, WorkspaceReadinessReason.WORKSPACE_UNSAFE
+            )
     except (OSError, _ProbeFailure):
         return PersistentWorkspaceReadiness(
             False, WorkspaceReadinessReason.GIT_PROBE_FAILED

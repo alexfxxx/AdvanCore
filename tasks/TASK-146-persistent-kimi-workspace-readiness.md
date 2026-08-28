@@ -83,6 +83,8 @@ CLI upgrade remain owner-attended.
   output handling.
 - Rejected unregistered copies of linked worktrees and terminated surviving
   probe descendants independently of the Git leader process.
+- Rebound the candidate after the second branch/status snapshot so a directory
+  replacement during final evidence collection fails closed.
 - Added an operations runbook that keeps creation, cleanup, branch switching,
   Kimi trust, authentication, upgrades and worker launch outside this service.
 
@@ -99,8 +101,8 @@ None.
 
 ### Verification
 
-- Focused tests: 11 passed.
-- Full post-rebase suite: 1,340 passed, 2 skipped.
+- Focused tests: 12 passed.
+- Full post-rebase suite: 1,341 passed, 2 skipped.
 - `git diff --check`: passed.
 
 ### Decisions required

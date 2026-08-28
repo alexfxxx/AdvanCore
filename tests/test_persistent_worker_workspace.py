@@ -208,3 +208,26 @@ def test_process_group_cleanup_checks_group_not_only_leader(monkeypatch):
     workspace_module._terminate_process_group(FinishedLeader())
 
     assert signals == [signal.SIGTERM, signal.SIGKILL]
+
+
+def test_worktree_swap_during_final_snapshot_fails_closed(tmp_path, monkeypatch):
+    repository, worker = _repository_with_worktree(tmp_path)
+    replacement = tmp_path / "replacement"
+    shutil.copytree(worker, replacement)
+    original_git = workspace_module._git
+    branch_calls = 0
+
+    def swapping_git(repo: Path, *arguments: str) -> str:
+        nonlocal branch_calls
+        if arguments and arguments[0] == "symbolic-ref":
+            branch_calls += 1
+            if branch_calls == 2:
+                worker.rename(tmp_path / "original-worker")
+                replacement.rename(worker)
+        return original_git(repo, *arguments)
+
+    monkeypatch.setattr(workspace_module, "_git", swapping_git)
+
+    result = inspect_persistent_kimi_workspace(repository, worker)
+
+    assert result.reason == WorkspaceReadinessReason.WORKSPACE_UNSAFE
