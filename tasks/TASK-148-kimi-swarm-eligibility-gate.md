@@ -1,6 +1,6 @@
 # TASK-148 — Kimi Swarm Eligibility Gate
 
-STATUS: READY
+STATUS: COMPLETE
 
 ## Objective
 
@@ -53,12 +53,12 @@ None.
 
 ## Acceptance criteria
 
-- [ ] Matching explicit queue, reservation, workspace and manifest evidence can
+- [x] Matching explicit queue, reservation, workspace and manifest evidence can
       produce an eligible decision for suitable work.
-- [ ] Every missing, mismatched, unsafe or unsuitable input fails closed with a
+- [x] Every missing, mismatched, unsafe or unsuitable input fails closed with a
       bounded reason code.
-- [ ] No method can mutate state or launch/select a worker by itself.
-- [ ] Focused tests, full tests and `git diff --check` pass.
+- [x] No method can mutate state or launch/select a worker by itself.
+- [x] Focused tests, full tests and `git diff --check` pass.
 
 ## Owner decisions
 
@@ -66,3 +66,16 @@ Approved on 28 August 2026 as the last unattended foundation step before
 owner-attended persistent-worktree creation/trust and later launch integration.
 Swarm remains one governed task in one worktree; separate simultaneous tasks
 remain isolated through separate worktrees and TASK-145 reservations.
+
+## Completion report
+
+- Added an immutable, side-effect-free controller gate for explicit Kimi Swarm
+  eligibility decisions.
+- Required matching TASK-143 queue ownership, TASK-145 path reservation,
+  TASK-146 workspace readiness and TASK-147 scope-manifest verification.
+- Kept worker launch, worker selection, repository mutation, credentials and
+  approval actions outside this component.
+- Verification on 28 August 2026:
+  - focused suite: `14 passed`;
+  - full suite: `1377 passed, 2 skipped`;
+  - changed-file scope: the four allowed TASK-148 files only.
