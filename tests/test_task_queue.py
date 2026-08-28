@@ -15,7 +15,7 @@ from advancore.agent_runner.task_queue import (
 
 def _queue(tmp_path: Path) -> tuple[GovernedTaskQueue, Path]:
     repository = tmp_path / "repo"
-    repository.mkdir()
+    repository.mkdir(parents=True, exist_ok=True)
     state_path = tmp_path / "controller" / "task-queue.json"
     return GovernedTaskQueue(repository, state_path), state_path
 
