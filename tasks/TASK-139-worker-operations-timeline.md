@@ -1,6 +1,6 @@
 # TASK-139 — Worker Operations Timeline
 
-STATUS: READY
+STATUS: COMPLETE
 
 ## Objective
 
@@ -51,14 +51,46 @@ None.
 
 ## Acceptance criteria
 
-- [ ] Successful and failed worker attempts create bounded timeline events.
-- [ ] Events survive app sessions for seven days and compact safely.
-- [ ] No raw worker content, secrets, environment values or repository paths are
+- [x] Successful and failed worker attempts create bounded timeline events.
+- [x] Events survive app sessions for seven days and compact safely.
+- [x] No raw worker content, secrets, environment values or repository paths are
       persisted.
-- [ ] Missing/invalid state fails closed and cannot change the runner result.
-- [ ] Focused tests, full tests and `git diff --check` pass.
+- [x] Missing/invalid state fails closed and cannot change the runner result.
+- [x] Focused tests, full tests and `git diff --check` pass.
 
 ## Owner decisions
 
 Approved for unattended implementation on 28 August 2026. Kimi is the assigned
 implementation worker; Codex remains controller and final fallback.
+
+## Completion report
+
+### Implemented
+
+- Added an owner-only, bounded seven-day JSONL worker-attempt timeline outside
+  the worker repository.
+- Projected safe execution metadata from `agent_runner` without storing prompts,
+  commands, output, environment contents or executable paths.
+- Made timeline-write failure visible without changing the primary governed
+  runner result.
+
+### Worker routing evidence
+
+- Kimi was attempted first and resolved successfully, but its isolated runtime
+  stopped with a permission error before implementation.
+- Expanding Kimi's persistent workspace-trust access was not authorized, so the
+  controller preserved that security boundary and used Codex as final fallback.
+
+### Database changes
+
+None.
+
+### Verification
+
+- Focused tests: 67 passed.
+- Full isolated suite: 1,270 passed, 2 skipped.
+- `git diff --check`: passed.
+
+### Decisions required
+
+None for TASK-139. Kimi workspace-trust access remains a separate owner decision.
