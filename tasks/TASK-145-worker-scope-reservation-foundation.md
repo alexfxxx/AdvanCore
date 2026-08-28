@@ -1,6 +1,6 @@
 # TASK-145 — Worker Scope Reservation Foundation
 
-STATUS: APPROVED
+STATUS: READY
 
 ## Objective
 
