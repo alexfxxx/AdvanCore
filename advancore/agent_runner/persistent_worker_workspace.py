@@ -16,6 +16,7 @@ import time
 
 _GIT = "/usr/bin/git"
 _GIT_TIMEOUT_SECONDS = 5
+_TERMINATION_GRACE_SECONDS = 0.2
 _MAX_OUTPUT_BYTES = 4096
 _FEATURE_BRANCH = re.compile(r"^task-[a-z0-9][a-z0-9-]{0,100}$")
 _GIT_ENV = {
@@ -57,6 +58,36 @@ class _DirectoryBinding:
 
 class _ProbeFailure(RuntimeError):
     pass
+
+
+def _process_group_exists(group_id: int) -> bool:
+    try:
+        os.killpg(group_id, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    return True
+
+
+def _terminate_process_group(process: subprocess.Popen[bytes]) -> None:
+    group_id = process.pid
+    try:
+        os.killpg(group_id, signal.SIGTERM)
+    except ProcessLookupError:
+        pass
+    deadline = time.monotonic() + _TERMINATION_GRACE_SECONDS
+    while time.monotonic() < deadline and _process_group_exists(group_id):
+        time.sleep(0.01)
+    if _process_group_exists(group_id):
+        try:
+            os.killpg(group_id, signal.SIGKILL)
+        except (ProcessLookupError, PermissionError):
+            pass
+    try:
+        process.wait(timeout=_TERMINATION_GRACE_SECONDS)
+    except (subprocess.TimeoutExpired, ProcessLookupError):
+        pass
 
 
 def _open_directory_no_follow(path: Path) -> int:
@@ -122,21 +153,7 @@ def _git(repo: Path, *arguments: str) -> str:
             raise _ProbeFailure
     except (OSError, subprocess.SubprocessError, _ProbeFailure) as exc:
         if process is not None:
-            try:
-                os.killpg(process.pid, signal.SIGTERM)
-            except OSError:
-                pass
-            try:
-                process.wait(timeout=0.2)
-            except subprocess.TimeoutExpired:
-                try:
-                    os.killpg(process.pid, signal.SIGKILL)
-                except OSError:
-                    pass
-                try:
-                    process.wait(timeout=0.2)
-                except subprocess.TimeoutExpired:
-                    pass
+            _terminate_process_group(process)
         raise _ProbeFailure from exc
     finally:
         if selector is not None:
@@ -176,6 +193,24 @@ def _common_directory(repo: Path) -> tuple[int, int]:
     if binding is None:
         raise _ProbeFailure
     return binding.device, binding.inode
+
+
+def _is_registered_worktree(source: Path, candidate: _DirectoryBinding) -> bool:
+    listing = _git(source, "worktree", "list", "--porcelain", "-z")
+    registered_paths = [
+        field[len("worktree ") :]
+        for field in listing.split("\0")
+        if field.startswith("worktree ")
+    ]
+    for value in registered_paths:
+        binding, _ = _safe_directory(Path(value))
+        if binding is None:
+            continue
+        if binding.path != candidate.path:
+            continue
+        if (binding.device, binding.inode) == (candidate.device, candidate.inode):
+            return True
+    return False
 
 
 def inspect_persistent_kimi_workspace(
@@ -219,6 +254,10 @@ def inspect_persistent_kimi_workspace(
         if _common_directory(source.path) != _common_directory(candidate.path):
             return PersistentWorkspaceReadiness(
                 False, WorkspaceReadinessReason.FOREIGN_REPOSITORY
+            )
+        if not _is_registered_worktree(source.path, candidate):
+            return PersistentWorkspaceReadiness(
+                False, WorkspaceReadinessReason.WORKSPACE_UNSAFE
             )
         try:
             branch = _git(

@@ -2,6 +2,8 @@
 
 from pathlib import Path
 import os
+import shutil
+import signal
 import subprocess
 
 from advancore.agent_runner import persistent_worker_workspace as workspace_module
@@ -166,3 +168,43 @@ def test_large_status_output_fails_as_bounded_probe(tmp_path):
     result = inspect_persistent_kimi_workspace(repository, worker)
 
     assert result.reason == WorkspaceReadinessReason.GIT_PROBE_FAILED
+
+
+def test_unregistered_worktree_copy_fails_closed(tmp_path):
+    repository, worker = _repository_with_worktree(tmp_path)
+    copied = tmp_path / "copied-worker"
+    shutil.copytree(worker, copied)
+
+    result = inspect_persistent_kimi_workspace(repository, copied)
+
+    assert result.reason == WorkspaceReadinessReason.WORKSPACE_UNSAFE
+
+
+def test_process_group_cleanup_checks_group_not_only_leader(monkeypatch):
+    signals: list[int] = []
+    times = iter([0.0, 0.3])
+
+    class FinishedLeader:
+        pid = 12345
+
+        @staticmethod
+        def wait(timeout):
+            return 0
+
+    monkeypatch.setattr(
+        workspace_module.os,
+        "killpg",
+        lambda _group, sent_signal: signals.append(sent_signal),
+    )
+    monkeypatch.setattr(
+        workspace_module,
+        "_process_group_exists",
+        lambda _group: True,
+    )
+    monkeypatch.setattr(
+        workspace_module.time, "monotonic", lambda: next(times, 0.3)
+    )
+
+    workspace_module._terminate_process_group(FinishedLeader())
+
+    assert signals == [signal.SIGTERM, signal.SIGKILL]

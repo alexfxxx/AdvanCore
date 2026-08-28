@@ -81,6 +81,8 @@ CLI upgrade remain owner-attended.
 - Required the exact registered worktree root, two consistent clean
   branch/status snapshots, read-only Git settings and bounded process-group
   output handling.
+- Rejected unregistered copies of linked worktrees and terminated surviving
+  probe descendants independently of the Git leader process.
 - Added an operations runbook that keeps creation, cleanup, branch switching,
   Kimi trust, authentication, upgrades and worker launch outside this service.
 
@@ -97,8 +99,8 @@ None.
 
 ### Verification
 
-- Focused tests: 9 passed.
-- Full post-rebase suite: 1,338 passed, 2 skipped.
+- Focused tests: 11 passed.
+- Full post-rebase suite: 1,340 passed, 2 skipped.
 - `git diff --check`: passed.
 
 ### Decisions required
