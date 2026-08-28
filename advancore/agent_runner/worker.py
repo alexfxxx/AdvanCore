@@ -405,6 +405,7 @@ def _isolate_kimi_command(
         kimi_home / "workspaces.json",
         kimi_home / "workspace-trust" / workspace_id,
         kimi_home / "oauth" / "kimi-code",
+        kimi_home / "oauth" / "kimi-code.lock",
     )
     atomic_targets = (
         kimi_home / "workspaces.json",
