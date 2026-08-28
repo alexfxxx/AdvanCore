@@ -79,6 +79,8 @@ reservations, post-run diff verification or `agent_runner` authority.
   atomic replacement and exact before/after verification support.
 - Required a true JSON path list, bounded descriptor reads and no-follow checks
   for every existing scope component, including same-file aliases.
+- Reserved `.git` and the full `.kimi-scope*` control namespace from worker
+  allowed paths.
 - Added ignore rules for the manifest, lock and atomic temporary files; tests
   prove preparation leaves Git status clean.
 
@@ -94,8 +96,8 @@ None.
 
 ### Verification
 
-- Focused tests: 17 passed.
-- Full post-rebase suite: 1,358 passed, 2 skipped.
+- Focused tests: 22 passed.
+- Full post-rebase suite: 1,363 passed, 2 skipped.
 - `git diff --check`: passed.
 
 ### Decisions required

@@ -94,6 +94,11 @@ def test_stale_or_changed_manifest_does_not_verify(tmp_path):
         ["a//b.py"],
         ["a.py/"],
         ["*.py"],
+        [".git/config"],
+        ["nested/.git/config"],
+        [".kimi-scope"],
+        [".kimi-scope.lock"],
+        [".kimi-scope.123.tmp"],
         ["Shared.py", "shared.py"],
     ],
 )

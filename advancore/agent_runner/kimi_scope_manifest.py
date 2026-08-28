@@ -37,6 +37,7 @@ def _validate_path(value: str) -> str:
     if not isinstance(value, str) or not _SAFE_PATH.fullmatch(value):
         raise KimiScopeManifestError("scope manifest path is invalid")
     raw_parts = value.split("/")
+    folded_parts = tuple(part.casefold() for part in raw_parts)
     path = PurePosixPath(value)
     if (
         path.is_absolute()
@@ -44,6 +45,8 @@ def _validate_path(value: str) -> str:
         or "" in raw_parts
         or "." in raw_parts
         or ".." in raw_parts
+        or ".git" in folded_parts
+        or any(part.startswith(".kimi-scope") for part in folded_parts)
         or any(character in value for character in "*?[]{}")
     ):
         raise KimiScopeManifestError("scope manifest path is unsafe")
