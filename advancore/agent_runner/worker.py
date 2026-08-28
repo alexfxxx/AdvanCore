@@ -1149,7 +1149,7 @@ class CodexPlannerAdapter(WorkerAdapter):
             return _executable_not_found_result(
                 self.executable,
                 self.timeout_seconds,
-                "gemini_minimal",
+                "codex_minimal",
             )
         with tempfile.TemporaryDirectory(
             prefix="advancore-codex-planner-", dir="/tmp"

@@ -14,6 +14,7 @@ from advancore.agent_runner.worker import (
     EXECUTABLE_NOT_FOUND,
     RUNTIME_ERROR,
     SPAWN_ERROR,
+    CodexPlannerAdapter,
     GeminiWorkerAdapter,
     KimiWorkerAdapter,
     WorkerResult,
@@ -33,6 +34,15 @@ def test_missing_kimi_executable_has_explicit_preflight_classification(tmp_path)
     assert result.executable_resolution == "unavailable"
     assert result.elapsed_seconds == 0.0
     assert classify_provider_failure(result) == ProviderFailure.EXECUTABLE_UNAVAILABLE
+
+
+def test_missing_codex_planner_uses_codex_runtime_profile(tmp_path):
+    with patch("advancore.agent_runner.worker.shutil.which", return_value=None):
+        result = CodexPlannerAdapter().run("bounded planning", tmp_path)
+
+    assert result.failure_classification == EXECUTABLE_NOT_FOUND
+    assert result.executable_resolution == "unavailable"
+    assert result.runtime_path_profile == "codex_minimal"
 
 
 def test_spawn_exception_is_distinct_from_runtime_failure(tmp_path):
