@@ -43,3 +43,12 @@ The result intentionally contains no prompt, command, workspace path, PATH,
 stdout or stderr. Do not serialize a raw `WorkerResult`. Never grant Kimi
 GitHub tokens, database URLs, SSH keys, Docker access, other provider
 credentials or controller approval variables.
+
+## Display-only formatter
+
+`format_persistent_kimi_launch_result` is a deterministic, display-only
+formatter for `PersistentKimiLaunchResult`. It renders only the bounded
+metadata fields carried by the result and substitutes `not-reported` for any
+absent optional worker metadata. It does not grant authority to execute work,
+modify repository state, publish changes, merge branches, open pull requests,
+or perform any other controller-gated action.
