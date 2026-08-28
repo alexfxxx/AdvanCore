@@ -77,6 +77,21 @@ def test_exact_and_ancestor_overlaps_fail_closed(tmp_path):
         service.reserve("TASK-141", "codex", ["advancore/agent_runner"], now=NOW)
 
 
+def test_case_and_hardlink_aliases_overlap_fail_closed(tmp_path):
+    service, _ = _service(tmp_path)
+    repository = tmp_path / "repo"
+    shared = repository / "Shared.py"
+    shared.write_text("shared\n", encoding="utf-8")
+    alias = repository / "hardlink.py"
+    os.link(shared, alias)
+
+    service.reserve("TASK-139", "kimi", ["Shared.py"], now=NOW)
+    with pytest.raises(ScopeReservationError, match="overlaps"):
+        service.reserve("TASK-140", "gemini", ["shared.py"], now=NOW)
+    with pytest.raises(ScopeReservationError, match="overlaps"):
+        service.reserve("TASK-141", "codex", ["hardlink.py"], now=NOW)
+
+
 def test_symlink_scope_alias_fails_closed(tmp_path):
     service, _ = _service(tmp_path)
     repository = tmp_path / "repo"

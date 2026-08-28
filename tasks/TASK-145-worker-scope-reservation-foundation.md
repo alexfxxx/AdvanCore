@@ -77,6 +77,8 @@ fallback while those providers are unavailable or nonproductive.
   scope-component validation inside the locked reservation transaction.
 - Rejected blocking non-regular state files and noncanonical dot-segment scope
   aliases before reservation.
+- Treated case-only path variants and verified hard-link identities as the same
+  scope, preventing duplicate worker ownership on macOS.
 - Documented the service's lack of approval, launch, Git, database, publication,
   merge and deployment authority.
 
@@ -93,8 +95,8 @@ None.
 
 ### Verification
 
-- Focused tests: 19 passed, including concurrent overlap contention.
-- Full post-rebase suite: 1,328 passed, 2 skipped.
+- Focused tests: 20 passed, including concurrent overlap contention.
+- Full post-rebase suite: 1,329 passed, 2 skipped.
 - `git diff --check`: passed.
 
 ### Decisions required

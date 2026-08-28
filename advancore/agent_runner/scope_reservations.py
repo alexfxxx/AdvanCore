@@ -123,7 +123,9 @@ def _open_directory_no_follow(path: Path) -> int:
             os.close(descriptor)
 
 
-def _validate_scope_location(repository_root: Path, value: str) -> None:
+def _validate_scope_location(
+    repository_root: Path, value: str
+) -> tuple[int, int] | None:
     """Walk every existing scope component from a bound repository descriptor."""
     descriptor: int | None = None
     try:
@@ -139,7 +141,7 @@ def _validate_scope_location(repository_root: Path, value: str) -> None:
                     dir_fd=descriptor,
                 )
             except FileNotFoundError:
-                return
+                return None
             details = os.fstat(child)
             if index < len(parts) - 1 and not stat.S_ISDIR(details.st_mode):
                 os.close(child)
@@ -151,6 +153,8 @@ def _validate_scope_location(repository_root: Path, value: str) -> None:
                 raise ScopeReservationError("reservation scope target is unsafe")
             os.close(descriptor)
             descriptor = child
+        details = os.fstat(descriptor)
+        return details.st_dev, details.st_ino
     except ScopeReservationError:
         raise
     except OSError as exc:
@@ -180,8 +184,10 @@ def _validate_scope_path(value: str) -> str:
 
 
 def _paths_overlap(left: str, right: str) -> bool:
-    left_path = PurePosixPath(left)
-    right_path = PurePosixPath(right)
+    left_path = PurePosixPath(*(part.casefold() for part in PurePosixPath(left).parts))
+    right_path = PurePosixPath(
+        *(part.casefold() for part in PurePosixPath(right).parts)
+    )
     return (
         left_path == right_path
         or left_path in right_path.parents
@@ -288,6 +294,13 @@ class ScopeReservationService:
             released_at=released,
         )
 
+    def _scopes_overlap(self, left: str, right: str) -> bool:
+        if _paths_overlap(left, right):
+            return True
+        left_identity = _validate_scope_location(self.repository_root, left)
+        right_identity = _validate_scope_location(self.repository_root, right)
+        return left_identity is not None and left_identity == right_identity
+
     def _load_unlocked(
         self, now: datetime, parent_descriptor: int
     ) -> list[ScopeReservation]:
@@ -367,7 +380,7 @@ class ScopeReservationService:
         for index, left in enumerate(active):
             for right in active[index + 1 :]:
                 if any(
-                    _paths_overlap(left_path, right_path)
+                    self._scopes_overlap(left_path, right_path)
                     for left_path in left.paths
                     for right_path in right.paths
                 ):
@@ -497,7 +510,7 @@ class ScopeReservationService:
                 if record.task_id == task_id:
                     raise ScopeReservationError("task already has an active reservation")
                 if any(
-                    _paths_overlap(left, right)
+                    self._scopes_overlap(left, right)
                     for left in proposed.paths
                     for right in record.paths
                 ):
