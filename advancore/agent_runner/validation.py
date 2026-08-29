@@ -11,6 +11,7 @@ from enum import Enum
 from pathlib import Path
 
 from advancore.agent_runner.task import ALLOWED_STATUSES, Task
+from advancore.services.module_design_service import evaluate_governed_task_module_gate
 
 
 @dataclass
@@ -439,6 +440,28 @@ def owner_rework_terminal_content_hash(
     )
 
 
+def validate_module_design_gate(task: Task) -> ValidationResult:
+    """Validate the post-TASK-163 module classification and approved brief."""
+    try:
+        task_text = task.path.read_text(encoding="utf-8")
+        repository_root = task.path.parent.parent
+        module_gate = evaluate_governed_task_module_gate(
+            task_text,
+            task_id=task.task_id,
+            repository_root=repository_root,
+        )
+    except (OSError, UnicodeError, ValueError):
+        module_gate = None
+    if module_gate is None or not module_gate.ready:
+        detail = (
+            module_gate.message
+            if module_gate is not None
+            else "Module design gate could not be evaluated."
+        )
+        return ValidationResult(False, [f"FAIL: {detail}"])
+    return ValidationResult(True, [f"PASS: {module_gate.message}"])
+
+
 def validate(
     task: Task,
     current_branch: str,
@@ -480,6 +503,11 @@ def validate(
         ok = False
     else:
         messages.append(f"PASS: task status '{task.status}' is executable")
+
+    module_gate_validation = validate_module_design_gate(task)
+    messages.extend(module_gate_validation.messages)
+    if not module_gate_validation:
+        ok = False
 
     if ok:
         messages.append("PASS: all safety validations passed")

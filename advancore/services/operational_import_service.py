@@ -7,22 +7,21 @@ from dataclasses import dataclass
 from io import StringIO
 import re
 
+from advancore.services.import_contract_registry import (
+    ImportContractError,
+    get_import_contract,
+    import_contracts,
+)
+
 
 MAX_CSV_BYTES = 1_048_576
 MAX_CSV_ROWS = 1_000
 
 DATASET_HEADERS: dict[str, tuple[str, ...]] = {
-    "vehicles": ("registration_number", "make_model"),
-    "drivers": ("name", "employee_reference"),
-    "customers": ("name", "customer_reference"),
-    "routes": ("route_code", "origin", "destination"),
+    contract.dataset_type: contract.headers for contract in import_contracts()
 }
-
 DATASET_LABELS: dict[str, str] = {
-    "vehicles": "Vehicles",
-    "drivers": "Drivers",
-    "customers": "Customers",
-    "routes": "Routes",
+    contract.dataset_type: contract.label for contract in import_contracts()
 }
 
 _REGISTRATION = re.compile(r"[A-Z0-9][A-Z0-9 -]{0,31}")
@@ -60,8 +59,8 @@ class OperationalImportPreview:
 
 def _headers(dataset_type: str) -> tuple[str, ...]:
     try:
-        return DATASET_HEADERS[dataset_type]
-    except KeyError as exc:
+        return get_import_contract(dataset_type).headers
+    except ImportContractError as exc:
         raise OperationalImportError("The selected CSV dataset type is not supported.") from exc
 
 

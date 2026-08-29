@@ -102,6 +102,9 @@ def _valid_proposal_dict() -> dict:
         "test_requirements": ["Run pytest"],
         "constraints_safety_requirements": ["Do not modify main"],
         "owner_decisions": ["None"],
+        "module_classification": "NON_MODULE",
+        "module_id": "None",
+        "approved_module_brief": "None",
         "recommended_worker": "kimi-swarm",
     }
 
@@ -286,6 +289,44 @@ class TestProposalValidation:
         with pytest.raises(ProposalError, match="recommended_worker"):
             validate_proposal(data)
 
+    def test_business_module_fields_are_validated_and_preserved(self):
+        data = _valid_proposal_dict()
+        data.update(
+            module_classification="BUSINESS_MODULE",
+            module_id="fleet",
+            approved_module_brief="tasks/module-briefs/fleet.md",
+        )
+        proposal = validate_proposal(data)
+        assert proposal.module_classification == "BUSINESS_MODULE"
+        assert proposal.module_id == "fleet"
+        assert proposal.approved_module_brief == "tasks/module-briefs/fleet.md"
+
+    @pytest.mark.parametrize(
+        ("module_id", "brief"),
+        [
+            ("Fleet", "tasks/module-briefs/fleet.md"),
+            ("fleet", "tasks/fleet.md"),
+            ("fleet", "../fleet.md"),
+            ("fleet", "tasks/module-briefs/./fleet.md"),
+            ("fleet", "tasks/module-briefs//fleet.md"),
+        ],
+    )
+    def test_unsafe_business_module_fields_are_rejected(self, module_id, brief):
+        data = _valid_proposal_dict()
+        data.update(
+            module_classification="BUSINESS_MODULE",
+            module_id=module_id,
+            approved_module_brief=brief,
+        )
+        with pytest.raises(ProposalError):
+            validate_proposal(data)
+
+    def test_non_module_cannot_reference_module_identity_or_brief(self):
+        data = _valid_proposal_dict()
+        data["module_id"] = "fleet"
+        with pytest.raises(ProposalError, match="no module or brief"):
+            validate_proposal(data)
+
 
 # ---------------------------------------------------------------------------
 # Task ID allocation and filename safety
@@ -403,6 +444,10 @@ class TestTaskRendering:
         assert "GitHub remains the source-of-truth" in md
         assert "DRAFT and cannot execute" in md
         assert "planner proposed only" in md
+        assert "## Module design gate" in md
+        assert "Classification: NON_MODULE" in md
+        assert "Module identifier: None" in md
+        assert "Approved brief: None" in md
 
     def test_rendered_markdown_preserves_owner_decisions(self):
         data = _valid_proposal_dict()
@@ -702,6 +747,36 @@ class TestGovernanceGuarantees:
         )
         assert validation.ok is False
         assert "DRAFT" in " ".join(validation.messages)
+
+    def test_generated_task_164_has_executable_non_module_gate(self, tmp_path: Path):
+        repo_root = tmp_path / "repo"
+        tasks_dir = repo_root / "tasks"
+        tasks_dir.mkdir(parents=True)
+        (tasks_dir / "TASK-163-existing.md").write_text("x", encoding="utf-8")
+        fake = FakePlannerAdapter(output=_wrap_in_markers(_valid_proposal_dict()))
+        pre = _git_info(repo_root, clean=True)
+        post = _git_info(repo_root, clean=True)
+        with _patch_get_git_info(pre, post), _patch_remote_urls():
+            result = generate_goal_task(
+                repo_root=repo_root,
+                tasks_dir=tasks_dir,
+                goal="Document a core rule",
+                planner=fake,
+                execute=True,
+            )
+        assert result.task_id == "TASK-164"
+        assert result.task_path is not None
+        result.task_path.write_text(
+            result.task_path.read_text(encoding="utf-8").replace(
+                "STATUS: DRAFT", "STATUS: READY"
+            ),
+            encoding="utf-8",
+        )
+        task = parse_task(result.task_path)
+        validation = validate_task_for_execution(
+            task, "feature/core-doc", is_clean=True
+        )
+        assert validation.ok is True
 
     def test_generation_does_not_invoke_implementation_worker(self, tmp_path: Path):
         repo_root = tmp_path / "repo"

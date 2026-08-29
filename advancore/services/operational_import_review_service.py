@@ -9,6 +9,10 @@ from advancore.services.operational_import_service import (
     ImportRowPreview,
     OperationalImportPreview,
 )
+from advancore.services.import_contract_registry import (
+    ImportContractError,
+    get_import_contract,
+)
 
 
 REVIEW_READY = "ready"
@@ -16,14 +20,6 @@ REVIEW_INVALID = "invalid"
 REVIEW_DUPLICATE_FILE = "duplicate_in_file"
 REVIEW_ALREADY_EXISTS = "already_exists"
 REVIEW_DUPLICATE_FILE_AND_EXISTS = "duplicate_in_file_and_already_exists"
-
-_IDENTITY_FIELDS = {
-    "vehicles": "registration_number",
-    "drivers": "employee_reference",
-    "customers": "customer_reference",
-    "routes": "route_code",
-}
-
 
 @dataclass(frozen=True)
 class ImportReviewRow:
@@ -50,7 +46,10 @@ class OperationalImportReview:
 
 
 def _identity(dataset_type: str, row: ImportRowPreview) -> str | None:
-    field = _IDENTITY_FIELDS[dataset_type]
+    try:
+        field = get_import_contract(dataset_type).identity_field
+    except ImportContractError as exc:
+        raise ValueError("Import review dataset type is unsupported") from exc
     value = row.values.get(field)
     return value if isinstance(value, str) and value else None
 

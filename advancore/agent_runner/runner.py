@@ -29,6 +29,7 @@ from advancore.agent_runner.validation import (
     ValidationResult,
     owner_rework_terminal_content_hash,
     validate,
+    validate_module_design_gate,
     validate_owner_rework_evidence,
 )
 from advancore.agent_runner.worker import (
@@ -203,6 +204,12 @@ def _build_plan(
                 False,
                 validation.messages
                 + ["FAIL: typed owner rework evidence requires task status REWORK"],
+            )
+        module_gate_validation = validate_module_design_gate(task)
+        if not module_gate_validation:
+            validation = ValidationResult(
+                False,
+                validation.messages + module_gate_validation.messages,
             )
     worker_instruction = build_worker_instruction(f"tasks/{task.filename}")
     if rework_evidence is not None and rework_evidence.owner_note:

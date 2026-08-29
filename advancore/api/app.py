@@ -17,7 +17,15 @@ from advancore.api.dependencies import (
     ReadModelGateway,
 )
 from advancore.api.orchestration_service import GovernedOrchestrationService
-from advancore.api.routes import operations, orchestration, owner_goals, read_models, status, voice
+from advancore.api.routes import (
+    modules,
+    operations,
+    orchestration,
+    owner_goals,
+    read_models,
+    status,
+    voice,
+)
 
 
 LOOPBACK_ORIGINS = (
@@ -81,6 +89,7 @@ def create_app(
     )
 
     app.include_router(status.router)
+    app.include_router(modules.router)
     app.include_router(read_models.router)
     app.include_router(operations.router)
     app.include_router(owner_goals.router)
