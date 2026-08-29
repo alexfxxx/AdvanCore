@@ -19,6 +19,15 @@ class SystemStatusResponse(BaseModel):
     voice_state: str = "disabled"
 
 
+class ModuleResponse(BaseModel):
+    module_id: str
+    label: str
+    area: str
+    maturity: str
+    presentation_surfaces: list[str]
+    api_prefixes: list[str]
+
+
 class ProjectResponse(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 

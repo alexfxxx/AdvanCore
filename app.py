@@ -11,6 +11,7 @@ from advancore.pages import (
     operations,
 )
 from advancore.ui.theme import apply_command_center_theme
+from advancore.module_registry import streamlit_navigation
 
 
 st.set_page_config(
@@ -23,36 +24,17 @@ apply_command_center_theme(st)
 st.title("ADVANCORE")
 st.caption(f"Executive Command Center · {APP_TITLE}")
 
-page = st.sidebar.radio(
-    "Navigation",
-    [
-        "Dashboard",
-        "Knowledge Hub",
-        "Projects",
-        "Transport Operations",
-        "AI Center",
-        "Activity Log",
-        "Settings",
-    ],
-)
+_PAGE_RENDERERS = {
+    "dashboard": dashboard.render,
+    "knowledge_hub": knowledge_hub.render,
+    "projects": projects.render,
+    "transport_operations": operations.render,
+    "ai_center": ai_center.render,
+    "activity_log": activity_log.render,
+    "settings": settings.render,
+}
+_NAVIGATION = streamlit_navigation()
+_PAGE_BY_LABEL = {label: module_id for module_id, label in _NAVIGATION}
+page = st.sidebar.radio("Navigation", [label for _module_id, label in _NAVIGATION])
 
-if page == "Dashboard":
-    dashboard.render()
-
-elif page == "Knowledge Hub":
-    knowledge_hub.render()
-
-elif page == "Projects":
-    projects.render()
-
-elif page == "Transport Operations":
-    operations.render()
-
-elif page == "AI Center":
-    ai_center.render()
-
-elif page == "Activity Log":
-    activity_log.render()
-
-elif page == "Settings":
-    settings.render()
+_PAGE_RENDERERS[_PAGE_BY_LABEL[page]]()

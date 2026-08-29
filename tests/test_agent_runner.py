@@ -433,6 +433,65 @@ class TestStatusGate:
         assert status in " ".join(result.messages)
 
 
+class TestModuleDesignGate:
+    def test_post_programme_task_without_classification_is_blocked(self, tmp_path: Path):
+        tasks = tmp_path / "tasks"
+        tasks.mkdir()
+        task = parse_task(
+            _write_task(tasks, "TASK-164", "Module gate", "READY")
+        )
+        result = validate(task, "feature/module", is_clean=True)
+        assert result.ok is False
+        assert "Module design gate" in " ".join(result.messages)
+
+    def test_explicit_non_module_task_can_pass(self, tmp_path: Path):
+        tasks = tmp_path / "tasks"
+        tasks.mkdir()
+        task = parse_task(
+            _write_task(
+                tasks,
+                "TASK-164",
+                "Core documentation",
+                "READY",
+                content=(
+                    "Document a core rule.\n\n"
+                    "## Module design gate\n\n"
+                    "Classification: NON_MODULE\n"
+                    "Module identifier: None\n"
+                    "Approved brief: None\n"
+                ),
+            )
+        )
+        result = validate(task, "feature/core-doc", is_clean=True)
+        assert result.ok is True
+
+    def test_business_module_task_with_unapproved_brief_is_blocked(self, tmp_path: Path):
+        tasks = tmp_path / "tasks"
+        briefs = tasks / "module-briefs"
+        briefs.mkdir(parents=True)
+        (briefs / "fleet.md").write_text(
+            "# MODULE — Fleet\n\nSTATUS: DRAFT\n", encoding="utf-8"
+        )
+        task = parse_task(
+            _write_task(
+                tasks,
+                "TASK-164",
+                "Fleet module",
+                "READY",
+                content=(
+                    "Build the fleet module.\n\n"
+                    "## Module design gate\n\n"
+                    "Classification: BUSINESS_MODULE\n"
+                    "Module identifier: fleet\n"
+                    "Approved brief: tasks/module-briefs/fleet.md\n"
+                ),
+            )
+        )
+        result = validate(task, "feature/fleet", is_clean=True)
+        assert result.ok is False
+        assert "not implementation-ready" in " ".join(result.messages)
+
+
 # ---------------------------------------------------------------------------
 # Branch gate
 # ---------------------------------------------------------------------------

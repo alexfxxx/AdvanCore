@@ -1,5 +1,12 @@
 # Kimi-first worker routing
 
+> Core-readiness policy update, 29 August 2026: Kimi Swarm is now an opt-in
+> worker for eligibility-gated large or genuinely parallel tasks. Routine module
+> implementation should prefer Gemini, with Codex as the controller/final
+> fallback. Existing Kimi-first code paths remain fail-closed compatibility
+> boundaries until a separately reviewed routing change is published. See
+> `docs/architecture/WORKER_EFFICIENCY_POLICY.md`.
+
 Unattended implementation uses the fixed registered route Kimi-Swarm first,
 Gemini second, and Codex last. Each provider's executable, authentication,
 quota/limit, and capacity are checked by its bounded process attempt. The

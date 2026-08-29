@@ -1,17 +1,17 @@
 # AdvanCore Current State
 
-Status date: 2026-08-24
+Status date: 2026-08-29
 
 ## Summary
 
-FACT: AdvanCore is now a usable local v0.1 platform foundation with bounded
-Projects and Knowledge workflows, lifecycle activity visibility, a customizable
-command center, local readiness support, and an exception-based agent-control
-system.
+FACT: AdvanCore is a usable local v0.1 platform foundation with bounded Projects
+and Knowledge workflows, lifecycle activity visibility, operational transport
+registers, a decoupled local console, local recovery support, and an
+exception-based agent-control system.
 
-FACT: It is not yet a production transport ERP. Customer, route, driver, fleet,
-finance, payroll, invoicing, and profitability functions remain possible future
-modules rather than implemented business capabilities.
+FACT: It is not yet a production transport ERP. Early customer, route, driver,
+fleet, fuel and financial registers exist, but payroll, invoicing, profitability
+and complete owner-approved business workflows remain future module work.
 
 ## Technology and persistence
 
@@ -49,10 +49,11 @@ worker execution, verification, repair, controller review, and safe feature-
 branch publication. The permanent boundaries are:
 
 - `agent_runner` remains the execution authority boundary.
-- Kimi/Kimi-Swarm is the primary implementation worker while its authoritative
-  weekly usage reading is fresh and within the approved 20% / 60-minute policy.
-- Codex or another allowlisted worker may be used only through the governed
-  fallback route.
+- Controller policy reserves Kimi Swarm for eligibility-gated large or genuinely
+  parallel work and prefers Gemini for normal bounded implementation.
+- FACT: executable unattended routing still evaluates `kimi-swarm`, then
+  `gemini`, then `codex`; changing that sequence requires separate governed work.
+- Codex remains the controller and final approved fallback.
 - Worker inputs use explicit data-access boundaries rather than inheriting the
   controller's complete environment.
 - GitHub remains source of truth, and critical or ambiguous work fails closed.
@@ -60,8 +61,9 @@ branch publication. The permanent boundaries are:
 
 ## Verification state
 
-FACT: The full repository test suite passed with 926 tests on 24 August 2026
-after TASK-068.
+FACT: Repository checks cover models, services, migrations, API contracts,
+frontend contracts, recovery and agent governance. Exact current release
+evidence is recorded per reviewed feature branch rather than inferred here.
 
 Coverage includes models, repositories, services, pages, migrations, local
 startup, agent-runner governance, orchestration, worker routing and fallback,
@@ -89,8 +91,8 @@ most value before its rules or data model are implemented.
 
 1. Public or phone access would be unsafe without a separately designed
    authentication, authorization, network, and deployment boundary.
-2. Provider quota data is not universally available: AdvanCore must not invent
-   Codex usage and must keep Kimi paused when its authoritative reading is stale.
+2. Provider quota data is not universally available and must never be invented;
+   actual bounded provider attempts supply availability evidence.
 3. The existing local example database password must never be reused for a
    production environment.
 4. Commercial, transport, employment, tax, and compliance rules are not yet

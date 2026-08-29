@@ -111,6 +111,9 @@ def _proposal() -> str:
         "test_requirements": ["Run pytest."],
         "constraints_safety_requirements": ["Do not modify main."],
         "owner_decisions": ["None"],
+        "module_classification": "NON_MODULE",
+        "module_id": "None",
+        "approved_module_brief": "None",
         "recommended_worker": "codex",
     }
     return f"{PROPOSAL_START_MARKER}\n{json.dumps(payload)}\n{PROPOSAL_END_MARKER}"

@@ -32,6 +32,7 @@ from advancore.agent_runner.worker import (
     WorkerAdapter,
     WorkerResult,
 )
+from advancore.services.module_design_service import normalize_module_brief_reference
 
 
 # ---------------------------------------------------------------------------
@@ -47,7 +48,7 @@ MAX_SCOPE_PATH_LENGTH = 260
 MAX_SCOPE_LIST_LENGTH = 50
 MAX_SLUG_LENGTH = 60
 
-PROPOSAL_SCHEMA_VERSION = "advancore-goal-task-proposal-v1"
+PROPOSAL_SCHEMA_VERSION = "advancore-goal-task-proposal-v2"
 
 PROPOSAL_START_MARKER = "--- ADVANCORE_GOAL_TASK_PROPOSAL_START ---"
 PROPOSAL_END_MARKER = "--- ADVANCORE_GOAL_TASK_PROPOSAL_END ---"
@@ -113,6 +114,9 @@ class GoalTaskProposal:
     test_requirements: list[str]
     constraints_safety_requirements: list[str]
     owner_decisions: list[str]
+    module_classification: str
+    module_id: str
+    approved_module_brief: str
     recommended_worker: str | None = None
 
 
@@ -284,6 +288,11 @@ Required JSON fields:
 - "owner_decisions": list of unresolved business/compliance/credential/
   production/deployment decisions that require controller/owner review
   (list of strings).  Use ["None"] if there are none.
+- "module_classification": exactly "BUSINESS_MODULE" or "NON_MODULE" (string)
+- "module_id": canonical lowercase snake-case identifier for business-module
+  work, otherwise "None" (string)
+- "approved_module_brief": repository-relative path under
+  `tasks/module-briefs/` for business-module work, otherwise "None" (string)
 
 Optional JSON field:
 - "recommended_worker": one registered non-dry-run implementation worker:
@@ -519,6 +528,9 @@ _REQUIRED_FIELDS = {
     "test_requirements",
     "constraints_safety_requirements",
     "owner_decisions",
+    "module_classification",
+    "module_id",
+    "approved_module_brief",
 }
 
 _OPTIONAL_FIELDS = {"recommended_worker"}
@@ -618,6 +630,32 @@ def validate_proposal(data: dict[str, Any]) -> GoalTaskProposal:
     if owner_decisions == ["None"]:
         owner_decisions = []
 
+    module_classification = _validate_string(
+        data["module_classification"], "module_classification", MAX_TITLE_LENGTH
+    ).upper()
+    module_id = _validate_string(data["module_id"], "module_id", MAX_TITLE_LENGTH)
+    approved_module_brief = _validate_string(
+        data["approved_module_brief"],
+        "approved_module_brief",
+        MAX_SCOPE_PATH_LENGTH,
+    )
+    if module_classification == "NON_MODULE":
+        if module_id.casefold() != "none" or approved_module_brief.casefold() != "none":
+            raise ProposalError("Non-module proposal must declare no module or brief")
+        module_id = "None"
+        approved_module_brief = "None"
+    elif module_classification == "BUSINESS_MODULE":
+        if re.fullmatch(r"[a-z][a-z0-9_]{1,39}", module_id) is None:
+            raise ProposalError("Business module identifier is invalid")
+        try:
+            approved_module_brief = normalize_module_brief_reference(
+                approved_module_brief
+            )
+        except ValueError as exc:
+            raise ProposalError("Approved module brief path is invalid") from exc
+    else:
+        raise ProposalError("module_classification is invalid")
+
     recommended_worker: str | None = None
     if "recommended_worker" in data:
         recommended_worker = _validate_string(
@@ -647,6 +685,9 @@ def validate_proposal(data: dict[str, Any]) -> GoalTaskProposal:
         test_requirements=test_requirements,
         constraints_safety_requirements=constraints_safety_requirements,
         owner_decisions=owner_decisions,
+        module_classification=module_classification,
+        module_id=module_id,
+        approved_module_brief=approved_module_brief,
         recommended_worker=recommended_worker,
     )
 
@@ -766,6 +807,12 @@ STATUS: DRAFT
 ## Database impact
 
 {proposal.database_impact}
+
+## Module design gate
+
+Classification: {proposal.module_classification}
+Module identifier: {proposal.module_id}
+Approved brief: {proposal.approved_module_brief}
 
 ## Safety requirements
 

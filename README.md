@@ -125,7 +125,18 @@ An ambiguous same-name container fails closed.
 
 ## Status
 
-Gate 0 — Platform foundation setup.
+Local core-readiness programme. The foundation is suitable for governed,
+module-by-module development; it is not a production deployment.
+
+Before starting a module, run the read-only foundation check:
+
+```bash
+.venv/bin/python scripts/check-module-readiness.py
+```
+
+Every business module must then complete and obtain owner approval for
+`tasks/MODULE_BRIEF_TEMPLATE.md` before schema or implementation work begins.
+See `docs/runbooks/CORE_LOCAL_OPERATIONS.md` for the concise local workflow.
 
 ## Projects
 
