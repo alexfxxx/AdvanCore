@@ -13,11 +13,21 @@ def test_decoupled_fleet_screen_exposes_only_bounded_filters():
     html = (ROOT / "frontend" / "index.html").read_text(encoding="utf-8")
     javascript = (ROOT / "frontend" / "app.js").read_text(encoding="utf-8")
 
-    for identifier in ("fleet-company", "fleet-type", "fleet-capacity", "fleet-list"):
+    for identifier in ("fleet-search", "fleet-company", "fleet-type", "fleet-capacity", "fleet-list"):
         assert f'id="{identifier}"' in html
     assert 'requestJson("/api/fleet' not in javascript
     assert "/api/fleet" in javascript
     assert "No sample records are generated" in javascript
+    assert "FLEET_OVERVIEW_LIMIT = 8" in javascript
+    assert 'id="fleet-drawer"' in html
+    assert "openFleetDrawer" in javascript
+    assert "renderFleetUnavailable(error.message)" in javascript
+    assert "renderFleetDrawer(selectedFleetVehicleId)" in javascript
+    catch_block = javascript[
+        javascript.index("  } catch (error) {", javascript.index("async function loadFleet")):
+        javascript.index("\n  }\n}", javascript.index("  } catch (error) {", javascript.index("async function loadFleet")))
+    ]
+    assert "renderFleetOverview" not in catch_block
 
 
 def test_fleet_detail_preferences_are_allowlisted_browser_local_and_read_only():

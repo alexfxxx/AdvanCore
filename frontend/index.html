@@ -8,9 +8,9 @@
       content="AdvanCore local governed operations console"
     />
     <title>AdvanCore Local Console</title>
-    <link rel="stylesheet" href="/assets/styles.css" />
-    <script src="/assets/app.js" defer></script>
-    <script src="/assets/audio.js" defer></script>
+    <link rel="stylesheet" href="/assets/styles.css?v=task-168-1" />
+    <script src="/assets/app.js?v=task-168-1" defer></script>
+    <script src="/assets/audio.js?v=task-168-1" defer></script>
   </head>
   <body>
     <div class="ambient ambient-one" aria-hidden="true"></div>
@@ -24,22 +24,49 @@
           A decoupled presentation layer. Controller authority remains intact.
         </p>
       </div>
-      <div class="status-chip" id="connection-chip" role="status">
-        <span class="status-dot" aria-hidden="true"></span>
-        <span id="connection-label">Checking local API</span>
+      <div class="header-status">
+        <div class="status-chip" id="connection-chip" role="status">
+          <span class="status-dot" aria-hidden="true"></span>
+          <span id="connection-label">Checking local API</span>
+        </div>
+        <span class="build-label" id="console-build">Build task-168-1</span>
+        <span class="build-label" id="motion-state">Checking motion</span>
       </div>
     </header>
 
-    <nav class="shell console-nav" aria-label="Console sections">
-      <a href="#controller-console">Controller</a>
+    <nav class="shell console-nav" aria-label="Workspace controls">
+      <a href="#workspace">Overview</a>
       <a href="#fleet-console">Fleet</a>
-      <a href="#dispatch-console">Dispatch</a>
-      <a href="#fuel-console">Fuel</a>
-      <a href="#preferences-console">Display</a>
+      <button id="edit-workspace" class="nav-button" type="button" aria-expanded="false">
+        Edit layout
+      </button>
+      <label class="mobile-segment-label" for="mobile-segment-select">
+        Mobile segment
+        <select id="mobile-segment-select" aria-label="Mobile segment"></select>
+      </label>
     </nav>
 
-    <main class="shell layout-grid" id="controller-console">
-      <section class="panel command-panel" aria-labelledby="owner-goal-title">
+    <aside class="shell workspace-editor" id="workspace-editor" hidden aria-labelledby="workspace-editor-title">
+      <div class="panel-heading">
+        <div>
+          <p class="section-code">LOCAL DISPLAY ONLY</p>
+          <h2 id="workspace-editor-title">Arrange dashboard segments</h2>
+        </div>
+        <button id="close-workspace-editor" class="secondary-action-button" type="button">Done</button>
+      </div>
+      <p class="supporting-copy">
+        Drag segments on desktop, or use these controls. Layout choices stay in this browser and never change PostgreSQL.
+      </p>
+      <ul id="workspace-layout-list" class="workspace-layout-list" aria-label="Dashboard segment order"></ul>
+      <div class="editor-actions">
+        <button id="reset-workspace" class="secondary-action-button" type="button">Reset workspace</button>
+        <button id="reset-display-layout" class="secondary-action-button" type="button">Reset display and layout</button>
+      </div>
+      <p id="workspace-layout-status" class="micro-copy left-copy" role="status"></p>
+    </aside>
+
+    <main class="shell layout-grid" id="workspace">
+      <section class="panel workspace-segment command-panel" data-segment-id="controller" aria-labelledby="owner-goal-title">
         <div class="panel-heading">
           <div>
             <p class="section-code">01 / OWNER INTAKE</p>
@@ -116,7 +143,7 @@
         </section>
       </section>
 
-      <aside class="panel voice-panel" aria-labelledby="voice-title">
+      <aside class="panel workspace-segment voice-panel" data-segment-id="voice" aria-labelledby="voice-title">
         <div class="panel-heading">
           <div>
             <p class="section-code">02 / VOICE HOOK</p>
@@ -138,7 +165,7 @@
         </p>
       </aside>
 
-      <section class="panel status-panel" aria-labelledby="status-title">
+      <section class="panel workspace-segment status-panel" data-segment-id="readiness" aria-labelledby="status-title">
         <div class="panel-heading">
           <div>
             <p class="section-code">03 / SYSTEM</p>
@@ -165,7 +192,7 @@
         </div>
       </section>
 
-      <section class="panel data-panel" aria-labelledby="projects-title">
+      <section class="panel workspace-segment data-panel" data-segment-id="projects" aria-labelledby="projects-title">
         <div class="panel-heading">
           <div>
             <p class="section-code">04 / READ ONLY</p>
@@ -176,9 +203,10 @@
         <div id="projects-list" class="record-list" aria-live="polite">
           <p class="empty-state">Loading projects…</p>
         </div>
+        <button id="toggle-projects" class="text-action" type="button" hidden>View all projects</button>
       </section>
 
-      <section class="panel data-panel knowledge-panel" aria-labelledby="knowledge-title">
+      <section class="panel workspace-segment data-panel knowledge-panel" data-segment-id="knowledge" aria-labelledby="knowledge-title">
         <div class="panel-heading">
           <div>
             <p class="section-code">05 / READ ONLY</p>
@@ -189,9 +217,10 @@
         <div id="knowledge-list" class="record-list" aria-live="polite">
           <p class="empty-state">Loading Knowledge…</p>
         </div>
+        <button id="toggle-knowledge" class="text-action" type="button" hidden>View all Knowledge</button>
       </section>
 
-      <section class="panel operations-panel" id="fleet-console" aria-labelledby="fleet-title">
+      <section class="panel workspace-segment operations-panel" data-segment-id="fleet" id="fleet-console" aria-labelledby="fleet-title">
         <div class="panel-heading">
           <div>
             <p class="section-code">06 / TRANSPORT OPERATIONS</p>
@@ -202,7 +231,10 @@
         <p class="supporting-copy">
           Real vehicle records from the existing fleet register. Filters never alter saved data.
         </p>
-        <div class="filter-grid">
+        <div class="filter-grid fleet-filter-grid">
+          <label>Find vehicle
+            <input id="fleet-search" type="search" maxlength="40" placeholder="Plate or model" />
+          </label>
           <label>Registered owner
             <select id="fleet-company"><option value="">All companies</option></select>
           </label>
@@ -217,7 +249,7 @@
           <label>Exact seating
             <select id="fleet-capacity"><option value="">All capacities</option></select>
           </label>
-          <button class="secondary-action-button filter-button" id="refresh-fleet" type="button">Refresh fleet</button>
+          <button class="secondary-action-button filter-button" id="refresh-fleet" type="button">Refresh</button>
         </div>
         <details class="fleet-layout-panel">
           <summary>Arrange Fleet details</summary>
@@ -230,11 +262,17 @@
             Reset Fleet fields
           </button>
         </details>
+        <div class="metric-grid fleet-metrics" aria-label="Fleet overview">
+          <div class="metric-card"><span>Matching vehicles</span><strong id="fleet-match-count">—</strong></div>
+          <div class="metric-card"><span>Registered owners</span><strong id="fleet-owner-count">—</strong></div>
+          <div class="metric-card"><span>Buses</span><strong id="fleet-bus-count">—</strong></div>
+          <div class="metric-card"><span>Other vehicles</span><strong id="fleet-other-count">—</strong></div>
+        </div>
         <p id="fleet-summary" class="micro-copy left-copy">Loading fleet…</p>
-        <div id="fleet-list" class="operations-list" aria-live="polite"></div>
+        <div id="fleet-list" class="fleet-compact-list" role="list" aria-live="polite"></div>
       </section>
 
-      <section class="panel operations-panel" id="dispatch-console" aria-labelledby="dispatch-title">
+      <section class="panel workspace-segment operations-panel" data-segment-id="dispatch" id="dispatch-console" aria-labelledby="dispatch-title">
         <div class="panel-heading">
           <div>
             <p class="section-code">07 / DAILY CONTROL</p>
@@ -257,7 +295,7 @@
         <div id="dispatch-list" class="operations-list" aria-live="polite"></div>
       </section>
 
-      <section class="panel operations-panel" id="fuel-console" aria-labelledby="fuel-title">
+      <section class="panel workspace-segment operations-panel" data-segment-id="fuel" id="fuel-console" aria-labelledby="fuel-title">
         <div class="panel-heading">
           <div>
             <p class="section-code">08 / FUEL INTELLIGENCE</p>
@@ -275,6 +313,8 @@
           <div class="metric-card"><span>Diesel market median</span><strong id="fuel-market-median">—</strong></div>
           <div class="metric-card"><span>Market range</span><strong id="fuel-market-range">—</strong></div>
         </div>
+        <details class="segment-details">
+          <summary>View dated fuel sources</summary>
         <div class="split-grid">
           <div>
             <h3>Current comparison</h3>
@@ -287,9 +327,10 @@
             <div id="fuel-official-list" class="record-list"></div>
           </div>
         </div>
+        </details>
       </section>
 
-      <section class="panel operations-panel" id="preferences-console" aria-labelledby="preferences-title">
+      <section class="panel workspace-segment operations-panel" data-segment-id="appearance" id="preferences-console" aria-labelledby="preferences-title">
         <div class="panel-heading">
           <div>
             <p class="section-code">09 / LOCAL DISPLAY</p>
@@ -322,9 +363,10 @@
           </label>
           <button class="secondary-action-button filter-button" id="reset-preferences" type="button">Reset display</button>
         </div>
+        <p id="appearance-motion-state" class="micro-copy left-copy"></p>
       </section>
 
-      <section class="panel boundary-panel" aria-labelledby="boundary-title">
+      <section class="panel workspace-segment boundary-panel" data-segment-id="governance" aria-labelledby="boundary-title">
         <div>
           <p class="section-code">AUTHORITY BOUNDARY</p>
           <h2 id="boundary-title">What this browser cannot do directly</h2>
@@ -339,8 +381,22 @@
       </section>
     </main>
 
+    <div class="drawer-backdrop" id="fleet-drawer-backdrop" hidden></div>
+    <aside class="detail-drawer" id="fleet-drawer" role="dialog" aria-modal="true" aria-labelledby="fleet-drawer-title" hidden>
+      <div class="drawer-heading">
+        <div>
+          <p class="section-code">SELECTED VEHICLE</p>
+          <h2 id="fleet-drawer-title">Vehicle details</h2>
+        </div>
+        <button id="close-fleet-drawer" class="secondary-action-button" type="button" aria-label="Close vehicle details">Close</button>
+      </div>
+      <span id="fleet-drawer-status" class="record-status"></span>
+      <div id="fleet-drawer-details" class="detail-grid drawer-detail-grid"></div>
+      <p class="micro-copy left-copy">Read-only overview. Edit operational values through the governed Streamlit Fleet form.</p>
+    </aside>
+
     <footer class="shell footer-row">
-      <span>Loopback: 127.0.0.1:8000</span>
+      <span>Loopback: 127.0.0.1:8000 · build task-168-1</span>
       <span>Streamlit remains available during transition</span>
     </footer>
   </body>
