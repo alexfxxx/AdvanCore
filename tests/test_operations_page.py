@@ -248,6 +248,9 @@ def test_fleet_detail_update_preserves_prefilled_values(monkeypatch):
         registered_owner_id=7, vehicle_type="Bus", manufacture_year=2020,
         passenger_capacity=19, propellant="Diesel", scheme="Scheme A",
         road_tax_amount="850.00", road_tax_period_months=6,
+        finance_company="Example Finance", original_loan_amount="120000.00",
+        monthly_instalment="2500.00", loan_start_date=date(2026, 1, 31),
+        loan_term_months=48,
     )
     entities = EmptyService(); entities.list_entities = lambda: [owner]
     vehicles = EmptyService(); vehicles.list_vehicles = lambda: [selected]
@@ -273,6 +276,11 @@ def test_fleet_detail_update_preserves_prefilled_values(monkeypatch):
     assert calls[0][1]["road_tax_amount"] == "850.00"
     assert calls[0][1]["road_tax_period_months"] == 6
     assert calls[0][1]["parking_monthly_cost"] == "125.00"
+    assert calls[0][1]["finance_company"] == "Example Finance"
+    assert calls[0][1]["original_loan_amount"] == "120000.00"
+    assert calls[0][1]["monthly_instalment"] == "2500.00"
+    assert calls[0][1]["loan_start_date"] == date(2026, 1, 31)
+    assert calls[0][1]["loan_term_months"] == 48
     detail_keys = [key for key in fake_st.widget_keys if key.startswith("vehicle_details_")]
     assert detail_keys
     assert all(key.startswith("vehicle_details_1_") for key in detail_keys)

@@ -1,4 +1,6 @@
 from contextlib import contextmanager, nullcontext
+from datetime import date
+from decimal import Decimal
 
 import pytest
 from sqlalchemy import create_engine
@@ -8,8 +10,10 @@ from advancore.repositories import VehicleRepository
 from advancore.services.database import create_session_factory, session_scope
 from advancore.services.vehicle_service import (
     DuplicateVehicleError,
+    HirePurchaseProjection,
     VehicleService,
     VehicleValidationError,
+    calculate_hire_purchase_projection,
 )
 
 
@@ -109,3 +113,82 @@ def test_vehicle_details_reject_invalid_values_without_estimation(details):
         service = VehicleService(VehicleRepository(session)); vehicle = service.create_vehicle("BUS-9")
         with pytest.raises(VehicleValidationError): service.update_details(vehicle.id, **details)
         assert vehicle.road_tax_amount is None
+
+
+@pytest.mark.parametrize(
+    ("start", "as_of", "term", "expected"),
+    [
+        (date(2024, 1, 31), date(2024, 2, 28), 12, 12),
+        (date(2024, 1, 31), date(2024, 2, 29), 12, 11),
+        (date(2023, 1, 31), date(2023, 2, 28), 12, 11),
+        (date(2024, 1, 31), date(2024, 3, 30), 12, 11),
+        (date(2024, 1, 31), date(2024, 3, 31), 12, 10),
+        (date(2027, 1, 15), date(2026, 8, 30), 24, 24),
+        (date(2024, 1, 15), date(2026, 8, 30), 24, 0),
+    ],
+)
+def test_hire_purchase_projection_uses_approved_monthly_dates(
+    start, as_of, term, expected
+):
+    projection = calculate_hire_purchase_projection(
+        start,
+        term,
+        Decimal("1234.56"),
+        as_of=as_of,
+    )
+    assert projection == HirePurchaseProjection(
+        expected,
+        Decimal("1234.56") * expected,
+    )
+
+
+def test_hire_purchase_projection_preserves_missing_inputs():
+    assert calculate_hire_purchase_projection(
+        None, 12, Decimal("1000"), as_of=date(2026, 8, 30)
+    ) == HirePurchaseProjection(None, None)
+    assert calculate_hire_purchase_projection(
+        date(2026, 1, 1), None, Decimal("1000"), as_of=date(2026, 8, 30)
+    ) == HirePurchaseProjection(None, None)
+    assert calculate_hire_purchase_projection(
+        date(2026, 1, 1), 12, None, as_of=date(2026, 8, 30)
+    ) == HirePurchaseProjection(5, None)
+
+
+def test_vehicle_finance_fields_are_nullable_and_persist_when_recorded():
+    factory = build_service()
+    with session_scope(factory) as session:
+        service = VehicleService(VehicleRepository(session))
+        vehicle = service.create_vehicle("BUS-FINANCE")
+        updated = service.update_details(
+            vehicle.id,
+            finance_company="  Example Finance  ",
+            original_loan_amount="120000.00",
+            monthly_instalment="2500.00",
+            loan_start_date=date(2026, 1, 31),
+            loan_term_months=48,
+        )
+        assert updated.finance_company == "Example Finance"
+        assert updated.original_loan_amount == Decimal("120000.00")
+        assert updated.monthly_instalment == Decimal("2500.00")
+        assert updated.loan_start_date == date(2026, 1, 31)
+        assert updated.loan_term_months == 48
+
+
+@pytest.mark.parametrize(
+    "details",
+    [
+        {"original_loan_amount": "-0.01"},
+        {"monthly_instalment": "-0.01"},
+        {"loan_term_months": 0},
+        {"loan_term_months": True},
+        {"loan_start_date": "2026-01-01"},
+        {"finance_company": "x" * 121},
+    ],
+)
+def test_vehicle_finance_fields_reject_invalid_values(details):
+    factory = build_service()
+    with session_scope(factory) as session:
+        service = VehicleService(VehicleRepository(session))
+        vehicle = service.create_vehicle("BUS-INVALID-FINANCE")
+        with pytest.raises(VehicleValidationError):
+            service.update_details(vehicle.id, **details)

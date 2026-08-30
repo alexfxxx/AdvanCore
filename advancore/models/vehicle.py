@@ -33,6 +33,9 @@ class Vehicle(TimestampMixin, Base):
         CheckConstraint("parking_monthly_cost IS NULL OR parking_monthly_cost >= 0", name="ck_vehicles_parking_cost"),
         CheckConstraint("insurance_annual_amount IS NULL OR insurance_annual_amount >= 0", name="ck_vehicles_insurance_amount"),
         CheckConstraint("road_tax_amount IS NULL OR road_tax_amount >= 0", name="ck_vehicles_road_tax_amount"),
+        CheckConstraint("original_loan_amount IS NULL OR original_loan_amount >= 0", name="ck_vehicles_original_loan_amount"),
+        CheckConstraint("monthly_instalment IS NULL OR monthly_instalment >= 0", name="ck_vehicles_monthly_instalment"),
+        CheckConstraint("loan_term_months IS NULL OR loan_term_months > 0", name="ck_vehicles_loan_term_months"),
         CheckConstraint(
             "(road_tax_amount IS NULL AND road_tax_period_months IS NULL) OR "
             "(road_tax_amount IS NOT NULL AND road_tax_period_months IN (6, 12))",
@@ -67,3 +70,8 @@ class Vehicle(TimestampMixin, Base):
     insurance_annual_amount: Mapped[Decimal | None] = mapped_column(Numeric(12, 2), nullable=True)
     road_tax_amount: Mapped[Decimal | None] = mapped_column(Numeric(12, 2), nullable=True)
     road_tax_period_months: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    finance_company: Mapped[str | None] = mapped_column(String(120), nullable=True)
+    original_loan_amount: Mapped[Decimal | None] = mapped_column(Numeric(12, 2), nullable=True)
+    monthly_instalment: Mapped[Decimal | None] = mapped_column(Numeric(12, 2), nullable=True)
+    loan_start_date: Mapped[date | None] = mapped_column(Date, nullable=True)
+    loan_term_months: Mapped[int | None] = mapped_column(Integer, nullable=True)

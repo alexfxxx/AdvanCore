@@ -17,4 +17,7 @@ def test_fleet_endpoint_is_filtered_and_read_only(tmp_path):
     assert gateway.fleet_filters == (7, "Bus", 43)
     assert response.json()["vehicles"][0]["registration_number"] == "PC5234D"
     assert response.json()["vehicles"][0]["road_tax_amount"] == "850.00"
+    assert response.json()["vehicles"][0]["finance_company"] == "Example Finance"
+    assert response.json()["vehicles"][0]["remaining_scheduled_payments"] == 41
+    assert response.json()["vehicles"][0]["projected_remaining_scheduled_amount"] == "102500.00"
     assert write_attempt.status_code == 405

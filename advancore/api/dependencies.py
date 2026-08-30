@@ -137,7 +137,10 @@ class DatabaseReadModelGateway:
     ) -> FleetResponse:
         from advancore.repositories import LegalEntityRepository, VehicleRepository
         from advancore.services.legal_entity_service import LegalEntityService
-        from advancore.services.vehicle_service import VehicleService
+        from advancore.services.vehicle_service import (
+            VehicleService,
+            calculate_hire_purchase_projection,
+        )
 
         session = self._open_session()
         try:
@@ -149,9 +152,24 @@ class DatabaseReadModelGateway:
                 vehicle_type,
                 passenger_capacity,
             )
+            vehicle_responses = []
+            for item in vehicles:
+                projection = calculate_hire_purchase_projection(
+                    item.loan_start_date,
+                    item.loan_term_months,
+                    item.monthly_instalment,
+                )
+                vehicle_responses.append(
+                    VehicleResponse.model_validate(item).model_copy(
+                        update={
+                            "remaining_scheduled_payments": projection.remaining_scheduled_payments,
+                            "projected_remaining_scheduled_amount": projection.projected_remaining_scheduled_amount,
+                        }
+                    )
+                )
             return FleetResponse(
                 companies=[LegalEntityResponse.model_validate(item) for item in companies],
-                vehicles=[VehicleResponse.model_validate(item) for item in vehicles],
+                vehicles=vehicle_responses,
             )
         except Exception as exc:
             raise ReadModelUnavailable("Fleet records are temporarily unavailable.") from exc

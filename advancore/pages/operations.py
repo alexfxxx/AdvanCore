@@ -89,6 +89,7 @@ from advancore.services.vehicle_service import (
     VehicleNotFoundError,
     VehicleService,
     VehicleValidationError,
+    calculate_hire_purchase_projection,
 )
 
 
@@ -444,6 +445,11 @@ def _render_vehicle_register() -> None:
     selected = by_id[selected_id]
     def shown(value): return "Not recorded" if value is None or value == "" else str(value)
     def form_value(value): return "" if value is None else str(value)
+    finance_projection = calculate_hire_purchase_projection(
+        getattr(selected, "loan_start_date", None),
+        getattr(selected, "loan_term_months", None),
+        getattr(selected, "monthly_instalment", None),
+    )
     st.write({
         "Registered company": owner_by_id[getattr(selected, "registered_owner_id", None)].name if getattr(selected, "registered_owner_id", None) in owner_by_id else "Not recorded",
         "Manufacture year": shown(getattr(selected, "manufacture_year", None)), "Vehicle type": shown(getattr(selected, "vehicle_type", None)),
@@ -454,6 +460,13 @@ def _render_vehicle_register() -> None:
         "Parking provider": shown(getattr(selected, "parking_provider", None)), "Parking location": shown(getattr(selected, "parking_location", None)), "Monthly parking cost (GST-inclusive)": shown(getattr(selected, "parking_monthly_cost", None)),
         "Insurance provider": shown(getattr(selected, "insurance_provider", None)), "Annual insurance amount (GST-inclusive)": shown(getattr(selected, "insurance_annual_amount", None)),
         "Road-tax amount": shown(getattr(selected, "road_tax_amount", None)), "Road-tax period months": shown(getattr(selected, "road_tax_period_months", None)),
+        "Finance company": shown(getattr(selected, "finance_company", None)),
+        "Original loan amount": shown(getattr(selected, "original_loan_amount", None)),
+        "Monthly instalment": shown(getattr(selected, "monthly_instalment", None)),
+        "Loan start date": shown(getattr(selected, "loan_start_date", None)),
+        "Total loan term (months)": shown(getattr(selected, "loan_term_months", None)),
+        "Remaining scheduled payments": shown(finance_projection.remaining_scheduled_payments),
+        "Projected remaining scheduled amount": shown(finance_projection.projected_remaining_scheduled_amount),
     })
     st.caption(
         "Current road-tax renewals are GIRO-paid. Amounts are recorded from the "
@@ -474,17 +487,27 @@ def _render_vehicle_register() -> None:
             "chassis_number": ("Chassis number (optional)", 80), "engine_number": ("Engine number (optional)", 80),
             "primary_colour": ("Primary colour (optional)", 40), "parking_provider": ("Parking provider (optional)", 120),
             "parking_location": ("Parking location (optional)", 200), "insurance_provider": ("Insurance provider (optional)", 120),
+            "finance_company": ("Finance company (optional)", 120),
         }
         detail_text = {field: st.text_input(label, value=getattr(selected, field, None) or "", max_chars=maximum, key=f"{detail_key}_{field}") for field, (label, maximum) in text_fields.items()}
         detail_dates = {field: st.text_input(label, value=form_value(getattr(selected, field, None)), max_chars=10, key=f"{detail_key}_{field}") for field, label in (
             ("original_registration_date", "Original registration date YYYY-MM-DD (optional)"),
             ("lifespan_expiry", "Lifespan expiry YYYY-MM-DD (optional)"), ("coe_expiry", "COE expiry YYYY-MM-DD (optional)"),
+            ("loan_start_date", "Loan start date YYYY-MM-DD (optional)"),
         )}
         detail_amounts = {field: st.text_input(label, value=form_value(getattr(selected, field, None)), key=f"{detail_key}_{field}") for field, label in (
             ("unladen_weight_kg", "Unladen weight kg (optional)"), ("maximum_laden_weight_kg", "Maximum laden weight kg (optional)"),
             ("parking_monthly_cost", "Monthly parking cost, GST-inclusive (optional)"),
             ("insurance_annual_amount", "Annual insurance amount, GST-inclusive (optional)"), ("road_tax_amount", "Road-tax amount (optional)"),
+            ("original_loan_amount", "Original loan amount (optional)"),
+            ("monthly_instalment", "Monthly instalment (optional)"),
         )}
+        detail_loan_term = st.text_input(
+            "Total loan term in months (optional)",
+            value=form_value(getattr(selected, "loan_term_months", None)),
+            max_chars=6,
+            key=f"{detail_key}_loan_term_months",
+        )
         road_period_options = [None, 6, 12]
         selected_road_period = getattr(selected, "road_tax_period_months", None)
         road_period = st.selectbox("Road-tax period months", road_period_options, key=f"{detail_key}_road_tax_period_months", index=road_period_options.index(selected_road_period) if selected_road_period in road_period_options else 0, format_func=lambda value: "Not recorded" if value is None else str(value))
@@ -496,6 +519,7 @@ def _render_vehicle_register() -> None:
                 service.update_details(selected_id, registered_owner_id=detail_owner, vehicle_type=detail_type,
                     manufacture_year=int(detail_year) if detail_year.strip() else None,
                     passenger_capacity=int(detail_capacity) if detail_capacity.strip() else None,
+                    loan_term_months=int(detail_loan_term) if detail_loan_term.strip() else None,
                     road_tax_period_months=road_period, **detail_text, **parsed_dates, **detail_amounts)
         except (ValueError, VehicleValidationError, VehicleNotFoundError) as exc: st.warning(str(exc))
         except Exception: st.error("Vehicle details could not be updated.")

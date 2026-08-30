@@ -219,6 +219,17 @@
           </label>
           <button class="secondary-action-button filter-button" id="refresh-fleet" type="button">Refresh fleet</button>
         </div>
+        <details class="fleet-layout-panel">
+          <summary>Arrange Fleet details</summary>
+          <p class="micro-copy left-copy">
+            Drag on desktop, or use the arrow buttons on touch and keyboard devices.
+            This changes display only and never changes saved vehicle data.
+          </p>
+          <ul id="fleet-field-layout" class="fleet-field-layout" aria-label="Fleet detail field order"></ul>
+          <button class="secondary-action-button filter-button" id="reset-fleet-fields" type="button">
+            Reset Fleet fields
+          </button>
+        </details>
         <p id="fleet-summary" class="micro-copy left-copy">Loading fleet…</p>
         <div id="fleet-list" class="operations-list" aria-live="polite"></div>
       </section>

@@ -218,3 +218,42 @@ def test_fleet_identity_migration_is_additive_nullable_and_at_current_head():
     assert len(added) == 21
     assert all(column.nullable is True for column in added)
     mock_op.drop_table.assert_not_called(); mock_op.drop_column.assert_not_called(); mock_op.execute.assert_not_called()
+
+
+def test_fleet_hire_purchase_migration_is_additive_nullable_and_new_head():
+    migration_path = _migration_file("*_fleet_hire_purchase.py")
+    spec = importlib.util.spec_from_file_location(
+        "fleet_hire_purchase_migration", migration_path
+    )
+    migration = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(migration)
+
+    assert migration.down_revision == "e2f119fleet2"
+    mock_op = MagicMock()
+    migration.op = mock_op
+    migration.upgrade()
+
+    added = {call.args[1].name: call.args[1] for call in mock_op.add_column.call_args_list}
+    assert set(added) == {
+        "finance_company",
+        "original_loan_amount",
+        "monthly_instalment",
+        "loan_start_date",
+        "loan_term_months",
+    }
+    assert all(column.nullable is True for column in added.values())
+    assert added["finance_company"].type.length == 120
+    assert added["original_loan_amount"].type.precision == 12
+    assert added["monthly_instalment"].type.scale == 2
+    constraint_names = {
+        call.args[0] for call in mock_op.create_check_constraint.call_args_list
+    }
+    assert constraint_names == {
+        "ck_vehicles_original_loan_amount",
+        "ck_vehicles_monthly_instalment",
+        "ck_vehicles_loan_term_months",
+    }
+    mock_op.drop_table.assert_not_called()
+    mock_op.drop_column.assert_not_called()
+    mock_op.alter_column.assert_not_called()
+    mock_op.execute.assert_not_called()

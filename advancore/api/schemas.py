@@ -87,6 +87,13 @@ class VehicleResponse(BaseModel):
     insurance_annual_amount: Decimal | None
     road_tax_amount: Decimal | None
     road_tax_period_months: int | None
+    finance_company: str | None
+    original_loan_amount: Decimal | None
+    monthly_instalment: Decimal | None
+    loan_start_date: date | None
+    loan_term_months: int | None
+    remaining_scheduled_payments: int | None = None
+    projected_remaining_scheduled_amount: Decimal | None = None
 
 
 class FleetResponse(BaseModel):
