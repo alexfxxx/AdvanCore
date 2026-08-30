@@ -7,8 +7,20 @@ let activeRunId = null;
 let progressStream = null;
 let currentFleet = { companies: [], vehicles: [] };
 let draggedFleetFieldId = null;
+let selectedFleetVehicleId = null;
+let fleetDrawerReturnFocus = null;
+let workspacePreferences = null;
+let draggedWorkspaceSegmentId = null;
+let projectsExpanded = false;
+let knowledgeExpanded = false;
+let currentProjects = [];
+let currentKnowledge = [];
 const DISPLAY_PREFERENCE_KEY = "advancore.console.preferences.v1";
 const FLEET_FIELD_PREFERENCE_KEY = "advancore.fleet.fields.v1";
+const WORKSPACE_LAYOUT_KEY = "advancore.workspace.layout.v1";
+const WORKSPACE_LAYOUT_VERSION = 1;
+const FLEET_OVERVIEW_LIMIT = 8;
+const SUMMARY_RECORD_LIMIT = 3;
 const DISPLAY_ALLOWLIST = {
   theme: ["midnight", "light-business", "graphite"],
   shape: ["soft", "compact"],
@@ -38,6 +50,24 @@ const FLEET_FIELD_CATALOG = Object.freeze([
   { id: "loan_term_months", label: "Total loan term", visible: true },
   { id: "remaining_scheduled_payments", label: "Remaining scheduled payments", visible: true },
   { id: "projected_remaining_scheduled_amount", label: "Projected remaining scheduled amount", visible: true },
+]);
+const WORKSPACE_SIZE_CATALOG = Object.freeze({
+  small: 4,
+  medium: 6,
+  wide: 8,
+  full: 12,
+});
+const WORKSPACE_SEGMENT_CATALOG = Object.freeze([
+  { id: "controller", label: "Owner Goal", size: "wide", visible: true },
+  { id: "readiness", label: "Local Readiness", size: "small", visible: true },
+  { id: "fleet", label: "Fleet", size: "wide", visible: true },
+  { id: "dispatch", label: "Dispatch", size: "small", visible: true },
+  { id: "fuel", label: "Fuel benchmark", size: "small", visible: true },
+  { id: "projects", label: "Projects", size: "small", visible: true },
+  { id: "knowledge", label: "Knowledge", size: "small", visible: true },
+  { id: "voice", label: "Voice console", size: "small", visible: false },
+  { id: "appearance", label: "Console appearance", size: "medium", visible: false },
+  { id: "governance", label: "Governance boundary", size: "full", visible: false },
 ]);
 let fleetFieldPreferences = defaultFleetFieldPreferences();
 
@@ -150,7 +180,8 @@ function saveFleetFieldPreferences(preferences) {
     // A blocked or full browser store must not stop the read-only Fleet view.
   }
   renderFleetFieldControls();
-  renderFleetCards();
+  renderFleetOverview();
+  if (selectedFleetVehicleId !== null) renderFleetDrawer(selectedFleetVehicleId);
 }
 
 function fleetFieldValue(fieldId, vehicle, companies) {
@@ -183,35 +214,144 @@ function fleetFieldValue(fieldId, vehicle, companies) {
   return values[fieldId] ?? "Not recorded";
 }
 
-function vehicleCard(vehicle, companies) {
-  const card = document.createElement("article");
-  card.className = "operation-card";
-  const heading = document.createElement("div");
-  heading.className = "operation-card-heading";
-  const title = document.createElement("h3");
-  title.textContent = vehicle.registration_number;
-  const badge = document.createElement("span");
-  badge.className = "record-status";
-  badge.textContent = vehicle.status;
-  heading.append(title, badge);
-  const grid = document.createElement("div");
-  grid.className = "detail-grid";
+function filteredFleetVehicles() {
+  const query = (byId("fleet-search")?.value || "").trim().toLocaleLowerCase();
+  if (!query) return currentFleet.vehicles;
+  return currentFleet.vehicles.filter((vehicle) => (
+    `${vehicle.registration_number || ""} ${vehicle.make_model || ""}`
+      .toLocaleLowerCase()
+      .includes(query)
+  ));
+}
+
+function fleetCompactRow(vehicle, companies) {
+  const owner = companies.find((item) => item.id === vehicle.registered_owner_id);
+  const row = document.createElement("button");
+  row.type = "button";
+  row.className = "fleet-compact-row";
+  row.setAttribute("role", "listitem");
+  row.setAttribute("aria-label", `Open ${vehicle.registration_number} details`);
+  const details = [
+    ["Plate", vehicle.registration_number],
+    ["Model", vehicle.make_model || "Not recorded"],
+    ["Owner", owner?.name || "Not recorded"],
+    ["Type", [vehicle.vehicle_type, vehicle.passenger_capacity ? `${vehicle.passenger_capacity} seats` : null].filter(Boolean).join(" · ") || "Not recorded"],
+  ];
+  details.forEach(([label, value], index) => {
+    const cell = document.createElement("span");
+    cell.className = index === 0 ? "fleet-primary-cell" : "fleet-row-cell";
+    const term = document.createElement("small");
+    term.textContent = label;
+    const result = document.createElement("strong");
+    result.textContent = value;
+    cell.append(term, result);
+    row.append(cell);
+  });
+  const status = document.createElement("span");
+  status.className = "record-status";
+  status.textContent = vehicle.status || "Recorded";
+  row.append(status);
+  row.addEventListener("click", () => openFleetDrawer(vehicle.id, row));
+  return row;
+}
+
+function renderFleetOverview() {
+  const vehicles = filteredFleetVehicles();
+  const container = byId("fleet-list");
+  if (!container) return;
+  container.replaceChildren();
+  setText("fleet-match-count", vehicles.length);
+  setText("fleet-owner-count", new Set(vehicles.map((vehicle) => vehicle.registered_owner_id).filter(Boolean)).size);
+  const busCount = vehicles.filter((vehicle) => String(vehicle.vehicle_type).toLocaleLowerCase() === "bus").length;
+  setText("fleet-bus-count", busCount);
+  setText("fleet-other-count", vehicles.length - busCount);
+  if (!vehicles.length) {
+    const empty = document.createElement("p");
+    empty.className = "empty-state";
+    empty.textContent = "No vehicles match these filters.";
+    container.append(empty);
+    setText("fleet-summary", "No vehicle records match the current filters.");
+    return;
+  }
+  vehicles.slice(0, FLEET_OVERVIEW_LIMIT).forEach((vehicle) => {
+    container.append(fleetCompactRow(vehicle, currentFleet.companies));
+  });
+  const shown = Math.min(vehicles.length, FLEET_OVERVIEW_LIMIT);
+  setText("fleet-summary", `${vehicles.length} vehicle${vehicles.length === 1 ? "" : "s"} match. Showing ${shown}; select one for full details. No sample records are generated.`);
+}
+
+function renderFleetUnavailable(message) {
+  currentFleet = { companies: [], vehicles: [] };
+  closeFleetDrawer();
+  setText("fleet-match-count", "—");
+  setText("fleet-owner-count", "—");
+  setText("fleet-bus-count", "—");
+  setText("fleet-other-count", "—");
+  setText("fleet-summary", message);
+  const container = byId("fleet-list");
+  container.replaceChildren();
+  const unavailable = document.createElement("p");
+  unavailable.className = "empty-state";
+  unavailable.textContent = "Fleet is unavailable. Existing records have not been changed.";
+  container.append(unavailable);
+}
+
+function renderFleetDrawer(vehicleId) {
+  const vehicle = currentFleet.vehicles.find((item) => String(item.id) === String(vehicleId));
+  if (!vehicle) {
+    closeFleetDrawer();
+    return;
+  }
+  selectedFleetVehicleId = vehicle.id;
+  setText("fleet-drawer-title", vehicle.registration_number);
+  setText("fleet-drawer-status", vehicle.status || "Recorded");
+  const grid = byId("fleet-drawer-details");
+  grid.replaceChildren();
   const visible = new Set(fleetFieldPreferences.visible);
   fleetFieldPreferences.order.filter((id) => visible.has(id)).forEach((id) => {
     const field = FLEET_FIELD_CATALOG.find((item) => item.id === id);
-    if (field) appendDetail(grid, field.label, fleetFieldValue(id, vehicle, companies));
+    if (field) appendDetail(grid, field.label, fleetFieldValue(id, vehicle, currentFleet.companies));
   });
-  card.append(heading, grid);
-  return card;
+}
+
+function openFleetDrawer(vehicleId, returnFocus = null) {
+  fleetDrawerReturnFocus = returnFocus || document.activeElement;
+  renderFleetDrawer(vehicleId);
+  byId("fleet-drawer").hidden = false;
+  byId("fleet-drawer-backdrop").hidden = false;
+  document.body.classList.add("drawer-open");
+  byId("close-fleet-drawer").focus();
+}
+
+function closeFleetDrawer() {
+  const drawer = byId("fleet-drawer");
+  const backdrop = byId("fleet-drawer-backdrop");
+  if (drawer) drawer.hidden = true;
+  if (backdrop) backdrop.hidden = true;
+  document.body.classList.remove("drawer-open");
+  selectedFleetVehicleId = null;
+  if (fleetDrawerReturnFocus?.isConnected) fleetDrawerReturnFocus.focus();
+  fleetDrawerReturnFocus = null;
+}
+
+function keepFocusInFleetDrawer(event) {
+  if (event.key !== "Tab" || byId("fleet-drawer")?.hidden) return;
+  const focusable = [...byId("fleet-drawer").querySelectorAll("button, [href], input, select, textarea, [tabindex]:not([tabindex='-1'])")]
+    .filter((element) => !element.disabled && !element.hidden);
+  if (!focusable.length) return;
+  const first = focusable[0];
+  const last = focusable[focusable.length - 1];
+  if (event.shiftKey && document.activeElement === first) {
+    event.preventDefault();
+    last.focus();
+  } else if (!event.shiftKey && document.activeElement === last) {
+    event.preventDefault();
+    first.focus();
+  }
 }
 
 function renderFleetCards() {
-  renderRecords(
-    "fleet-list",
-    currentFleet.vehicles,
-    (vehicle) => vehicleCard(vehicle, currentFleet.companies),
-    "No vehicles match these filters.",
-  );
+  renderFleetOverview();
 }
 
 function moveFleetField(fieldId, offset) {
@@ -337,12 +477,16 @@ async function loadFleet({ initialiseFilters = false } = {}) {
       replaceOptions(byId("fleet-capacity"), capacities, String, (item) => `${item} seats`, "All capacities");
     }
     currentFleet = fleet;
-    setText("fleet-summary", `${fleet.vehicles.length} vehicle${fleet.vehicles.length === 1 ? "" : "s"} shown. No sample records are generated.`);
-    renderFleetCards();
+    if (selectedFleetVehicleId !== null) {
+      if (fleet.vehicles.some((vehicle) => String(vehicle.id) === String(selectedFleetVehicleId))) {
+        renderFleetDrawer(selectedFleetVehicleId);
+      } else {
+        closeFleetDrawer();
+      }
+    }
+    renderFleetOverview();
   } catch (error) {
-    currentFleet = { companies: [], vehicles: [] };
-    setText("fleet-summary", error.message);
-    renderRecords("fleet-list", [], recordRow, "Fleet is unavailable.");
+    renderFleetUnavailable(error.message);
   }
 }
 
@@ -384,7 +528,8 @@ async function loadDispatch() {
     setText("dispatch-conflict-count", board.conflict_count);
     setText("dispatch-vehicle-count", board.available_vehicles.length);
     setText("dispatch-driver-count", board.available_drivers.length);
-    renderRecords("dispatch-list", board.rows, dispatchCard, "No trips are recorded for this date.");
+    const actionableRows = board.rows.filter((row) => row.conflicts.length).slice(0, SUMMARY_RECORD_LIMIT);
+    renderRecords("dispatch-list", actionableRows, dispatchCard, "No dispatch conflicts are recorded for this date.");
   } catch (error) {
     renderRecords("dispatch-list", [], recordRow, error.message);
   }
@@ -426,6 +571,292 @@ async function loadFuel() {
   }
 }
 
+function defaultWorkspacePreferences() {
+  return {
+    version: WORKSPACE_LAYOUT_VERSION,
+    segments: WORKSPACE_SEGMENT_CATALOG.map((segment) => ({
+      id: segment.id,
+      visible: segment.visible,
+      size: segment.size,
+    })),
+  };
+}
+
+function validatedWorkspaceLayout(raw) {
+  const defaults = defaultWorkspacePreferences();
+  if (!raw || typeof raw !== "object" || raw.version !== WORKSPACE_LAYOUT_VERSION || !Array.isArray(raw.segments)) return defaults;
+  if (raw.segments.length !== WORKSPACE_SEGMENT_CATALOG.length) return defaults;
+  const approvedIds = new Set(WORKSPACE_SEGMENT_CATALOG.map((segment) => segment.id));
+  const seen = new Set();
+  const segments = [];
+  for (const candidate of raw.segments) {
+    if (!candidate || typeof candidate !== "object") return defaults;
+    if (typeof candidate.id !== "string" || !approvedIds.has(candidate.id) || seen.has(candidate.id)) return defaults;
+    if (typeof candidate.visible !== "boolean" || !Object.hasOwn(WORKSPACE_SIZE_CATALOG, candidate.size)) return defaults;
+    seen.add(candidate.id);
+    segments.push({ id: candidate.id, visible: candidate.visible, size: candidate.size });
+  }
+  if (seen.size !== approvedIds.size || !segments.some((segment) => segment.visible)) return defaults;
+  return { version: WORKSPACE_LAYOUT_VERSION, segments };
+}
+
+function reorderedWorkspaceSegmentIds(currentOrder, segmentId, targetId) {
+  const order = [...currentOrder];
+  const source = order.indexOf(segmentId);
+  const target = order.indexOf(targetId);
+  if (source < 0 || target < 0 || source === target) return order;
+  order.splice(source, 1);
+  order.splice(target, 0, segmentId);
+  return order;
+}
+
+function readWorkspacePreferences() {
+  try {
+    return validatedWorkspaceLayout(JSON.parse(localStorage.getItem(WORKSPACE_LAYOUT_KEY)));
+  } catch (_error) {
+    return defaultWorkspacePreferences();
+  }
+}
+
+function persistWorkspacePreferences(preferences) {
+  workspacePreferences = validatedWorkspaceLayout(preferences);
+  let stored = true;
+  try {
+    localStorage.setItem(WORKSPACE_LAYOUT_KEY, JSON.stringify(workspacePreferences));
+  } catch (_error) {
+    stored = false;
+  }
+  applyWorkspacePreferences();
+  setText(
+    "workspace-layout-status",
+    stored ? "Layout saved only in this browser." : "Layout changed for this page, but browser storage is unavailable.",
+  );
+}
+
+function workspaceSegmentLabel(segmentId) {
+  return WORKSPACE_SEGMENT_CATALOG.find((segment) => segment.id === segmentId)?.label || segmentId;
+}
+
+function applyWorkspacePreferences() {
+  const workspace = byId("workspace");
+  if (!workspace || !workspacePreferences) return;
+  workspacePreferences.segments.forEach((preference) => {
+    const segment = workspace.querySelector(`[data-segment-id="${preference.id}"]`);
+    if (!segment) return;
+    segment.dataset.segmentSize = preference.size;
+    segment.hidden = !preference.visible;
+    segment.draggable = document.body.classList.contains("workspace-editing");
+    workspace.append(segment);
+  });
+  updateMobileSegmentSelector();
+  renderWorkspaceEditor();
+}
+
+function workspaceSegmentsWithUpdate(segments, segmentId, changes) {
+  return segments.map((segment) => (
+    segment.id === segmentId ? { ...segment, ...changes } : { ...segment }
+  ));
+}
+
+function updateWorkspaceSegment(segmentId, changes) {
+  const next = workspaceSegmentsWithUpdate(workspacePreferences.segments, segmentId, changes);
+  persistWorkspacePreferences({ version: WORKSPACE_LAYOUT_VERSION, segments: next });
+}
+
+function moveWorkspaceSegment(segmentId, offset) {
+  const segments = workspacePreferences.segments.map((segment) => ({ ...segment }));
+  const source = segments.findIndex((segment) => segment.id === segmentId);
+  const target = Math.max(0, Math.min(segments.length - 1, source + offset));
+  if (source < 0 || source === target) return;
+  const [moved] = segments.splice(source, 1);
+  segments.splice(target, 0, moved);
+  persistWorkspacePreferences({ version: WORKSPACE_LAYOUT_VERSION, segments });
+}
+
+function placeWorkspaceSegmentAtDrop(segmentId, targetId) {
+  const current = workspacePreferences.segments;
+  const order = reorderedWorkspaceSegmentIds(current.map((segment) => segment.id), segmentId, targetId);
+  if (order.every((id, index) => id === current[index].id)) return;
+  const bySegmentId = new Map(current.map((segment) => [segment.id, segment]));
+  persistWorkspacePreferences({
+    version: WORKSPACE_LAYOUT_VERSION,
+    segments: order.map((id) => ({ ...bySegmentId.get(id) })),
+  });
+}
+
+function replacedWorkspaceSegments(currentSegments, segmentId, replacementId) {
+  const segments = currentSegments.map((segment) => ({ ...segment }));
+  if (!replacementId || segmentId === replacementId) return segments;
+  const source = segments.findIndex((segment) => segment.id === segmentId);
+  const replacement = segments.findIndex((segment) => segment.id === replacementId);
+  if (source < 0 || replacement < 0 || segments[replacement].visible) return segments;
+  segments[source].visible = false;
+  segments[replacement].visible = true;
+  [segments[source], segments[replacement]] = [segments[replacement], segments[source]];
+  return segments;
+}
+
+function replaceWorkspaceSegment(segmentId, replacementId) {
+  const segments = replacedWorkspaceSegments(workspacePreferences.segments, segmentId, replacementId);
+  persistWorkspacePreferences({ version: WORKSPACE_LAYOUT_VERSION, segments });
+}
+
+function renderWorkspaceEditor() {
+  const list = byId("workspace-layout-list");
+  if (!list || !workspacePreferences) return;
+  list.replaceChildren();
+  const hiddenSegments = workspacePreferences.segments.filter((segment) => !segment.visible);
+  workspacePreferences.segments.forEach((segment, index) => {
+    const row = document.createElement("li");
+    row.className = "workspace-layout-row";
+    row.draggable = true;
+    row.dataset.segmentId = segment.id;
+    row.addEventListener("dragstart", () => { draggedWorkspaceSegmentId = segment.id; row.classList.add("dragging"); });
+    row.addEventListener("dragend", () => { draggedWorkspaceSegmentId = null; row.classList.remove("dragging"); });
+    row.addEventListener("dragover", (event) => event.preventDefault());
+    row.addEventListener("drop", (event) => { event.preventDefault(); placeWorkspaceSegmentAtDrop(draggedWorkspaceSegmentId, segment.id); });
+
+    const visibleLabel = document.createElement("label");
+    visibleLabel.className = "workspace-visible-toggle";
+    const visible = document.createElement("input");
+    visible.type = "checkbox";
+    visible.checked = segment.visible;
+    visible.addEventListener("change", () => updateWorkspaceSegment(segment.id, { visible: visible.checked }));
+    const name = document.createElement("strong");
+    name.textContent = workspaceSegmentLabel(segment.id);
+    visibleLabel.append(visible, name);
+
+    const size = document.createElement("select");
+    size.setAttribute("aria-label", `${workspaceSegmentLabel(segment.id)} width`);
+    Object.keys(WORKSPACE_SIZE_CATALOG).forEach((value) => {
+      const option = document.createElement("option");
+      option.value = value;
+      option.textContent = value[0].toUpperCase() + value.slice(1);
+      option.selected = value === segment.size;
+      size.append(option);
+    });
+    size.addEventListener("change", () => updateWorkspaceSegment(segment.id, { size: size.value }));
+
+    const replace = document.createElement("select");
+    replace.setAttribute("aria-label", `Replace ${workspaceSegmentLabel(segment.id)}`);
+    const keep = document.createElement("option");
+    keep.value = "";
+    keep.textContent = "Replace with…";
+    replace.append(keep);
+    hiddenSegments.filter((candidate) => candidate.id !== segment.id).forEach((candidate) => {
+      const option = document.createElement("option");
+      option.value = candidate.id;
+      option.textContent = workspaceSegmentLabel(candidate.id);
+      replace.append(option);
+    });
+    replace.disabled = !segment.visible || replace.options.length === 1;
+    replace.addEventListener("change", () => replaceWorkspaceSegment(segment.id, replace.value));
+
+    const controls = document.createElement("span");
+    controls.className = "workspace-move-controls";
+    [-1, 1].forEach((offset) => {
+      const button = document.createElement("button");
+      button.type = "button";
+      button.textContent = offset < 0 ? "↑" : "↓";
+      button.title = `Move ${workspaceSegmentLabel(segment.id)} ${offset < 0 ? "up" : "down"}`;
+      button.setAttribute("aria-label", button.title);
+      button.disabled = offset < 0 ? index === 0 : index === workspacePreferences.segments.length - 1;
+      button.addEventListener("click", () => moveWorkspaceSegment(segment.id, offset));
+      controls.append(button);
+    });
+    row.append(visibleLabel, size, replace, controls);
+    list.append(row);
+  });
+}
+
+function updateMobileSegmentSelector() {
+  const select = byId("mobile-segment-select");
+  if (!select || !workspacePreferences) return;
+  const previous = select.value;
+  const visible = workspacePreferences.segments.filter((segment) => segment.visible);
+  select.replaceChildren();
+  visible.forEach((segment) => {
+    const option = document.createElement("option");
+    option.value = segment.id;
+    option.textContent = workspaceSegmentLabel(segment.id);
+    select.append(option);
+  });
+  select.value = visible.some((segment) => segment.id === previous) ? previous : visible[0]?.id || "";
+  document.querySelectorAll(".workspace-segment").forEach((segment) => {
+    segment.dataset.mobileActive = String(segment.dataset.segmentId === select.value);
+  });
+}
+
+function setWorkspaceEditing(editing) {
+  document.body.classList.toggle("workspace-editing", editing);
+  byId("workspace-editor").hidden = !editing;
+  byId("edit-workspace").setAttribute("aria-expanded", String(editing));
+  document.querySelectorAll(".workspace-segment").forEach((segment) => { segment.draggable = editing; });
+  if (editing) byId("workspace-editor").scrollIntoView({ behavior: "smooth", block: "nearest" });
+}
+
+function resetWorkspace({ resetDisplay = false } = {}) {
+  let storageReset = true;
+  try {
+    localStorage.removeItem(WORKSPACE_LAYOUT_KEY);
+    if (resetDisplay) {
+      localStorage.removeItem(DISPLAY_PREFERENCE_KEY);
+      localStorage.removeItem(FLEET_FIELD_PREFERENCE_KEY);
+    }
+  } catch (_error) {
+    storageReset = false;
+  }
+  workspacePreferences = defaultWorkspacePreferences();
+  if (resetDisplay) {
+    applyPreferences(null);
+    fleetFieldPreferences = defaultFleetFieldPreferences();
+    renderFleetFieldControls();
+    renderFleetOverview();
+  }
+  applyWorkspacePreferences();
+  const successLabel = resetDisplay ? "Display and layout reset." : "Workspace reset.";
+  setText("workspace-layout-status", storageReset ? successLabel : `${successLabel} Browser storage remains unavailable, so refresh may restore earlier choices.`);
+}
+
+function configureWorkspace() {
+  workspacePreferences = readWorkspacePreferences();
+  const workspace = byId("workspace");
+  workspace.addEventListener("dragstart", (event) => {
+    const segment = event.target.closest(".workspace-segment");
+    if (!document.body.classList.contains("workspace-editing") || !segment) return;
+    draggedWorkspaceSegmentId = segment.dataset.segmentId;
+    segment.classList.add("dragging");
+  });
+  workspace.addEventListener("dragend", (event) => {
+    event.target.closest(".workspace-segment")?.classList.remove("dragging");
+    draggedWorkspaceSegmentId = null;
+  });
+  workspace.addEventListener("dragover", (event) => {
+    if (document.body.classList.contains("workspace-editing") && event.target.closest(".workspace-segment")) event.preventDefault();
+  });
+  workspace.addEventListener("drop", (event) => {
+    const target = event.target.closest(".workspace-segment");
+    if (target && draggedWorkspaceSegmentId) placeWorkspaceSegmentAtDrop(draggedWorkspaceSegmentId, target.dataset.segmentId);
+  });
+  byId("edit-workspace").addEventListener("click", () => setWorkspaceEditing(!document.body.classList.contains("workspace-editing")));
+  byId("close-workspace-editor").addEventListener("click", () => setWorkspaceEditing(false));
+  byId("reset-workspace").addEventListener("click", () => resetWorkspace());
+  byId("reset-display-layout").addEventListener("click", () => resetWorkspace({ resetDisplay: true }));
+  byId("mobile-segment-select").addEventListener("change", updateMobileSegmentSelector);
+  applyWorkspacePreferences();
+  setText("workspace-layout-status", "Layout loaded from this browser.");
+}
+
+function updateMotionState() {
+  const savedReduced = document.documentElement.dataset.motion === "reduced";
+  const systemReduced = window.matchMedia?.("(prefers-reduced-motion: reduce)").matches || false;
+  const label = savedReduced
+    ? "Motion reduced by console setting"
+    : systemReduced ? "Motion reduced by browser/OS" : "Full motion enabled";
+  setText("motion-state", label);
+  setText("appearance-motion-state", label);
+}
+
 function validatedPreferences(raw) {
   const defaults = { theme: "midnight", shape: "soft", motion: "full" };
   if (!raw || typeof raw !== "object") return defaults;
@@ -444,7 +875,12 @@ function applyPreferences(preferences) {
     const select = byId(`preference-${key}`);
     if (select) select.value = value;
   });
-  localStorage.setItem(DISPLAY_PREFERENCE_KEY, JSON.stringify(safe));
+  try {
+    localStorage.setItem(DISPLAY_PREFERENCE_KEY, JSON.stringify(safe));
+  } catch (_error) {
+    // Display preferences remain usable for this page when storage is blocked.
+  }
+  updateMotionState();
 }
 
 function configurePreferences() {
@@ -478,30 +914,60 @@ async function loadStatus() {
 
 async function loadProjects() {
   try {
-    const projects = await requestJson("/api/projects");
-    renderRecords(
-      "projects-list",
-      projects,
-      (project) => recordRow(project.name, project.description || "No description recorded", project.status),
-      "No projects recorded.",
-    );
+    currentProjects = await requestJson("/api/projects");
+    renderProjectSummary();
   } catch (error) {
     renderRecords("projects-list", [], recordRow, error.message);
   }
 }
 
+function recentActiveRecords(records) {
+  const inactiveStatuses = new Set(["archived", "inactive", "replaced", "superseded"]);
+  return [...records].sort((left, right) => {
+    const leftInactive = inactiveStatuses.has(String(left.status || "").toLocaleLowerCase());
+    const rightInactive = inactiveStatuses.has(String(right.status || "").toLocaleLowerCase());
+    if (leftInactive !== rightInactive) return leftInactive ? 1 : -1;
+    const leftDate = String(left.updated_at || left.created_at || "");
+    const rightDate = String(right.updated_at || right.created_at || "");
+    return rightDate.localeCompare(leftDate);
+  });
+}
+
+function renderProjectSummary() {
+  const ordered = recentActiveRecords(currentProjects);
+  const records = projectsExpanded ? ordered : ordered.slice(0, SUMMARY_RECORD_LIMIT);
+    renderRecords(
+      "projects-list",
+      records,
+      (project) => recordRow(project.name, project.description || "No description recorded", project.status),
+      "No projects recorded.",
+    );
+  const toggle = byId("toggle-projects");
+  toggle.hidden = currentProjects.length <= SUMMARY_RECORD_LIMIT;
+  toggle.textContent = projectsExpanded ? "Show summary" : `View all ${currentProjects.length} projects`;
+}
+
 async function loadKnowledge() {
   try {
-    const items = await requestJson("/api/knowledge");
-    renderRecords(
-      "knowledge-list",
-      items,
-      (item) => recordRow(item.title, `Project ${item.project_id ?? "not linked"}`, item.status),
-      "No Knowledge items recorded.",
-    );
+    currentKnowledge = await requestJson("/api/knowledge");
+    renderKnowledgeSummary();
   } catch (error) {
     renderRecords("knowledge-list", [], recordRow, error.message);
   }
+}
+
+function renderKnowledgeSummary() {
+  const ordered = recentActiveRecords(currentKnowledge);
+  const records = knowledgeExpanded ? ordered : ordered.slice(0, SUMMARY_RECORD_LIMIT);
+    renderRecords(
+      "knowledge-list",
+      records,
+      (item) => recordRow(item.title, `Project ${item.project_id ?? "not linked"}`, item.status),
+      "No Knowledge items recorded.",
+    );
+  const toggle = byId("toggle-knowledge");
+  toggle.hidden = currentKnowledge.length <= SUMMARY_RECORD_LIMIT;
+  toggle.textContent = knowledgeExpanded ? "Show summary" : `View all ${currentKnowledge.length} Knowledge items`;
 }
 
 function showGoalResult(message, isError = false) {
@@ -702,11 +1168,29 @@ function configureGoalForm() {
 document.addEventListener("DOMContentLoaded", () => {
   configureGoalForm();
   configurePreferences();
+  configureWorkspace();
   configureFleetFieldPreferences();
+  const motionQuery = window.matchMedia?.("(prefers-reduced-motion: reduce)");
+  motionQuery?.addEventListener?.("change", updateMotionState);
   const now = new Date();
   byId("dispatch-date").value = [now.getFullYear(), String(now.getMonth() + 1).padStart(2, "0"), String(now.getDate()).padStart(2, "0")].join("-");
   byId("refresh-fleet").addEventListener("click", () => loadFleet());
   ["fleet-company", "fleet-type", "fleet-capacity"].forEach((id) => byId(id).addEventListener("change", () => loadFleet()));
+  byId("fleet-search").addEventListener("input", renderFleetOverview);
+  byId("close-fleet-drawer").addEventListener("click", closeFleetDrawer);
+  byId("fleet-drawer-backdrop").addEventListener("click", closeFleetDrawer);
+  document.addEventListener("keydown", (event) => {
+    if (event.key === "Escape" && !byId("fleet-drawer").hidden) closeFleetDrawer();
+    else keepFocusInFleetDrawer(event);
+  });
+  byId("toggle-projects").addEventListener("click", () => {
+    projectsExpanded = !projectsExpanded;
+    renderProjectSummary();
+  });
+  byId("toggle-knowledge").addEventListener("click", () => {
+    knowledgeExpanded = !knowledgeExpanded;
+    renderKnowledgeSummary();
+  });
   byId("refresh-dispatch").addEventListener("click", loadDispatch);
   Promise.allSettled([
     loadLocalActionSession(),

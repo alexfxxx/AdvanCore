@@ -107,6 +107,7 @@ def create_app(
         return FileResponse(
             resolved_frontend / "index.html",
             headers={
+                "Cache-Control": "no-store",
                 "Content-Security-Policy": (
                     "default-src 'self'; script-src 'self'; style-src 'self'; "
                     "connect-src 'self'; img-src 'self' data:; object-src 'none'; "

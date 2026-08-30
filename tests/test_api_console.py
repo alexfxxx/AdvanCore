@@ -93,6 +93,7 @@ def test_fastapi_serves_static_console_and_bounded_status(tmp_path):
 
     assert page.status_code == 200
     assert "AdvanCore test console" in page.text
+    assert page.headers["cache-control"] == "no-store"
     assert "script-src 'self'" in page.headers["content-security-policy"]
     assert response.status_code == 200
     assert response.json() == {
