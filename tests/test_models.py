@@ -62,6 +62,28 @@ def test_vehicle_fleet_columns_are_nullable_and_bounded():
     assert {constraint.name for constraint in table.constraints} >= {"ck_vehicles_type", "ck_vehicles_passenger_capacity_positive", "ck_vehicles_road_tax_period"}
 
 
+def test_vehicle_hire_purchase_columns_are_nullable_and_bounded():
+    from advancore.models import Vehicle
+
+    table = Vehicle.__table__
+    additions = {
+        "finance_company",
+        "original_loan_amount",
+        "monthly_instalment",
+        "loan_start_date",
+        "loan_term_months",
+    }
+    assert all(table.c[name].nullable for name in additions)
+    assert table.c.finance_company.type.length == 120
+    assert table.c.original_loan_amount.type.precision == 12
+    assert table.c.monthly_instalment.type.scale == 2
+    assert {constraint.name for constraint in table.constraints} >= {
+        "ck_vehicles_original_loan_amount",
+        "ck_vehicles_monthly_instalment",
+        "ck_vehicles_loan_term_months",
+    }
+
+
 def test_knowledge_model_registers_bounded_approval_metadata():
     table = KnowledgeItem.__table__
     assert table.c.approved_at.nullable is True

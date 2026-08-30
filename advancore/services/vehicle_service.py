@@ -1,8 +1,10 @@
 """Validated vehicle-register use cases."""
 
 from collections.abc import Sequence
+import calendar
+from dataclasses import dataclass
 from datetime import date
-from decimal import Decimal, InvalidOperation
+from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
 import re
 
 from sqlalchemy.exc import IntegrityError
@@ -15,6 +17,70 @@ from advancore.services.activity_service import ActivityLogService
 VEHICLE_STATUSES = ("active", "out_of_service", "retired")
 VEHICLE_TYPES = ("Bus", "lorry", "car")
 _REGISTRATION = re.compile(r"[A-Z0-9][A-Z0-9 -]{0,31}")
+_CURRENCY_QUANTUM = Decimal("0.01")
+
+
+@dataclass(frozen=True)
+class HirePurchaseProjection:
+    remaining_scheduled_payments: int | None
+    projected_remaining_scheduled_amount: Decimal | None
+
+
+def _monthly_payment_date(start: date, payment_number: int) -> date:
+    """Return one approved monthly payment date without external dependencies."""
+    month_index = start.month - 1 + payment_number
+    year = start.year + month_index // 12
+    month = month_index % 12 + 1
+    day = min(start.day, calendar.monthrange(year, month)[1])
+    return date(year, month, day)
+
+
+def calculate_hire_purchase_projection(
+    loan_start_date: date | None,
+    loan_term_months: int | None,
+    monthly_instalment: Decimal | None,
+    *,
+    as_of: date | None = None,
+) -> HirePurchaseProjection:
+    """Calculate approved read-time values; never infer missing source inputs."""
+    if loan_start_date is None or loan_term_months is None:
+        return HirePurchaseProjection(None, None)
+    if not isinstance(loan_start_date, date):
+        raise VehicleValidationError("Loan start date is invalid.")
+    if (
+        isinstance(loan_term_months, bool)
+        or not isinstance(loan_term_months, int)
+        or loan_term_months <= 0
+    ):
+        raise VehicleValidationError("Loan term months must be a positive whole number.")
+
+    calculation_date = as_of or date.today()
+    if not isinstance(calculation_date, date):
+        raise VehicleValidationError("Calculation date is invalid.")
+    month_distance = (
+        (calculation_date.year - loan_start_date.year) * 12
+        + calculation_date.month
+        - loan_start_date.month
+    )
+    elapsed = max(0, min(month_distance, loan_term_months))
+    if elapsed > 0 and _monthly_payment_date(loan_start_date, elapsed) > calculation_date:
+        elapsed -= 1
+    remaining = loan_term_months - elapsed
+
+    if monthly_instalment is None:
+        projected = None
+    else:
+        try:
+            instalment = Decimal(str(monthly_instalment))
+        except (InvalidOperation, ValueError) as exc:
+            raise VehicleValidationError("Monthly instalment must be a valid amount.") from exc
+        if not instalment.is_finite() or instalment < 0:
+            raise VehicleValidationError("Monthly instalment must be non-negative.")
+        projected = (instalment * remaining).quantize(
+            _CURRENCY_QUANTUM,
+            rounding=ROUND_HALF_UP,
+        )
+    return HirePurchaseProjection(remaining, projected)
 
 
 class VehicleValidationError(ValueError):
@@ -141,9 +207,10 @@ class VehicleService:
             ("chassis_number", "Chassis number", 80), ("engine_number", "Engine number", 80),
             ("primary_colour", "Primary colour", 40), ("parking_provider", "Parking provider", 120),
             ("parking_location", "Parking location", 200), ("insurance_provider", "Insurance provider", 120),
+            ("finance_company", "Finance company", 120),
         ):
             setattr(vehicle, field, self._optional_text(values.get(field), label, maximum))
-        for field in ("original_registration_date", "lifespan_expiry", "coe_expiry"):
+        for field in ("original_registration_date", "lifespan_expiry", "coe_expiry", "loan_start_date"):
             value = values.get(field)
             if value is not None and not isinstance(value, date): raise VehicleValidationError(f"{field.replace('_', ' ').title()} is invalid.")
             setattr(vehicle, field, value)
@@ -160,6 +227,18 @@ class VehicleService:
         vehicle.insurance_annual_amount = self._amount(values.get("insurance_annual_amount"), "Annual insurance amount")
         vehicle.road_tax_amount = road_tax
         vehicle.road_tax_period_months = period
+        vehicle.original_loan_amount = self._amount(
+            values.get("original_loan_amount"),
+            "Original loan amount",
+        )
+        vehicle.monthly_instalment = self._amount(
+            values.get("monthly_instalment"),
+            "Monthly instalment",
+        )
+        vehicle.loan_term_months = self._positive_integer(
+            values.get("loan_term_months"),
+            "Loan term months",
+        )
         saved = self._repo.save(vehicle)
         if self._activity is not None: self._activity.record_activity("vehicle_details_updated", "vehicle", saved.id)
         return saved

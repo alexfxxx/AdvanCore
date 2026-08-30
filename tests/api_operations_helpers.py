@@ -64,6 +64,13 @@ class FakeOperationsGateway:
                 insurance_annual_amount=None,
                 road_tax_amount="850.00",
                 road_tax_period_months=6,
+                finance_company="Example Finance",
+                original_loan_amount="120000.00",
+                monthly_instalment="2500.00",
+                loan_start_date=date(2026, 1, 31),
+                loan_term_months=48,
+                remaining_scheduled_payments=41,
+                projected_remaining_scheduled_amount="102500.00",
             )],
         )
 
