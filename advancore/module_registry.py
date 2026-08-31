@@ -91,7 +91,10 @@ _CATALOG: tuple[ModuleDescriptor, ...] = (
         "transport_operations", "Transport Operations", ModuleArea.OPERATIONS,
         ModuleMaturity.TRANSITIONAL, streamlit_page="Transport Operations",
         frontend_anchor="fleet-console",
-        api_prefixes=("/api/fleet", "/api/dispatch", "/api/fuel"),
+        api_prefixes=(
+            "/api/fleet", "/api/drivers", "/api/customers", "/api/routes",
+            "/api/dispatch", "/api/fuel",
+        ),
     ),
     ModuleDescriptor(
         "ai_center", "AI Center", ModuleArea.GOVERNANCE,

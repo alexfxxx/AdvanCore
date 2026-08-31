@@ -5,8 +5,9 @@
 TASK-126 provides the additive presentation scaffold. TASK-127 adds a narrow
 controller-mediated launch and progress bridge. TASK-168 provides the compact
 customizable workspace. TASK-169 designates this FastAPI-served interface as
-the primary AdvanCore app. Streamlit remains only as temporary admin/editing
-support while its remaining forms transfer.
+the primary AdvanCore app. TASK-170 through TASK-174 add reviewed, confirmed
+editing for Projects, Knowledge, Fleet and the minimal operational registers.
+Streamlit remains temporary support while its remaining forms transfer.
 
 ## Boundary
 
@@ -73,8 +74,26 @@ publication continue through the existing controller and `agent_runner`
 authority boundaries. A green test result or completed worker job is never
 treated as approval. `main`, merge and deployment authority are not exposed.
 
-Database reads use a rollback-only session. No API route is authorised to
-commit a transaction.
+Database reads use a rollback-only session. The narrow local-editing routes may
+commit only by delegating to the established application services inside one
+commit-or-rollback transaction. The browser cannot supply SQL, repository
+paths, commands or business-rule overrides.
+
+## Confirmed local-editing endpoints
+
+TASK-170 through TASK-174 add one shared presentation boundary for existing
+service operations:
+
+- Projects: create, edit and archive.
+- Knowledge: draft, edit draft, approve, archive and forward-only replacement.
+- Fleet: create legal entity/vehicle, change status and update only existing
+  approved Fleet details.
+- Drivers, customers and routes: create and change existing status.
+
+Every route requires the same loopback peer, allow-listed `Origin`,
+`X-AdvanCore-Action-Token` and strict boolean `confirmed` checks as the other
+local actions. Pydantic rejects unknown fields. Service errors are mapped to
+bounded client messages and unexpected errors do not expose internals.
 
 ## Presentation customization
 

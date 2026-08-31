@@ -34,6 +34,8 @@ Future modules may include:
 
 - FastAPI-served HTML/CSS/JavaScript primary interface
 - Temporary Streamlit admin/editing interface while remaining forms transfer
+- Reviewed and explicitly confirmed primary-console editing for Projects,
+  Knowledge, Fleet, Drivers, Customers and Routes through existing services
 - Python service layer
 - PostgreSQL database
 - Docker local environment

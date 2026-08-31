@@ -6,10 +6,13 @@ from fastapi import APIRouter, HTTPException, Query, Request, status
 
 from advancore.api.dependencies import ReadModelUnavailable
 from advancore.api.schemas import (
+    CustomerResponse,
+    DriverResponse,
     DispatchBoardResponse,
     FleetResponse,
     FuelIntelligenceResponse,
     FuelMarketBenchmarkResponse,
+    RouteResponse,
 )
 
 
@@ -36,6 +39,30 @@ def fleet(
             vehicle_type,
             passenger_capacity,
         )
+    except ReadModelUnavailable as exc:
+        raise _unavailable(exc) from exc
+
+
+@router.get("/drivers", response_model=list[DriverResponse])
+def drivers(request: Request) -> list[DriverResponse]:
+    try:
+        return list(request.app.state.read_gateway.list_drivers())
+    except ReadModelUnavailable as exc:
+        raise _unavailable(exc) from exc
+
+
+@router.get("/customers", response_model=list[CustomerResponse])
+def customers(request: Request) -> list[CustomerResponse]:
+    try:
+        return list(request.app.state.read_gateway.list_customers())
+    except ReadModelUnavailable as exc:
+        raise _unavailable(exc) from exc
+
+
+@router.get("/routes", response_model=list[RouteResponse])
+def routes(request: Request) -> list[RouteResponse]:
+    try:
+        return list(request.app.state.read_gateway.list_routes())
     except ReadModelUnavailable as exc:
         raise _unavailable(exc) from exc
 

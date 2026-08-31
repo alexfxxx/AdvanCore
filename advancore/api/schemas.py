@@ -4,7 +4,7 @@ from datetime import date, datetime
 from decimal import Decimal
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field, StrictBool
+from pydantic import BaseModel, ConfigDict, Field, StrictBool, StrictInt, field_validator
 
 from advancore.agent_runner.goal_task import MAX_GOAL_LENGTH
 
@@ -51,6 +51,9 @@ class KnowledgeResponse(BaseModel):
     status: str
     created_at: datetime
     updated_at: datetime
+    approved_at: datetime | None = None
+    approved_by: str | None = None
+    replaces_knowledge_item_id: int | None = None
 
 
 class LegalEntityResponse(BaseModel):
@@ -58,6 +61,34 @@ class LegalEntityResponse(BaseModel):
 
     id: int
     name: str
+    status: str
+
+
+class DriverResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    name: str
+    employee_reference: str | None
+    status: str
+
+
+class CustomerResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    name: str
+    customer_reference: str | None
+    status: str
+
+
+class RouteResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    route_code: str
+    origin: str
+    destination: str
     status: str
 
 
@@ -170,6 +201,106 @@ class FuelMarketBenchmarkResponse(BaseModel):
 
 class StrictRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
+
+
+class ConfirmedRequest(StrictRequest):
+    confirmed: StrictBool
+
+
+class ProjectCreateRequest(ConfirmedRequest):
+    name: str = Field(min_length=1, max_length=200)
+    description: str | None = Field(default=None, max_length=20_000)
+
+
+class ProjectEditRequest(ProjectCreateRequest):
+    pass
+
+
+class KnowledgeDraftRequest(ConfirmedRequest):
+    title: str = Field(min_length=1, max_length=300)
+    content: str = Field(min_length=1, max_length=100_000)
+
+
+class KnowledgeApproveRequest(ConfirmedRequest):
+    expected_updated_at: datetime
+    expected_content_sha256: str = Field(pattern=r"^[a-f0-9]{64}$")
+
+    @field_validator("expected_updated_at")
+    @classmethod
+    def require_aware_timestamp(cls, value: datetime) -> datetime:
+        if value.tzinfo is None or value.utcoffset() is None:
+            raise ValueError("Expected update timestamp must include a timezone.")
+        return value
+
+
+class LegalEntityCreateRequest(ConfirmedRequest):
+    name: str = Field(min_length=1, max_length=160)
+
+
+class VehicleCreateRequest(ConfirmedRequest):
+    registration_number: str = Field(min_length=1, max_length=32)
+    make_model: str | None = Field(default=None, max_length=120)
+
+
+class VehicleStatusRequest(ConfirmedRequest):
+    status: Literal["active", "out_of_service", "retired"]
+
+
+class VehicleDetailsRequest(ConfirmedRequest):
+    registered_owner_id: StrictInt | None = None
+    manufacture_year: StrictInt | None = None
+    passenger_capacity: StrictInt | None = None
+    vehicle_type: Literal["Bus", "lorry", "car"] | None = None
+    propellant: str | None = Field(default=None, max_length=40)
+    scheme: str | None = Field(default=None, max_length=80)
+    chassis_number: str | None = Field(default=None, max_length=80)
+    engine_number: str | None = Field(default=None, max_length=80)
+    original_registration_date: date | None = None
+    lifespan_expiry: date | None = None
+    coe_expiry: date | None = None
+    primary_colour: str | None = Field(default=None, max_length=40)
+    unladen_weight_kg: Decimal | None = None
+    maximum_laden_weight_kg: Decimal | None = None
+    parking_provider: str | None = Field(default=None, max_length=120)
+    parking_location: str | None = Field(default=None, max_length=200)
+    parking_monthly_cost: Decimal | None = None
+    insurance_provider: str | None = Field(default=None, max_length=120)
+    insurance_annual_amount: Decimal | None = None
+    road_tax_amount: Decimal | None = None
+    road_tax_period_months: Literal[6, 12] | None = None
+    finance_company: str | None = Field(default=None, max_length=120)
+    original_loan_amount: Decimal | None = None
+    monthly_instalment: Decimal | None = None
+    loan_start_date: date | None = None
+    loan_term_months: StrictInt | None = None
+
+
+class DriverCreateRequest(ConfirmedRequest):
+    name: str = Field(min_length=1, max_length=120)
+    employee_reference: str | None = Field(default=None, max_length=40)
+
+
+class DriverStatusRequest(ConfirmedRequest):
+    status: Literal["active", "unavailable", "retired"]
+
+
+class CustomerCreateRequest(ConfirmedRequest):
+    name: str = Field(min_length=1, max_length=160)
+    customer_reference: str | None = Field(default=None, max_length=40)
+
+
+class CustomerStatusRequest(ConfirmedRequest):
+    status: Literal["active", "inactive"]
+
+
+class RouteCreateRequest(ConfirmedRequest):
+    route_code: str = Field(min_length=1, max_length=40)
+    origin: str = Field(min_length=1, max_length=160)
+    destination: str = Field(min_length=1, max_length=160)
+
+
+class RouteStatusRequest(ConfirmedRequest):
+    status: Literal["active", "inactive"]
 
 
 class OwnerGoalRequest(StrictRequest):
