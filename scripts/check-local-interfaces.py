@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Bounded loopback health check for both local AdvanCore interfaces."""
+"""Bounded loopback health check for the primary app and temporary admin UI."""
 
 from __future__ import annotations
 
@@ -15,8 +15,8 @@ class InterfaceCheck:
 
 
 INTERFACES = (
-    InterfaceCheck("Decoupled console", "http://127.0.0.1:8000/api/status"),
-    InterfaceCheck("Streamlit transition app", "http://127.0.0.1:8501/_stcore/health"),
+    InterfaceCheck("Primary AdvanCore app", "http://127.0.0.1:8000/api/status"),
+    InterfaceCheck("Temporary admin/editing interface", "http://127.0.0.1:8501/_stcore/health"),
 )
 
 

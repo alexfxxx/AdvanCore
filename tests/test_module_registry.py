@@ -25,6 +25,9 @@ def test_catalog_is_unique_deterministic_and_contains_existing_pages():
     )
     assert len({item.module_id for item in catalog}) == len(catalog)
     assert dict(streamlit_navigation())["transport_operations"] == "Transport Operations"
+    assert get_module("dashboard").frontend_anchor == "workspace"
+    assert get_module("projects").frontend_anchor == "projects-console"
+    assert get_module("knowledge_hub").frontend_anchor == "knowledge-console"
 
 
 def test_catalog_is_immutable_and_unknown_module_fails_closed():

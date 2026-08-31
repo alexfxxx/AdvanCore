@@ -4,7 +4,7 @@
 AdvanCore is the central business intelligence, operations and AI-orchestration platform for the Advan ecosystem. Its long-term operating model is human-governed automation: software agents perform bounded work, the platform records decisions and outcomes, and humans handle approvals, exceptions and material business judgment.
 
 ## Current foundation
-The current repository is a Python/Streamlit platform foundation with a PostgreSQL target database, SQLAlchemy models, Docker support and GitHub version control.
+The current repository is a Python platform with a FastAPI-served HTML/CSS/JavaScript primary interface, a temporary Streamlit admin/editing interface, PostgreSQL operational storage, SQLAlchemy models, Docker support and GitHub version control.
 
 ## Core platform domains
 Foundation modules:

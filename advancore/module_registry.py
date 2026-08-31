@@ -74,16 +74,18 @@ class ModuleDescriptor:
 _CATALOG: tuple[ModuleDescriptor, ...] = (
     ModuleDescriptor(
         "dashboard", "Dashboard", ModuleArea.CORE, ModuleMaturity.FOUNDATION,
-        streamlit_page="Dashboard",
+        streamlit_page="Dashboard", frontend_anchor="workspace",
     ),
     ModuleDescriptor(
         "knowledge_hub", "Knowledge Hub", ModuleArea.CORE,
         ModuleMaturity.REGISTER, streamlit_page="Knowledge Hub",
+        frontend_anchor="knowledge-console",
         api_prefixes=("/api/knowledge",),
     ),
     ModuleDescriptor(
         "projects", "Projects", ModuleArea.CORE, ModuleMaturity.REGISTER,
-        streamlit_page="Projects", api_prefixes=("/api/projects",),
+        streamlit_page="Projects", frontend_anchor="projects-console",
+        api_prefixes=("/api/projects",),
     ),
     ModuleDescriptor(
         "transport_operations", "Transport Operations", ModuleArea.OPERATIONS,
@@ -103,7 +105,7 @@ _CATALOG: tuple[ModuleDescriptor, ...] = (
     ),
     ModuleDescriptor(
         "settings", "Settings", ModuleArea.CORE, ModuleMaturity.FOUNDATION,
-        streamlit_page="Settings",
+        streamlit_page="Settings", frontend_anchor="preferences-console",
     ),
 )
 

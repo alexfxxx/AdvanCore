@@ -1,4 +1,4 @@
-"""FastAPI application factory for the decoupled local AdvanCore console."""
+"""FastAPI application factory for the primary local AdvanCore app."""
 
 import secrets
 from contextlib import asynccontextmanager
@@ -63,7 +63,7 @@ def create_app(
         title="AdvanCore Local API",
         version="0.1.0",
         description=(
-            "Loopback-only presentation API. It does not grant controller, "
+            "Primary loopback-only presentation API. It does not grant controller, "
             "worker, database-write or publication authority."
         ),
         lifespan=lifespan,

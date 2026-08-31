@@ -11,6 +11,8 @@ from advancore.agent_runner.goal_task import MAX_GOAL_LENGTH
 
 class SystemStatusResponse(BaseModel):
     service: str = "AdvanCore local API"
+    primary_surface: Literal["fastapi_console"] = "fastapi_console"
+    streamlit_role: Literal["temporary_admin_editing"] = "temporary_admin_editing"
     state: str
     database_configured: bool
     database_reachable: bool
