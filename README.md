@@ -32,7 +32,8 @@ Future modules may include:
 
 ## Core Architecture
 
-- Streamlit user interface
+- FastAPI-served HTML/CSS/JavaScript primary interface
+- Temporary Streamlit admin/editing interface while remaining forms transfer
 - Python service layer
 - PostgreSQL database
 - Docker local environment
@@ -64,15 +65,16 @@ not reuse the example database password in production.
    .venv/bin/alembic upgrade head
    ```
 
-4. Start both local AdvanCore interfaces:
+4. Start the primary AdvanCore app and temporary admin/editing interface:
 
    ```bash
    ./scripts/start-advancore.sh
    ```
 
-Open `http://127.0.0.1:8000` for the decoupled console or
-`http://127.0.0.1:8501` for the Streamlit transition app. The Settings page shows whether
-the database is configured and reachable without displaying its connection
+Open `http://127.0.0.1:8000` as the main AdvanCore app. Use
+`http://127.0.0.1:8501` only for temporary admin/editing workflows that have not
+yet transferred to the primary interface. The Settings page shows whether the
+database is configured and reachable without displaying its connection
 details. When finished, stop the local database with
 `./scripts/start-advancore.sh --stop`.
 

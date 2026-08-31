@@ -7,10 +7,10 @@
       name="description"
       content="AdvanCore local governed operations console"
     />
-    <title>AdvanCore Local Console</title>
-    <link rel="stylesheet" href="/assets/styles.css?v=task-168-1" />
-    <script src="/assets/app.js?v=task-168-1" defer></script>
-    <script src="/assets/audio.js?v=task-168-1" defer></script>
+    <title>AdvanCore Main App</title>
+    <link rel="stylesheet" href="/assets/styles.css?v=task-169-1" />
+    <script src="/assets/app.js?v=task-169-1" defer></script>
+    <script src="/assets/audio.js?v=task-169-1" defer></script>
   </head>
   <body>
     <div class="ambient ambient-one" aria-hidden="true"></div>
@@ -18,10 +18,10 @@
 
     <header class="shell header-row">
       <div>
-        <p class="eyebrow">LOCAL GOVERNED CONSOLE</p>
+        <p class="eyebrow">PRIMARY LOCAL APP</p>
         <h1>ADVANCORE</h1>
         <p class="subtitle">
-          A decoupled presentation layer. Controller authority remains intact.
+          Your main AdvanCore workspace. Controller authority remains intact.
         </p>
       </div>
       <div class="header-status">
@@ -29,7 +29,7 @@
           <span class="status-dot" aria-hidden="true"></span>
           <span id="connection-label">Checking local API</span>
         </div>
-        <span class="build-label" id="console-build">Build task-168-1</span>
+        <span class="build-label" id="console-build">Build task-169-1</span>
         <span class="build-label" id="motion-state">Checking motion</span>
       </div>
     </header>
@@ -37,6 +37,9 @@
     <nav class="shell console-nav" aria-label="Workspace controls">
       <a href="#workspace">Overview</a>
       <a href="#fleet-console">Fleet</a>
+      <a href="http://127.0.0.1:8501/" target="_blank" rel="noopener noreferrer" title="Open temporary Streamlit forms">
+        Temporary admin/editing
+      </a>
       <button id="edit-workspace" class="nav-button" type="button" aria-expanded="false">
         Edit layout
       </button>
@@ -66,7 +69,7 @@
     </aside>
 
     <main class="shell layout-grid" id="workspace">
-      <section class="panel workspace-segment command-panel" data-segment-id="controller" aria-labelledby="owner-goal-title">
+      <section class="panel workspace-segment command-panel" data-segment-id="controller" id="controller-console" aria-labelledby="owner-goal-title">
         <div class="panel-heading">
           <div>
             <p class="section-code">01 / OWNER INTAKE</p>
@@ -192,7 +195,7 @@
         </div>
       </section>
 
-      <section class="panel workspace-segment data-panel" data-segment-id="projects" aria-labelledby="projects-title">
+      <section class="panel workspace-segment data-panel" data-segment-id="projects" id="projects-console" aria-labelledby="projects-title">
         <div class="panel-heading">
           <div>
             <p class="section-code">04 / READ ONLY</p>
@@ -206,7 +209,7 @@
         <button id="toggle-projects" class="text-action" type="button" hidden>View all projects</button>
       </section>
 
-      <section class="panel workspace-segment data-panel knowledge-panel" data-segment-id="knowledge" aria-labelledby="knowledge-title">
+      <section class="panel workspace-segment data-panel knowledge-panel" data-segment-id="knowledge" id="knowledge-console" aria-labelledby="knowledge-title">
         <div class="panel-heading">
           <div>
             <p class="section-code">05 / READ ONLY</p>
@@ -392,12 +395,15 @@
       </div>
       <span id="fleet-drawer-status" class="record-status"></span>
       <div id="fleet-drawer-details" class="detail-grid drawer-detail-grid"></div>
-      <p class="micro-copy left-copy">Read-only overview. Edit operational values through the governed Streamlit Fleet form.</p>
+      <p class="micro-copy left-copy">
+        Read-only overview. Until Fleet editing transfers here, use the
+        <a class="source-link" href="http://127.0.0.1:8501/" target="_blank" rel="noopener noreferrer">temporary admin/editing interface</a>.
+      </p>
     </aside>
 
     <footer class="shell footer-row">
-      <span>Loopback: 127.0.0.1:8000 · build task-168-1</span>
-      <span>Streamlit remains available during transition</span>
+      <span>Primary app: 127.0.0.1:8000 · build task-169-1</span>
+      <span>Temporary admin/editing only: 127.0.0.1:8501</span>
     </footer>
   </body>
 </html>

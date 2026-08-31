@@ -145,6 +145,8 @@ def test_start_stops_verified_legacy_and_runs_canonical_service(tmp_path):
     assert ".venv/bin/alembic upgrade head" in calls
     assert ".venv/bin/streamlit run" in calls
     assert "--server.address 127.0.0.1" in calls
+    assert "PRIMARY APP: http://127.0.0.1:8000" in result.stdout
+    assert "Temporary admin/editing interface: http://127.0.0.1:8501" in result.stdout
 
 
 def test_fresh_start_creates_shared_volume_before_compose(tmp_path):

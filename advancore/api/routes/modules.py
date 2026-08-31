@@ -14,10 +14,10 @@ def list_modules() -> list[ModuleResponse]:
     responses: list[ModuleResponse] = []
     for module in module_catalog():
         surfaces = []
-        if module.streamlit_page is not None:
-            surfaces.append("streamlit")
         if module.frontend_anchor is not None:
-            surfaces.append("decoupled_console")
+            surfaces.append("primary_console")
+        if module.streamlit_page is not None:
+            surfaces.append("temporary_streamlit_admin")
         responses.append(
             ModuleResponse(
                 module_id=module.module_id,

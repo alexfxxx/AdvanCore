@@ -1,10 +1,12 @@
-# Decoupled Local Console
+# Primary Local Console
 
 ## Status
 
 TASK-126 provides the additive presentation scaffold. TASK-127 adds a narrow
-controller-mediated launch and progress bridge. The Streamlit application
-remains available while the decoupled console is evaluated.
+controller-mediated launch and progress bridge. TASK-168 provides the compact
+customizable workspace. TASK-169 designates this FastAPI-served interface as
+the primary AdvanCore app. Streamlit remains only as temporary admin/editing
+support while its remaining forms transfer.
 
 ## Boundary
 
@@ -112,8 +114,8 @@ starts both local interfaces:
 ./scripts/start-advancore.sh
 ```
 
-Open `http://127.0.0.1:8000` for the decoupled console or
-`http://127.0.0.1:8501` for the Streamlit transition app. Run
+Open `http://127.0.0.1:8000` as the primary AdvanCore app. Use
+`http://127.0.0.1:8501` only for temporary admin/editing workflows. Run
 `./scripts/check-local-interfaces.py` for a bounded readiness check. Binding to
 `0.0.0.0` remains outside scope.
 

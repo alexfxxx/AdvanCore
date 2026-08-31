@@ -232,8 +232,8 @@ if ! "$PROJECT_ROOT/.venv/bin/python" "$PROJECT_ROOT/scripts/check-local-interfa
 fi
 
 echo "AdvanCore is ready. Keep this window open while using the apps."
-echo "Decoupled console: http://127.0.0.1:8000"
-echo "Streamlit transition app: http://127.0.0.1:8501"
+echo "PRIMARY APP: http://127.0.0.1:8000"
+echo "Temporary admin/editing interface: http://127.0.0.1:8501"
 while kill -0 "$API_PID" >/dev/null 2>&1 && kill -0 "$STREAMLIT_PID" >/dev/null 2>&1; do
     sleep 1
 done

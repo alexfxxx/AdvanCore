@@ -98,6 +98,8 @@ def test_fastapi_serves_static_console_and_bounded_status(tmp_path):
     assert response.status_code == 200
     assert response.json() == {
         "service": "AdvanCore local API",
+        "primary_surface": "fastapi_console",
+        "streamlit_role": "temporary_admin_editing",
         "state": "ready",
         "database_configured": True,
         "database_reachable": True,

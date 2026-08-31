@@ -35,8 +35,13 @@ def test_read_only_module_catalog_endpoint_requires_no_database(tmp_path: Path):
     ]
     transport = next(item for item in payload if item["module_id"] == "transport_operations")
     assert transport["maturity"] == "transitional"
-    assert transport["presentation_surfaces"] == ["streamlit", "decoupled_console"]
+    assert transport["presentation_surfaces"] == [
+        "primary_console",
+        "temporary_streamlit_admin",
+    ]
     assert "/api/fleet" in transport["api_prefixes"]
+    activity = next(item for item in payload if item["module_id"] == "activity_log")
+    assert activity["presentation_surfaces"] == ["temporary_streamlit_admin"]
 
 
 def test_module_endpoint_is_get_only(tmp_path: Path):
