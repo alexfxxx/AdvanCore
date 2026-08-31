@@ -26,10 +26,13 @@ def test_cutover_inventory_is_bounded_and_keeps_streamlit_until_transfer():
         ROOT / "docs" / "architecture" / "PRIMARY_CONSOLE_CUTOVER.md"
     ).read_text(encoding="utf-8")
 
-    for workflow in (
-        "Projects: create, edit and archive",
-        "Knowledge: create draft, edit, approve, archive and forward replacement",
-        "Fleet administration: create vehicle, status change and detail/finance update",
+    for transferred in (
+        "TASK-170 through TASK-174 completed the shared safe-editing boundary",
+        "Projects, Knowledge, Fleet, Driver, Customer and Route transfers",
+        "No schema or business field was added",
+    ):
+        assert transferred in cutover
+    for remaining_workflow in (
         "Trips and assignments: plan trip, update trip status, assign and release",
         "Settings/recovery: backup inventory, create/verify backup",
         "Dashboard AI readiness: the start-of-day Kimi, Gemini and Codex",
@@ -39,7 +42,7 @@ def test_cutover_inventory_is_bounded_and_keeps_streamlit_until_transfer():
         "AI Center governance self-check: the offline multi-worker rehearsal",
         "AI Center Gemini readiness: candidate activation state",
     ):
-        assert workflow in cutover
+        assert remaining_workflow in cutover
     for transfer in (
         "Start-of-day authentication readiness, selected-worker status",
         "AI attention inbox, offline governance self-check and Gemini readiness",

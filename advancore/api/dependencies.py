@@ -13,6 +13,8 @@ from typing import Protocol, Sequence
 from advancore.agent_runner.goal_task import generate_goal_task
 from advancore.agent_runner.worker import DryRunWorkerAdapter
 from advancore.api.schemas import (
+    CustomerResponse,
+    DriverResponse,
     KnowledgeResponse,
     DispatchBoardResponse,
     DispatchResourceResponse,
@@ -25,6 +27,7 @@ from advancore.api.schemas import (
     LegalEntityResponse,
     OwnerGoalPreviewResponse,
     ProjectResponse,
+    RouteResponse,
     SystemStatusResponse,
     VehicleResponse,
 )
@@ -40,6 +43,12 @@ class ReadModelGateway(Protocol):
     def list_projects(self) -> Sequence[ProjectResponse]: ...
 
     def list_knowledge(self) -> Sequence[KnowledgeResponse]: ...
+
+    def list_drivers(self) -> Sequence[DriverResponse]: ...
+
+    def list_customers(self) -> Sequence[CustomerResponse]: ...
+
+    def list_routes(self) -> Sequence[RouteResponse]: ...
 
     def fleet(
         self,
@@ -125,6 +134,48 @@ class DatabaseReadModelGateway:
             raise ReadModelUnavailable(
                 "Knowledge is temporarily unavailable."
             ) from exc
+        finally:
+            session.rollback()
+            session.close()
+
+    def list_drivers(self) -> Sequence[DriverResponse]:
+        from advancore.repositories import DriverRepository
+        from advancore.services.driver_service import DriverService
+
+        session = self._open_session()
+        try:
+            items = DriverService(DriverRepository(session)).list_drivers()
+            return [DriverResponse.model_validate(item) for item in items]
+        except Exception as exc:
+            raise ReadModelUnavailable("Drivers are temporarily unavailable.") from exc
+        finally:
+            session.rollback()
+            session.close()
+
+    def list_customers(self) -> Sequence[CustomerResponse]:
+        from advancore.repositories import CustomerRepository
+        from advancore.services.customer_service import CustomerService
+
+        session = self._open_session()
+        try:
+            items = CustomerService(CustomerRepository(session)).list_customers()
+            return [CustomerResponse.model_validate(item) for item in items]
+        except Exception as exc:
+            raise ReadModelUnavailable("Customers are temporarily unavailable.") from exc
+        finally:
+            session.rollback()
+            session.close()
+
+    def list_routes(self) -> Sequence[RouteResponse]:
+        from advancore.repositories import RouteRepository
+        from advancore.services.route_service import RouteService
+
+        session = self._open_session()
+        try:
+            items = RouteService(RouteRepository(session)).list_routes()
+            return [RouteResponse.model_validate(item) for item in items]
+        except Exception as exc:
+            raise ReadModelUnavailable("Routes are temporarily unavailable.") from exc
         finally:
             session.rollback()
             session.close()

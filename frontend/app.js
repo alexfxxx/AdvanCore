@@ -1203,3 +1203,12 @@ document.addEventListener("DOMContentLoaded", () => {
     loadFuel(),
   ]);
 });
+
+if (typeof window !== "undefined") {
+  window.AdvanCoreConsole = Object.freeze({
+    refreshProjects: loadProjects,
+    refreshKnowledge: loadKnowledge,
+    refreshFleet: () => loadFleet({ initialiseFilters: true }),
+    refreshDispatch: loadDispatch,
+  });
+}

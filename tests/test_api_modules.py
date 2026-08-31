@@ -40,6 +40,9 @@ def test_read_only_module_catalog_endpoint_requires_no_database(tmp_path: Path):
         "temporary_streamlit_admin",
     ]
     assert "/api/fleet" in transport["api_prefixes"]
+    assert "/api/drivers" in transport["api_prefixes"]
+    assert "/api/customers" in transport["api_prefixes"]
+    assert "/api/routes" in transport["api_prefixes"]
     activity = next(item for item in payload if item["module_id"] == "activity_log")
     assert activity["presentation_surfaces"] == ["temporary_streamlit_admin"]
 
