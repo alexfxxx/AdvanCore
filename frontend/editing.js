@@ -39,6 +39,17 @@
     return String(value).replaceAll("_", " ");
   };
 
+  const todayValue = () => {
+    const now = new Date();
+    return [
+      now.getFullYear(),
+      String(now.getMonth() + 1).padStart(2, "0"),
+      String(now.getDate()).padStart(2, "0"),
+    ].join("-");
+  };
+
+  const indexedById = (records) => new Map(records.map((record) => [record.id, record]));
+
   const sha256Hex = async (value) => {
     const bytes = new TextEncoder().encode(value);
     const digest = await crypto.subtle.digest("SHA-256", bytes);
@@ -166,6 +177,7 @@
     if (!api) return;
     await Promise.allSettled([
       api.refreshProjects(), api.refreshKnowledge(), api.refreshFleet(), api.refreshDispatch(),
+      api.refreshFuel(),
     ]);
   };
 
@@ -485,6 +497,189 @@
     content.replaceChildren(section);
   }
 
+  async function renderTrips() {
+    const [trips, routes] = await Promise.all([readJson("/api/trips"), readJson("/api/routes")]);
+    const routeById = indexedById(routes);
+    const section = formSection("Trips", "Trips are dated service records. Recurring customer schedules are not inferred here.");
+    const form = element("form", { className: "manager-form" }, [
+      field("Trip reference", "trip_reference", { required: true, maxlength: "40" }),
+      field("Route", "route_id", { required: true, options: [["", "Select route"], ...routes.map((route) => [String(route.id), `${route.route_code}: ${route.origin} → ${route.destination}`])] }),
+      field("Service date", "service_date", { required: true, type: "date", value: todayValue() }),
+    ]);
+    const create = button("Review new trip", "primary-button");
+    form.append(element("div", { className: "manager-form-actions" }, [create]));
+    form.addEventListener("submit", (event) => event.preventDefault());
+    create.addEventListener("click", () => {
+      if (!form.reportValidity()) return;
+      const payload = toPayload(form, ["route_id"]);
+      const route = routeById.get(payload.route_id);
+      perform({
+        message: "Create this dated trip?",
+        summary: [["Trip reference", payload.trip_reference], ["Route", route ? route.route_code : payload.route_id], ["Service date", payload.service_date]],
+        url: "/api/trips", payload, success: "Trip created.",
+      });
+    });
+    section.append(form);
+    const list = element("div", { className: "manager-record-list" });
+    trips.forEach((record) => {
+      const route = routeById.get(record.route_id);
+      const select = element("select", { "aria-label": `Status for ${record.trip_reference}` });
+      [["planned", "Planned"], ["completed", "Completed"], ["cancelled", "Cancelled"]].forEach(([value, text]) => select.append(element("option", { value, text })));
+      select.value = record.status;
+      const update = button("Review status");
+      update.addEventListener("click", () => perform({
+        message: "Change this trip status?",
+        summary: [["Trip", record.trip_reference], ["Service date", record.service_date], ["New status", select.value]],
+        url: `/api/trips/${record.id}/status`, payload: { status: select.value }, success: "Trip status updated.",
+      }));
+      const card = recordCard(record.trip_reference, record.status, [select, update]);
+      card.insertBefore(element("p", { text: `${record.service_date} · ${route ? `${route.route_code}: ${route.origin} → ${route.destination}` : `Route #${record.route_id}`}` }), card.lastChild);
+      list.append(card);
+    });
+    section.append(trips.length ? list : empty("No trips have been recorded."));
+    content.replaceChildren(section);
+  }
+
+  async function renderAssignments() {
+    const [assignments, trips, fleet, drivers] = await Promise.all([
+      readJson("/api/trip-assignments"), readJson("/api/trips"), readJson("/api/fleet"), readJson("/api/drivers"),
+    ]);
+    const tripById = indexedById(trips);
+    const vehicleById = indexedById(fleet.vehicles);
+    const driverById = indexedById(drivers);
+    const assignedTripIds = new Set(assignments.map((item) => item.trip_id));
+    const assignableTrips = trips.filter((item) => item.status === "planned" && !assignedTripIds.has(item.id));
+    const activeVehicles = fleet.vehicles.filter((item) => item.status === "active");
+    const activeDrivers = drivers.filter((item) => item.status === "active");
+    const section = formSection("Assignments", "One existing planned trip can be assigned once. Released records remain part of history.");
+    const form = element("form", { className: "manager-form" }, [
+      field("Planned trip", "trip_id", { required: true, options: [["", "Select trip"], ...assignableTrips.map((item) => [String(item.id), `${item.trip_reference} · ${item.service_date}`])] }),
+      field("Active vehicle", "vehicle_id", { required: true, options: [["", "Select vehicle"], ...activeVehicles.map((item) => [String(item.id), item.registration_number])] }),
+      field("Active driver", "driver_id", { required: true, options: [["", "Select driver"], ...activeDrivers.map((item) => [String(item.id), item.name])] }),
+    ]);
+    const create = button("Review assignment", "primary-button");
+    form.append(element("div", { className: "manager-form-actions" }, [create]));
+    form.addEventListener("submit", (event) => event.preventDefault());
+    create.addEventListener("click", () => {
+      if (!form.reportValidity()) return;
+      const payload = toPayload(form, ["trip_id", "vehicle_id", "driver_id"]);
+      perform({
+        message: "Create this trip assignment?",
+        summary: [["Trip", tripById.get(payload.trip_id)?.trip_reference], ["Vehicle", vehicleById.get(payload.vehicle_id)?.registration_number], ["Driver", driverById.get(payload.driver_id)?.name]],
+        url: "/api/trip-assignments", payload, success: "Trip assignment created.",
+      });
+    });
+    section.append(form);
+    const list = element("div", { className: "manager-record-list" });
+    assignments.forEach((record) => {
+      const trip = tripById.get(record.trip_id);
+      const vehicle = vehicleById.get(record.vehicle_id);
+      const driver = driverById.get(record.driver_id);
+      const actions = [];
+      if (record.status === "assigned") {
+        const release = button("Review release", "warning-button");
+        release.addEventListener("click", () => perform({
+          message: "Release this assignment?",
+          summary: [["Trip", trip?.trip_reference], ["Vehicle", vehicle?.registration_number], ["Driver", driver?.name]],
+          url: `/api/trip-assignments/${record.id}/release`, payload: {}, success: "Trip assignment released.",
+        }));
+        actions.push(release);
+      }
+      const card = recordCard(trip?.trip_reference || `Trip #${record.trip_id}`, record.status, actions);
+      card.insertBefore(element("p", { text: `${vehicle?.registration_number || `Vehicle #${record.vehicle_id}`} · ${driver?.name || `Driver #${record.driver_id}`}` }), card.lastChild);
+      list.append(card);
+    });
+    section.append(assignments.length ? list : empty("No trip assignments have been recorded."));
+    content.replaceChildren(section);
+  }
+
+  async function renderFuelEntries() {
+    const [entries, fleet] = await Promise.all([readJson("/api/fuel-entries"), readJson("/api/fleet")]);
+    const vehicleById = indexedById(fleet.vehicles);
+    const section = formSection("Fuel entries", "Fuel facts are append-only. Saved entries cannot be edited or deleted here.");
+    const form = element("form", { className: "manager-form" }, [
+      field("Vehicle", "vehicle_id", { required: true, options: [["", "Select vehicle"], ...fleet.vehicles.map((item) => [String(item.id), item.registration_number])] }),
+      field("Recorded date", "recorded_on", { required: true, type: "date", value: todayValue() }),
+      field("Litres", "litres", { required: true, type: "number", min: "0.01", step: "0.01" }),
+      field("Total cost (optional)", "total_cost", { type: "number", min: "0", step: "0.01" }),
+      field("Odometer km (optional)", "odometer_km", { type: "number", min: "0", step: "0.1" }),
+    ]);
+    const create = button("Review fuel entry", "primary-button");
+    form.append(element("div", { className: "manager-form-actions" }, [create]));
+    form.addEventListener("submit", (event) => event.preventDefault());
+    create.addEventListener("click", () => {
+      if (!form.reportValidity()) return;
+      const payload = toPayload(form, ["vehicle_id"]);
+      perform({
+        message: "Record this immutable fuel entry?",
+        summary: [["Vehicle", vehicleById.get(payload.vehicle_id)?.registration_number], ["Date", payload.recorded_on], ["Litres", payload.litres], ["Total cost", payload.total_cost], ["Odometer km", payload.odometer_km]],
+        url: "/api/fuel-entries", payload, success: "Fuel entry recorded.",
+      });
+    });
+    section.append(form);
+    const list = element("div", { className: "manager-record-list" });
+    entries.forEach((record) => {
+      const vehicle = vehicleById.get(record.vehicle_id);
+      const card = recordCard(vehicle?.registration_number || `Vehicle #${record.vehicle_id}`, record.recorded_on);
+      card.insertBefore(element("p", { text: `${record.litres} L · Cost ${displayValue(record.total_cost)} · Odometer ${displayValue(record.odometer_km)}` }), card.lastChild);
+      list.append(card);
+    });
+    section.append(entries.length ? list : empty("No fuel entries have been recorded."));
+    content.replaceChildren(section);
+  }
+
+  async function renderFinance() {
+    const [entries, trips, customers] = await Promise.all([readJson("/api/financial-entries"), readJson("/api/trips"), readJson("/api/customers")]);
+    const tripById = indexedById(trips);
+    const customerById = indexedById(customers);
+    const section = formSection("Finance", "Financial entries are append-only facts. This screen does not infer accounting or GST treatment.");
+    const form = element("form", { className: "manager-form" }, [
+      field("Entry date", "entry_date", { required: true, type: "date", value: todayValue() }),
+      field("Entry type", "entry_type", { required: true, options: [["income", "Income"], ["expense", "Expense"]] }),
+      field("Amount", "amount", { required: true, type: "number", min: "0.01", step: "0.01" }),
+      field("Currency", "currency_code", { required: true, maxlength: "3", value: "SGD" }),
+      field("Description (optional)", "description", { maxlength: "200", wide: true }),
+      field("Trip (optional)", "trip_id", { options: [["", "Not linked"], ...trips.map((item) => [String(item.id), `${item.trip_reference} · ${item.service_date}`])] }),
+      field("Customer (optional)", "customer_id", { options: [["", "Not linked"], ...customers.map((item) => [String(item.id), item.name])] }),
+    ]);
+    const create = button("Review financial entry", "primary-button");
+    form.append(element("div", { className: "manager-form-actions" }, [create]));
+    form.addEventListener("submit", (event) => event.preventDefault());
+    create.addEventListener("click", () => {
+      if (!form.reportValidity()) return;
+      const payload = toPayload(form, ["trip_id", "customer_id"]);
+      perform({
+        message: "Record this immutable financial entry?",
+        summary: [["Date", payload.entry_date], ["Type", payload.entry_type], ["Amount", `${payload.currency_code} ${payload.amount}`], ["Description", payload.description], ["Trip", tripById.get(payload.trip_id)?.trip_reference], ["Customer", customerById.get(payload.customer_id)?.name]],
+        url: "/api/financial-entries", payload, success: "Financial entry recorded.",
+      });
+    });
+    section.append(form);
+    const list = element("div", { className: "manager-record-list" });
+    entries.forEach((record) => {
+      const links = [tripById.get(record.trip_id)?.trip_reference, customerById.get(record.customer_id)?.name].filter(Boolean).join(" · ");
+      const card = recordCard(`${record.currency_code} ${record.amount}`, record.entry_type);
+      card.insertBefore(element("p", { text: `${record.entry_date} · ${displayValue(record.description)}${links ? ` · ${links}` : ""}` }), card.lastChild);
+      list.append(card);
+    });
+    section.append(entries.length ? list : empty("No financial entries have been recorded."));
+    content.replaceChildren(section);
+  }
+
+  async function renderActivity() {
+    const records = await readJson("/api/activity-log");
+    const section = formSection("Activity Log", "Read-only history produced by approved application services.");
+    const list = element("div", { className: "manager-record-list" });
+    records.forEach((record) => {
+      const entity = [displayValue(record.entity_type), displayValue(record.entity_id)].join(" #");
+      const card = recordCard(displayValue(record.action), record.created_at);
+      card.insertBefore(element("p", { text: `${entity}${record.details ? ` · ${record.details}` : ""}` }), card.lastChild);
+      list.append(card);
+    });
+    section.append(records.length ? list : empty("No activity has been recorded."));
+    content.replaceChildren(section);
+  }
+
   async function renderActiveTab() {
     content.replaceChildren(element("p", { className: "manager-loading", text: "Loading local records…" }));
     setStatus("");
@@ -493,6 +688,11 @@
       else if (activeTab === "knowledge") await renderKnowledge();
       else if (activeTab === "fleet") await renderFleet();
       else if (activeTab === "routes") await renderRoutes();
+      else if (activeTab === "trips") await renderTrips();
+      else if (activeTab === "assignments") await renderAssignments();
+      else if (activeTab === "fuel-entries") await renderFuelEntries();
+      else if (activeTab === "finance") await renderFinance();
+      else if (activeTab === "activity") await renderActivity();
       else await renderRegister(activeTab);
     } catch (error) {
       content.replaceChildren(empty("This section could not be loaded."));

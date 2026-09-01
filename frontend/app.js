@@ -1210,5 +1210,6 @@ if (typeof window !== "undefined") {
     refreshKnowledge: loadKnowledge,
     refreshFleet: () => loadFleet({ initialiseFilters: true }),
     refreshDispatch: loadDispatch,
+    refreshFuel: loadFuel,
   });
 }

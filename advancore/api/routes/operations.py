@@ -6,13 +6,18 @@ from fastapi import APIRouter, HTTPException, Query, Request, status
 
 from advancore.api.dependencies import ReadModelUnavailable
 from advancore.api.schemas import (
+    ActivityLogResponse,
     CustomerResponse,
     DriverResponse,
     DispatchBoardResponse,
+    FinancialEntryResponse,
     FleetResponse,
+    FuelEntryResponse,
     FuelIntelligenceResponse,
     FuelMarketBenchmarkResponse,
     RouteResponse,
+    TripAssignmentResponse,
+    TripResponse,
 )
 
 
@@ -63,6 +68,46 @@ def customers(request: Request) -> list[CustomerResponse]:
 def routes(request: Request) -> list[RouteResponse]:
     try:
         return list(request.app.state.read_gateway.list_routes())
+    except ReadModelUnavailable as exc:
+        raise _unavailable(exc) from exc
+
+
+@router.get("/trips", response_model=list[TripResponse])
+def trips(request: Request) -> list[TripResponse]:
+    try:
+        return list(request.app.state.read_gateway.list_trips())
+    except ReadModelUnavailable as exc:
+        raise _unavailable(exc) from exc
+
+
+@router.get("/trip-assignments", response_model=list[TripAssignmentResponse])
+def trip_assignments(request: Request) -> list[TripAssignmentResponse]:
+    try:
+        return list(request.app.state.read_gateway.list_trip_assignments())
+    except ReadModelUnavailable as exc:
+        raise _unavailable(exc) from exc
+
+
+@router.get("/fuel-entries", response_model=list[FuelEntryResponse])
+def fuel_entries(request: Request) -> list[FuelEntryResponse]:
+    try:
+        return list(request.app.state.read_gateway.list_fuel_entries())
+    except ReadModelUnavailable as exc:
+        raise _unavailable(exc) from exc
+
+
+@router.get("/financial-entries", response_model=list[FinancialEntryResponse])
+def financial_entries(request: Request) -> list[FinancialEntryResponse]:
+    try:
+        return list(request.app.state.read_gateway.list_financial_entries())
+    except ReadModelUnavailable as exc:
+        raise _unavailable(exc) from exc
+
+
+@router.get("/activity-log", response_model=list[ActivityLogResponse])
+def activity_log(request: Request) -> list[ActivityLogResponse]:
+    try:
+        return list(request.app.state.read_gateway.list_activities())
     except ReadModelUnavailable as exc:
         raise _unavailable(exc) from exc
 

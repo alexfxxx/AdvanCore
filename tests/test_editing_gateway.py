@@ -1,5 +1,6 @@
 from contextlib import contextmanager
-from datetime import timezone
+from datetime import date, timezone
+from decimal import Decimal
 from hashlib import sha256
 
 import pytest
@@ -73,6 +74,20 @@ def test_gateway_reuses_services_and_activity_log_without_live_database():
     driver = gateway.create_driver("Test Driver", "DR-170")
     customer = gateway.create_customer("Test Customer", "CU-170")
     route = gateway.create_route("RT-170", "Origin", "Destination")
+    trip = gateway.create_trip("TRIP-175", route.id, date(2026, 9, 2))
+    assignment = gateway.create_trip_assignment(trip.id, vehicle.id, driver.id)
+    fuel_entry = gateway.create_fuel_entry(
+        vehicle.id, date(2026, 9, 2), "45.25", "120.00", "12345.6"
+    )
+    financial_entry = gateway.create_financial_entry(
+        date(2026, 9, 2),
+        "expense",
+        "120.00",
+        "sgd",
+        "Test fuel fact",
+        trip.id,
+        customer.id,
+    )
 
     assert replacement.status == "draft"
     assert replacement.replaces_knowledge_item_id == approved.id
@@ -81,6 +96,10 @@ def test_gateway_reuses_services_and_activity_log_without_live_database():
     assert gateway.set_driver_status(driver.id, "unavailable").status == "unavailable"
     assert gateway.set_customer_status(customer.id, "inactive").status == "inactive"
     assert gateway.set_route_status(route.id, "inactive").status == "inactive"
+    assert gateway.set_trip_status(trip.id, "completed").status == "completed"
+    assert gateway.release_trip_assignment(assignment.id).status == "released"
+    assert fuel_entry.litres == Decimal("45.25")
+    assert financial_entry.currency_code == "SGD"
 
     with factory() as session:
         actions = [item.action for item in session.scalars(select(ActivityLog)).all()]

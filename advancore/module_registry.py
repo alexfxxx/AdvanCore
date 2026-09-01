@@ -93,7 +93,8 @@ _CATALOG: tuple[ModuleDescriptor, ...] = (
         frontend_anchor="fleet-console",
         api_prefixes=(
             "/api/fleet", "/api/drivers", "/api/customers", "/api/routes",
-            "/api/dispatch", "/api/fuel",
+            "/api/trips", "/api/trip-assignments", "/api/dispatch",
+            "/api/fuel", "/api/fuel-entries", "/api/financial-entries",
         ),
     ),
     ModuleDescriptor(
@@ -105,6 +106,8 @@ _CATALOG: tuple[ModuleDescriptor, ...] = (
     ModuleDescriptor(
         "activity_log", "Activity Log", ModuleArea.GOVERNANCE,
         ModuleMaturity.REGISTER, streamlit_page="Activity Log",
+        frontend_anchor="record-manager",
+        api_prefixes=("/api/activity-log",),
     ),
     ModuleDescriptor(
         "settings", "Settings", ModuleArea.CORE, ModuleMaturity.FOUNDATION,
