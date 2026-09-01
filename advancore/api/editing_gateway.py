@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 from contextlib import contextmanager
+from datetime import date
 from datetime import datetime, timezone
+from decimal import Decimal
 from hashlib import sha256
 from secrets import compare_digest
 from typing import Iterator, Protocol
@@ -11,10 +13,14 @@ from typing import Iterator, Protocol
 from advancore.api.schemas import (
     CustomerResponse,
     DriverResponse,
+    FinancialEntryResponse,
+    FuelEntryResponse,
     KnowledgeResponse,
     LegalEntityResponse,
     ProjectResponse,
     RouteResponse,
+    TripAssignmentResponse,
+    TripResponse,
     VehicleDetailsRequest,
     VehicleResponse,
 )
@@ -93,6 +99,38 @@ class EditingGateway(Protocol):
     ) -> RouteResponse: ...
 
     def set_route_status(self, identifier: int, value: str) -> RouteResponse: ...
+
+    def create_trip(
+        self, trip_reference: str, route_id: int, service_date: date
+    ) -> TripResponse: ...
+
+    def set_trip_status(self, identifier: int, value: str) -> TripResponse: ...
+
+    def create_trip_assignment(
+        self, trip_id: int, vehicle_id: int, driver_id: int
+    ) -> TripAssignmentResponse: ...
+
+    def release_trip_assignment(self, identifier: int) -> TripAssignmentResponse: ...
+
+    def create_fuel_entry(
+        self,
+        vehicle_id: int,
+        recorded_on: date,
+        litres: Decimal,
+        total_cost: Decimal | None,
+        odometer_km: Decimal | None,
+    ) -> FuelEntryResponse: ...
+
+    def create_financial_entry(
+        self,
+        entry_date: date,
+        entry_type: str,
+        amount: Decimal,
+        currency_code: str,
+        description: str | None,
+        trip_id: int | None,
+        customer_id: int | None,
+    ) -> FinancialEntryResponse: ...
 
 
 class DatabaseEditingGateway:
@@ -492,3 +530,139 @@ class DatabaseEditingGateway:
             raise EditingValidationError(str(exc)) from exc
         except RouteNotFoundError as exc:
             raise EditingNotFoundError(str(exc)) from exc
+
+    def create_trip(
+        self, trip_reference: str, route_id: int, service_date: date
+    ) -> TripResponse:
+        from advancore.repositories import TripRepository
+        from advancore.services.trip_service import (
+            DuplicateTripError,
+            TripService,
+            TripValidationError,
+        )
+
+        try:
+            with self._session() as session:
+                item = TripService(TripRepository(session)).create_trip(
+                    trip_reference, route_id, service_date
+                )
+                return TripResponse.model_validate(item)
+        except TripValidationError as exc:
+            raise EditingValidationError(str(exc)) from exc
+        except DuplicateTripError as exc:
+            raise EditingConflictError(str(exc)) from exc
+
+    def set_trip_status(self, identifier: int, value: str) -> TripResponse:
+        from advancore.repositories import TripRepository
+        from advancore.services.trip_service import (
+            TripNotFoundError,
+            TripService,
+            TripValidationError,
+        )
+
+        try:
+            with self._session() as session:
+                item = TripService(TripRepository(session)).set_status(
+                    identifier, value
+                )
+                return TripResponse.model_validate(item)
+        except TripValidationError as exc:
+            raise EditingValidationError(str(exc)) from exc
+        except TripNotFoundError as exc:
+            raise EditingNotFoundError(str(exc)) from exc
+
+    def create_trip_assignment(
+        self, trip_id: int, vehicle_id: int, driver_id: int
+    ) -> TripAssignmentResponse:
+        from advancore.repositories import TripAssignmentRepository
+        from advancore.services.trip_assignment_service import (
+            DuplicateTripAssignmentError,
+            TripAssignmentService,
+            TripAssignmentValidationError,
+        )
+
+        try:
+            with self._session() as session:
+                item = TripAssignmentService(
+                    TripAssignmentRepository(session)
+                ).assign(trip_id, vehicle_id, driver_id)
+                return TripAssignmentResponse.model_validate(item)
+        except TripAssignmentValidationError as exc:
+            raise EditingValidationError(str(exc)) from exc
+        except DuplicateTripAssignmentError as exc:
+            raise EditingConflictError(str(exc)) from exc
+
+    def release_trip_assignment(self, identifier: int) -> TripAssignmentResponse:
+        from advancore.repositories import TripAssignmentRepository
+        from advancore.services.trip_assignment_service import (
+            TripAssignmentNotFoundError,
+            TripAssignmentService,
+            TripAssignmentValidationError,
+        )
+
+        try:
+            with self._session() as session:
+                item = TripAssignmentService(
+                    TripAssignmentRepository(session)
+                ).release(identifier)
+                return TripAssignmentResponse.model_validate(item)
+        except TripAssignmentValidationError as exc:
+            raise EditingConflictError(str(exc)) from exc
+        except TripAssignmentNotFoundError as exc:
+            raise EditingNotFoundError(str(exc)) from exc
+
+    def create_fuel_entry(
+        self,
+        vehicle_id: int,
+        recorded_on: date,
+        litres: Decimal,
+        total_cost: Decimal | None,
+        odometer_km: Decimal | None,
+    ) -> FuelEntryResponse:
+        from advancore.repositories import FuelEntryRepository
+        from advancore.services.fuel_entry_service import (
+            FuelEntryService,
+            FuelEntryValidationError,
+        )
+
+        try:
+            with self._session() as session:
+                item = FuelEntryService(FuelEntryRepository(session)).record(
+                    vehicle_id, recorded_on, litres, total_cost, odometer_km
+                )
+                return FuelEntryResponse.model_validate(item)
+        except FuelEntryValidationError as exc:
+            raise EditingValidationError(str(exc)) from exc
+
+    def create_financial_entry(
+        self,
+        entry_date: date,
+        entry_type: str,
+        amount: Decimal,
+        currency_code: str,
+        description: str | None,
+        trip_id: int | None,
+        customer_id: int | None,
+    ) -> FinancialEntryResponse:
+        from advancore.repositories import FinancialEntryRepository
+        from advancore.services.financial_entry_service import (
+            FinancialEntryService,
+            FinancialEntryValidationError,
+        )
+
+        try:
+            with self._session() as session:
+                item = FinancialEntryService(
+                    FinancialEntryRepository(session)
+                ).record(
+                    entry_date,
+                    entry_type,
+                    amount,
+                    currency_code,
+                    description,
+                    trip_id,
+                    customer_id,
+                )
+                return FinancialEntryResponse.model_validate(item)
+        except FinancialEntryValidationError as exc:
+            raise EditingValidationError(str(exc)) from exc

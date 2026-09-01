@@ -24,17 +24,21 @@ service; it does not mean creating a second database workflow.
   confirmed company/vehicle administration through existing services.
 - Minimal Driver, Customer and Route create/status workflows using only their
   already-approved fields and lifecycle values.
+- Dated Trip create/status and one-record-per-trip Assignment create/release
+  workflows using the existing lifecycle services.
+- Immutable Fuel and Financial entry recording with their existing optional
+  links and no inferred accounting treatment.
+- Read-only Activity Log history without browser mutation authority.
 - Dispatch headline counts and recorded conflicts.
 - Recorded Fuel intelligence and dated gross market benchmark.
 
 ## Temporary Streamlit-only admin/editing inventory
 
-- Activity Log: full entity/action filtering and detail inspection.
+- Activity Log: advanced entity/action filtering and individual detail
+  inspection beyond the primary app's read-only history.
 - Settings/recovery: backup inventory, create/verify backup and disposable
   recovery rehearsal.
 - Transport setup: completed-vehicle CSV preview/import.
-- Trips and assignments: plan trip, update trip status, assign and release.
-- Fuel and finance: record fuel entries and financial entries.
 - Dashboard AI readiness: the start-of-day Kimi, Gemini and Codex
   authentication check, explicit login guidance and owner-triggered refresh.
 - Dashboard AI workforce: most recently selected worker and the retained
@@ -50,17 +54,17 @@ service; it does not mean creating a second database workflow.
 
 ## Recommended transfer order
 
-1. Trips, assignments, fuel and financial entry.
-2. Start-of-day authentication readiness, selected-worker status, automatic
+1. Start-of-day authentication readiness, selected-worker status, automatic
    switch history and routing evidence.
-3. AI attention inbox, offline governance self-check and Gemini readiness.
-4. Activity Log detail filters.
-5. Backup/recovery controls last, retaining their stronger confirmations.
+2. AI attention inbox, offline governance self-check and Gemini readiness.
+3. Activity Log advanced detail filters.
+4. Backup/recovery controls last, retaining their stronger confirmations.
 
-TASK-170 through TASK-174 completed the shared safe-editing boundary and the
-Projects, Knowledge, Fleet, Driver, Customer and Route transfers. Each mutation
-requires loopback origin, a process-local action token, strict confirmation and
-existing service validation. No schema or business field was added.
+TASK-170 through TASK-179 completed the shared safe-editing boundary and the
+Projects, Knowledge, Fleet, Driver, Customer, Route, Trip, Assignment, Fuel and
+Finance transfers plus read-only Activity Log history. Each mutation requires
+loopback origin, a process-local action token, strict confirmation and existing
+service validation. No schema or business field was added.
 
 Every transfer remains a separately reviewed task. Database migrations, new
 business fields, destructive actions, authentication, deployment and `main`

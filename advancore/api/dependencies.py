@@ -13,8 +13,11 @@ from typing import Protocol, Sequence
 from advancore.agent_runner.goal_task import generate_goal_task
 from advancore.agent_runner.worker import DryRunWorkerAdapter
 from advancore.api.schemas import (
+    ActivityLogResponse,
     CustomerResponse,
     DriverResponse,
+    FinancialEntryResponse,
+    FuelEntryResponse,
     KnowledgeResponse,
     DispatchBoardResponse,
     DispatchResourceResponse,
@@ -29,6 +32,8 @@ from advancore.api.schemas import (
     ProjectResponse,
     RouteResponse,
     SystemStatusResponse,
+    TripAssignmentResponse,
+    TripResponse,
     VehicleResponse,
 )
 
@@ -49,6 +54,16 @@ class ReadModelGateway(Protocol):
     def list_customers(self) -> Sequence[CustomerResponse]: ...
 
     def list_routes(self) -> Sequence[RouteResponse]: ...
+
+    def list_trips(self) -> Sequence[TripResponse]: ...
+
+    def list_trip_assignments(self) -> Sequence[TripAssignmentResponse]: ...
+
+    def list_fuel_entries(self) -> Sequence[FuelEntryResponse]: ...
+
+    def list_financial_entries(self) -> Sequence[FinancialEntryResponse]: ...
+
+    def list_activities(self) -> Sequence[ActivityLogResponse]: ...
 
     def fleet(
         self,
@@ -176,6 +191,88 @@ class DatabaseReadModelGateway:
             return [RouteResponse.model_validate(item) for item in items]
         except Exception as exc:
             raise ReadModelUnavailable("Routes are temporarily unavailable.") from exc
+        finally:
+            session.rollback()
+            session.close()
+
+    def list_trips(self) -> Sequence[TripResponse]:
+        from advancore.repositories import TripRepository
+        from advancore.services.trip_service import TripService
+
+        session = self._open_session()
+        try:
+            items = TripService(TripRepository(session)).list_trips()
+            return [TripResponse.model_validate(item) for item in items]
+        except Exception as exc:
+            raise ReadModelUnavailable("Trips are temporarily unavailable.") from exc
+        finally:
+            session.rollback()
+            session.close()
+
+    def list_trip_assignments(self) -> Sequence[TripAssignmentResponse]:
+        from advancore.repositories import TripAssignmentRepository
+        from advancore.services.trip_assignment_service import TripAssignmentService
+
+        session = self._open_session()
+        try:
+            items = TripAssignmentService(
+                TripAssignmentRepository(session)
+            ).list_assignments()
+            return [TripAssignmentResponse.model_validate(item) for item in items]
+        except Exception as exc:
+            raise ReadModelUnavailable(
+                "Trip assignments are temporarily unavailable."
+            ) from exc
+        finally:
+            session.rollback()
+            session.close()
+
+    def list_fuel_entries(self) -> Sequence[FuelEntryResponse]:
+        from advancore.repositories import FuelEntryRepository
+        from advancore.services.fuel_entry_service import FuelEntryService
+
+        session = self._open_session()
+        try:
+            items = FuelEntryService(FuelEntryRepository(session)).list_entries()
+            return [FuelEntryResponse.model_validate(item) for item in items]
+        except Exception as exc:
+            raise ReadModelUnavailable(
+                "Fuel entries are temporarily unavailable."
+            ) from exc
+        finally:
+            session.rollback()
+            session.close()
+
+    def list_financial_entries(self) -> Sequence[FinancialEntryResponse]:
+        from advancore.repositories import FinancialEntryRepository
+        from advancore.services.financial_entry_service import FinancialEntryService
+
+        session = self._open_session()
+        try:
+            items = FinancialEntryService(
+                FinancialEntryRepository(session)
+            ).list_entries()
+            return [FinancialEntryResponse.model_validate(item) for item in items]
+        except Exception as exc:
+            raise ReadModelUnavailable(
+                "Financial entries are temporarily unavailable."
+            ) from exc
+        finally:
+            session.rollback()
+            session.close()
+
+    def list_activities(self) -> Sequence[ActivityLogResponse]:
+        from advancore.repositories import ActivityLogRepository
+        from advancore.services.activity_service import ActivityLogService
+
+        session = self._open_session()
+        try:
+            items = ActivityLogService(ActivityLogRepository(session)).list_activities()
+            return [ActivityLogResponse.model_validate(item) for item in items]
+        except Exception as exc:
+            raise ReadModelUnavailable(
+                "Activity records are temporarily unavailable."
+            ) from exc
         finally:
             session.rollback()
             session.close()

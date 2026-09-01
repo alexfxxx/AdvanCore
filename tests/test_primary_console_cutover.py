@@ -27,13 +27,13 @@ def test_cutover_inventory_is_bounded_and_keeps_streamlit_until_transfer():
     ).read_text(encoding="utf-8")
 
     for transferred in (
-        "TASK-170 through TASK-174 completed the shared safe-editing boundary",
-        "Projects, Knowledge, Fleet, Driver, Customer and Route transfers",
+        "TASK-170 through TASK-179 completed the shared safe-editing boundary",
+        "Projects, Knowledge, Fleet, Driver, Customer, Route, Trip, Assignment, Fuel and",
+        "Finance transfers plus read-only Activity Log history",
         "No schema or business field was added",
     ):
         assert transferred in cutover
     for remaining_workflow in (
-        "Trips and assignments: plan trip, update trip status, assign and release",
         "Settings/recovery: backup inventory, create/verify backup",
         "Dashboard AI readiness: the start-of-day Kimi, Gemini and Codex",
         "Dashboard AI workforce: most recently selected worker",

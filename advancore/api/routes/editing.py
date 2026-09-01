@@ -20,6 +20,10 @@ from advancore.api.schemas import (
     DriverCreateRequest,
     DriverResponse,
     DriverStatusRequest,
+    FinancialEntryCreateRequest,
+    FinancialEntryResponse,
+    FuelEntryCreateRequest,
+    FuelEntryResponse,
     KnowledgeApproveRequest,
     KnowledgeDraftRequest,
     KnowledgeResponse,
@@ -31,6 +35,11 @@ from advancore.api.schemas import (
     RouteCreateRequest,
     RouteResponse,
     RouteStatusRequest,
+    TripAssignmentCreateRequest,
+    TripAssignmentResponse,
+    TripCreateRequest,
+    TripResponse,
+    TripStatusRequest,
     VehicleCreateRequest,
     VehicleDetailsRequest,
     VehicleResponse,
@@ -261,5 +270,90 @@ def set_route_status(
     return _call(
         lambda: request.app.state.edit_gateway.set_route_status(
             identifier, payload.status
+        )
+    )
+
+
+@router.post("/trips", response_model=TripResponse, status_code=201)
+def create_trip(payload: TripCreateRequest, request: Request) -> TripResponse:
+    _confirmed(payload)
+    return _call(
+        lambda: request.app.state.edit_gateway.create_trip(
+            payload.trip_reference, payload.route_id, payload.service_date
+        )
+    )
+
+
+@router.post("/trips/{identifier}/status", response_model=TripResponse)
+def set_trip_status(
+    identifier: int, payload: TripStatusRequest, request: Request
+) -> TripResponse:
+    _confirmed(payload)
+    return _call(
+        lambda: request.app.state.edit_gateway.set_trip_status(
+            identifier, payload.status
+        )
+    )
+
+
+@router.post(
+    "/trip-assignments", response_model=TripAssignmentResponse, status_code=201
+)
+def create_trip_assignment(
+    payload: TripAssignmentCreateRequest, request: Request
+) -> TripAssignmentResponse:
+    _confirmed(payload)
+    return _call(
+        lambda: request.app.state.edit_gateway.create_trip_assignment(
+            payload.trip_id, payload.vehicle_id, payload.driver_id
+        )
+    )
+
+
+@router.post(
+    "/trip-assignments/{identifier}/release",
+    response_model=TripAssignmentResponse,
+)
+def release_trip_assignment(
+    identifier: int, payload: ConfirmedRequest, request: Request
+) -> TripAssignmentResponse:
+    _confirmed(payload)
+    return _call(
+        lambda: request.app.state.edit_gateway.release_trip_assignment(identifier)
+    )
+
+
+@router.post("/fuel-entries", response_model=FuelEntryResponse, status_code=201)
+def create_fuel_entry(
+    payload: FuelEntryCreateRequest, request: Request
+) -> FuelEntryResponse:
+    _confirmed(payload)
+    return _call(
+        lambda: request.app.state.edit_gateway.create_fuel_entry(
+            payload.vehicle_id,
+            payload.recorded_on,
+            payload.litres,
+            payload.total_cost,
+            payload.odometer_km,
+        )
+    )
+
+
+@router.post(
+    "/financial-entries", response_model=FinancialEntryResponse, status_code=201
+)
+def create_financial_entry(
+    payload: FinancialEntryCreateRequest, request: Request
+) -> FinancialEntryResponse:
+    _confirmed(payload)
+    return _call(
+        lambda: request.app.state.edit_gateway.create_financial_entry(
+            payload.entry_date,
+            payload.entry_type,
+            payload.amount,
+            payload.currency_code,
+            payload.description,
+            payload.trip_id,
+            payload.customer_id,
         )
     )

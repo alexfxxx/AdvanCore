@@ -92,6 +92,70 @@ class RouteResponse(BaseModel):
     status: str
 
 
+class TripResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    trip_reference: str
+    route_id: int
+    service_date: date
+    status: str
+    created_at: datetime
+    updated_at: datetime
+
+
+class TripAssignmentResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    trip_id: int
+    vehicle_id: int
+    driver_id: int
+    status: str
+    created_at: datetime
+    updated_at: datetime
+
+
+class FuelEntryResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    vehicle_id: int
+    recorded_on: date
+    litres: Decimal
+    total_cost: Decimal | None
+    odometer_km: Decimal | None
+    created_at: datetime
+    updated_at: datetime
+
+
+class FinancialEntryResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    entry_date: date
+    entry_type: str
+    amount: Decimal
+    currency_code: str
+    description: str | None
+    trip_id: int | None
+    customer_id: int | None
+    created_at: datetime
+    updated_at: datetime
+
+
+class ActivityLogResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    action: str
+    entity_type: str | None
+    entity_id: str | None
+    details: str | None
+    created_at: datetime
+    updated_at: datetime
+
+
 class VehicleResponse(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
@@ -301,6 +365,40 @@ class RouteCreateRequest(ConfirmedRequest):
 
 class RouteStatusRequest(ConfirmedRequest):
     status: Literal["active", "inactive"]
+
+
+class TripCreateRequest(ConfirmedRequest):
+    trip_reference: str = Field(min_length=1, max_length=40)
+    route_id: StrictInt
+    service_date: date
+
+
+class TripStatusRequest(ConfirmedRequest):
+    status: Literal["planned", "completed", "cancelled"]
+
+
+class TripAssignmentCreateRequest(ConfirmedRequest):
+    trip_id: StrictInt
+    vehicle_id: StrictInt
+    driver_id: StrictInt
+
+
+class FuelEntryCreateRequest(ConfirmedRequest):
+    vehicle_id: StrictInt
+    recorded_on: date
+    litres: Decimal
+    total_cost: Decimal | None = None
+    odometer_km: Decimal | None = None
+
+
+class FinancialEntryCreateRequest(ConfirmedRequest):
+    entry_date: date
+    entry_type: Literal["income", "expense"]
+    amount: Decimal
+    currency_code: str = Field(min_length=3, max_length=3)
+    description: str | None = Field(default=None, max_length=200)
+    trip_id: StrictInt | None = None
+    customer_id: StrictInt | None = None
 
 
 class OwnerGoalRequest(StrictRequest):
