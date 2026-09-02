@@ -1,6 +1,6 @@
 # TASK-182 — Driver Employment and Payroll Business Brief
 
-STATUS: DRAFT
+STATUS: COMPLETE
 
 ## Objective
 
@@ -61,10 +61,13 @@ None.
 
 ## Acceptance criteria
 
-- [ ] Every payroll source heading has an owner-confirmed meaning and unit.
+- [x] Every approved first-slice payroll field has an owner-confirmed meaning
+      and unit.
 - [x] Worker category selects either CPF or levy cost entry.
 - [x] Allowance is confirmed as employer-paid incentive compensation.
-- [ ] Salary/allowance cadence and effective-date history are approved.
+- [x] Salary and allowance are monthly SGD amounts.
+- [x] Changes preserve effective-month history.
+- [x] Employment status remains separate from operational driver availability.
 - [ ] Private visibility and local-only storage boundaries are approved.
 - [ ] No real driver or payroll value is committed or imported.
 - [ ] A later schema proposal contains no unapproved fields.
@@ -90,10 +93,7 @@ Approved brief: None
 
 ## Owner decisions
 
-Confirm whether basic salary and allowance are monthly SGD amounts; whether
-changes should create effective-month history rather than overwrite the current
-record; and whether the CSV status duplicates the driver's operational status
-or represents employment status.
+None.
 
 ## Completion report
 
@@ -129,8 +129,10 @@ single-owner until access control is separately approved.
 
 ### Decisions required
 
-The remaining cadence, history and status meanings listed above.
+None for the business brief. A separate schema proposal and implementation task
+remain governed boundaries.
 
 ### Recommended next step
 
-Resolve the payroll meanings before proposing any table or migration.
+Prepare the minimum schema proposal and implementation without applying a
+migration or importing real employee data.

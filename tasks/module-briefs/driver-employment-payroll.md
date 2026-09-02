@@ -1,8 +1,8 @@
 # Driver Employment and Payroll — Business Module Brief
 
-STATUS: DRAFT
+STATUS: APPROVED
 
-MODULE_ID: TODO
+MODULE_ID: driver_employment_payroll
 
 ## Module identity
 
@@ -34,11 +34,12 @@ private employee data or inventing the meanings of source CSV columns.
 
 ## Required fields
 
-Approved first-slice fields are a worker category, basic salary, employer CPF
-amount, foreign-worker levy amount and incentive allowance. CPF and levy are
-mutually exclusive: the local/PR category permits employer CPF and the
-foreign-worker-with-levy category permits levy. Salary/allowance cadence,
-effective history and the source status meaning remain unresolved.
+Approved first-slice fields are a worker category, monthly basic salary in SGD,
+employer CPF amount, foreign-worker levy amount, monthly incentive allowance in
+SGD, effective month and employment status. CPF and levy are mutually exclusive:
+the local/PR category permits employer CPF and the foreign-worker-with-levy
+category permits levy. Employment status is separate from the driver's
+operational availability.
 
 ## Reference sources
 
@@ -61,7 +62,8 @@ The selected driver may show a private Employment/Payroll segment. Selecting
 local/PR permits employer CPF entry and clears or disables levy entry. Selecting
 foreign worker with levy permits levy entry and clears or disables CPF entry.
 Both must never be active for the same effective record. Import remains
-preview-first and separately approved.
+preview-first and separately approved. A changed amount or employment status
+creates a new effective-month record rather than overwriting history.
 
 ## Imports
 
@@ -72,11 +74,13 @@ must not send any row to an external AI worker.
 
 No payroll report or cross-driver salary view is approved. The intended first
 surface is the selected-driver private detail segment showing only the approved
-category and current employer-cost facts.
+category, monthly SGD amounts, current employment status and effective history.
 
 ## Database impact
 
-None at the brief stage. Any later proposal must be additive and remain local.
+A later proposal may add an employment/payroll history table linked to Driver.
+Any structure must be additive, remain local, preserve existing drivers and use
+an Alembic migration. Approval of this brief does not apply a migration.
 
 ## Security and compliance
 
@@ -90,9 +94,7 @@ worker levy is an employer cost and must not be deducted from a worker's salary.
 
 ## Owner decisions
 
-Confirm whether basic salary and allowance are monthly SGD amounts; whether
-changes create effective-month history; and whether source status is operational
-driver status or a distinct employment status.
+None
 
 ## Acceptance examples
 
@@ -101,6 +103,10 @@ driver status or a distinct employment status.
   amount.
 - Normal: a levy-liable foreign worker has an owner-entered monthly levy amount
   and no CPF amount.
+- Normal: a salary or allowance change creates a new effective-month record and
+  leaves the earlier record readable.
+- Normal: changing employment status does not change operational driver
+  availability.
 - Boundary: a missing approved value displays as not recorded, never zero.
 - Boundary: the absence of birth date prevents automatic CPF calculation but
   does not prevent recording an actual paid CPF amount.

@@ -1,6 +1,6 @@
 # TASK-181 — Customer Recurring Services Minimum Schema Proposal
 
-STATUS: DRAFT
+STATUS: COMPLETE
 
 ## Objective
 
@@ -72,12 +72,12 @@ No migration is authorised by this proposal.
 
 ## Acceptance criteria
 
-- [ ] Owner approves the exact proposed fields and three-table structure.
-- [ ] Owner approves forward replacement instead of in-place commercial edits.
-- [ ] No per-trip, per-day, tax or invoice calculation is introduced.
-- [ ] Existing Customer, Route and Trip rows remain compatible and unchanged.
-- [ ] Implementation and migration application remain separate approval gates.
-- [ ] No real customer value or source file is added to GitHub.
+- [x] Owner approves the exact proposed fields and three-table structure.
+- [x] Owner approves forward replacement instead of in-place commercial edits.
+- [x] No per-trip, per-day, tax or invoice calculation is introduced.
+- [x] Existing Customer, Route and Trip rows remain compatible and unchanged.
+- [x] Implementation and migration application remain separate approval gates.
+- [x] No real customer value or source file is added to GitHub.
 
 ## Test requirements
 
@@ -103,14 +103,14 @@ Approved brief: tasks/module-briefs/customer-recurring-services.md
 
 ## Owner decisions
 
-Approve, reject or amend this minimum schema proposal. No implementation or
-migration is authorised until that decision is recorded.
+None. The owner approved unattended implementation within the recorded scope.
 
 ## Completion report
 
 ### Implemented
 
-Proposal only.
+Recorded owner approval of the minimum schema proposal and separated migration
+creation from migration application and real-data publication.
 
 ### Files changed
 
@@ -138,9 +138,9 @@ Daily Trip generation remains deliberately deferred.
 
 ### Decisions required
 
-Owner approval of this schema proposal.
+None for the proposal. TASK-183 governs implementation.
 
 ### Recommended next step
 
-Approve TASK-181 implementation planning while withholding migration application
-and real-data import.
+Implement TASK-183 without applying its migration or importing real customer
+data.
