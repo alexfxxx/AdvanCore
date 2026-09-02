@@ -17,7 +17,7 @@ def test_primary_console_has_one_confirmed_record_manager():
         assert f'id="{identifier}"' in html
     for tab in ("projects", "knowledge", "fleet", "drivers", "customers", "routes"):
         assert f'data-manager-tab="{tab}"' in html
-    assert "/assets/editing.js?v=task-174-1" in html
+    assert "/assets/editing.js?v=task-179-1" in html
 
 
 def test_editing_client_uses_same_origin_confirmation_and_action_token():

@@ -38,10 +38,10 @@ def test_workspace_uses_allowlisted_segments_and_versioned_local_assets():
     assert "WORKSPACE_SEGMENT_CATALOG" in javascript
     assert "WORKSPACE_LAYOUT_KEY" in javascript
     assert "validatedWorkspaceLayout" in javascript
-    assert "/assets/styles.css?v=task-174-1" in html
-    assert "/assets/app.js?v=task-174-1" in html
-    assert "/assets/editing.js?v=task-174-1" in html
-    assert "Build task-174-1" in html
+    assert "/assets/styles.css?v=task-179-1" in html
+    assert "/assets/app.js?v=task-179-1" in html
+    assert "/assets/editing.js?v=task-179-1" in html
+    assert "Build task-179-1" in html
 
 
 def test_layout_persistence_is_browser_local_and_has_no_network_or_write_action():

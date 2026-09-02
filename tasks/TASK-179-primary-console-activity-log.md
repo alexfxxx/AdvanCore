@@ -30,6 +30,8 @@ imports, real-data test writes, deployment and `main`.
 - `frontend/index.html`
 - `tests/test_api_daily_operations.py`
 - `tests/test_api_modules.py`
+- `tests/test_frontend_editing_contract.py`
+- `tests/test_frontend_workspace_contract.py`
 - `tests/test_primary_console_cutover.py`
 - `docs/architecture/PRIMARY_CONSOLE_CUTOVER.md`
 
@@ -47,10 +49,11 @@ Approved brief: None
 
 ## Completion report
 
-- Implemented: read-only Activity Log history in the primary record manager.
+- Implemented: read-only Activity Log history in the primary record manager;
+  repaired the visible build and static-asset version after live verification.
 - Files changed: this task file; shared API schemas, read gateway and operations
   route; module registry; primary frontend HTML/JavaScript; daily-operation,
-  module and cutover tests; primary cutover record.
+  module, frontend and cutover tests; primary cutover record.
 - Database changes: none; no Activity Log mutation route was added.
 - Tests: focused API/gateway/frontend tests and isolated full regression passed.
 - Assumptions: advanced filtering remains in the temporary Streamlit admin surface.
