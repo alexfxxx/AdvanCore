@@ -2,19 +2,22 @@
 
 from datetime import date
 
-from fastapi import APIRouter, HTTPException, Query, Request, status
+from fastapi import APIRouter, Depends, HTTPException, Path, Query, Request, Response, status
 
 from advancore.api.dependencies import ReadModelUnavailable
+from advancore.api.routes.orchestration import require_loopback_peer
 from advancore.api.schemas import (
     ActivityLogResponse,
     CustomerResponse,
     DriverResponse,
+    DriverEmploymentResponse,
     DispatchBoardResponse,
     FinancialEntryResponse,
     FleetResponse,
     FuelEntryResponse,
     FuelIntelligenceResponse,
     FuelMarketBenchmarkResponse,
+    RecurringServiceResponse,
     RouteResponse,
     TripAssignmentResponse,
     TripResponse,
@@ -52,6 +55,23 @@ def fleet(
 def drivers(request: Request) -> list[DriverResponse]:
     try:
         return list(request.app.state.read_gateway.list_drivers())
+    except ReadModelUnavailable as exc:
+        raise _unavailable(exc) from exc
+
+
+@router.get(
+    "/drivers/{driver_id}/employment-records",
+    response_model=list[DriverEmploymentResponse],
+    dependencies=[Depends(require_loopback_peer)],
+)
+def driver_employment_records(
+    request: Request, response: Response, driver_id: int = Path(gt=0)
+) -> list[DriverEmploymentResponse]:
+    response.headers["Cache-Control"] = "no-store"
+    try:
+        return list(
+            request.app.state.read_gateway.list_driver_employment_records(driver_id)
+        )
     except ReadModelUnavailable as exc:
         raise _unavailable(exc) from exc
 
@@ -108,6 +128,25 @@ def financial_entries(request: Request) -> list[FinancialEntryResponse]:
 def activity_log(request: Request) -> list[ActivityLogResponse]:
     try:
         return list(request.app.state.read_gateway.list_activities())
+    except ReadModelUnavailable as exc:
+        raise _unavailable(exc) from exc
+
+
+@router.get(
+    "/customers/{customer_id}/recurring-services",
+    response_model=list[RecurringServiceResponse],
+    dependencies=[Depends(require_loopback_peer)],
+)
+def customer_recurring_services(
+    request: Request, response: Response, customer_id: int = Path(gt=0)
+) -> list[RecurringServiceResponse]:
+    response.headers["Cache-Control"] = "no-store"
+    try:
+        return list(
+            request.app.state.read_gateway.list_recurring_services_by_customer(
+                customer_id
+            )
+        )
     except ReadModelUnavailable as exc:
         raise _unavailable(exc) from exc
 

@@ -220,6 +220,52 @@ def test_fleet_identity_migration_is_additive_nullable_and_at_current_head():
     mock_op.drop_table.assert_not_called(); mock_op.drop_column.assert_not_called(); mock_op.execute.assert_not_called()
 
 
+def test_recurring_service_migration_constraints_reference_real_columns():
+    migration_path = _migration_file("*recurring_customer_services.py")
+    spec = importlib.util.spec_from_file_location(
+        "recurring_service_migration", migration_path
+    )
+    migration = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(migration)
+    mock_op = MagicMock()
+    migration.op = mock_op
+
+    migration.upgrade()
+
+    table_calls = {
+        call.args[0]: call.args[1:] for call in mock_op.create_table.call_args_list
+    }
+    day_unique_columns = {
+        tuple(item._pending_colargs)
+        for item in table_calls["recurring_service_days"]
+        if item.__class__.__name__ == "UniqueConstraint"
+    }
+    stop_unique_columns = {
+        tuple(item._pending_colargs)
+        for item in table_calls["recurring_service_stops"]
+        if item.__class__.__name__ == "UniqueConstraint"
+    }
+    service_unique_columns = {
+        tuple(item._pending_colargs)
+        for item in table_calls["recurring_services"]
+        if item.__class__.__name__ == "UniqueConstraint"
+    }
+    assert ("recurring_service_id", "weekday") in day_unique_columns
+    assert ("recurring_service_id", "stop_order") in stop_unique_columns
+    assert ("replaces_recurring_service_id",) in service_unique_columns
+    live_index = next(
+        call
+        for call in mock_op.create_index.call_args_list
+        if call.args[0] == "uq_recurring_services_live_reference"
+    )
+    assert live_index.args[1:3] == (
+        "recurring_services",
+        ["customer_id", "service_reference"],
+    )
+    assert live_index.kwargs["unique"] is True
+    assert "active" in str(live_index.kwargs["postgresql_where"])
+
+
 def test_fleet_hire_purchase_migration_is_additive_nullable_and_new_head():
     migration_path = _migration_file("*_fleet_hire_purchase.py")
     spec = importlib.util.spec_from_file_location(

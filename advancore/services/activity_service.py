@@ -27,6 +27,10 @@ _APPROVED_ACTION_ENTITIES = {
     "driver_status_changed": "driver",
     "customer_created": "customer",
     "customer_status_changed": "customer",
+    "recurring_service_created": "recurring_service",
+    "recurring_service_status_changed": "recurring_service",
+    "recurring_service_replaced": "recurring_service",
+    "driver_employment_record_created": "driver_employment_record",
 }
 
 

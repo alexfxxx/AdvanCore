@@ -16,6 +16,7 @@ from advancore.api.schemas import (
     ActivityLogResponse,
     CustomerResponse,
     DriverResponse,
+    DriverEmploymentResponse,
     FinancialEntryResponse,
     FuelEntryResponse,
     KnowledgeResponse,
@@ -30,6 +31,7 @@ from advancore.api.schemas import (
     LegalEntityResponse,
     OwnerGoalPreviewResponse,
     ProjectResponse,
+    RecurringServiceResponse,
     RouteResponse,
     SystemStatusResponse,
     TripAssignmentResponse,
@@ -51,6 +53,10 @@ class ReadModelGateway(Protocol):
 
     def list_drivers(self) -> Sequence[DriverResponse]: ...
 
+    def list_driver_employment_records(
+        self, driver_id: int
+    ) -> Sequence[DriverEmploymentResponse]: ...
+
     def list_customers(self) -> Sequence[CustomerResponse]: ...
 
     def list_routes(self) -> Sequence[RouteResponse]: ...
@@ -64,6 +70,10 @@ class ReadModelGateway(Protocol):
     def list_financial_entries(self) -> Sequence[FinancialEntryResponse]: ...
 
     def list_activities(self) -> Sequence[ActivityLogResponse]: ...
+
+    def list_recurring_services_by_customer(
+        self, customer_id: int
+    ) -> Sequence[RecurringServiceResponse]: ...
 
     def fleet(
         self,
@@ -163,6 +173,26 @@ class DatabaseReadModelGateway:
             return [DriverResponse.model_validate(item) for item in items]
         except Exception as exc:
             raise ReadModelUnavailable("Drivers are temporarily unavailable.") from exc
+        finally:
+            session.rollback()
+            session.close()
+
+    def list_driver_employment_records(
+        self, driver_id: int
+    ) -> Sequence[DriverEmploymentResponse]:
+        from advancore.repositories import DriverEmploymentRepository
+        from advancore.services.driver_employment_service import DriverEmploymentService
+
+        session = self._open_session()
+        try:
+            items = DriverEmploymentService(
+                DriverEmploymentRepository(session)
+            ).list_by_driver(driver_id)
+            return [DriverEmploymentResponse.model_validate(item) for item in items]
+        except Exception as exc:
+            raise ReadModelUnavailable(
+                "Driver employment records are temporarily unavailable."
+            ) from exc
         finally:
             session.rollback()
             session.close()
@@ -272,6 +302,32 @@ class DatabaseReadModelGateway:
         except Exception as exc:
             raise ReadModelUnavailable(
                 "Activity records are temporarily unavailable."
+            ) from exc
+        finally:
+            session.rollback()
+            session.close()
+
+    def list_recurring_services_by_customer(
+        self, customer_id: int
+    ) -> Sequence[RecurringServiceResponse]:
+        from advancore.repositories import (
+            CustomerRepository,
+            RecurringServiceRepository,
+            RouteRepository,
+        )
+        from advancore.services.recurring_service_service import RecurringServiceService
+
+        session = self._open_session()
+        try:
+            items = RecurringServiceService(
+                RecurringServiceRepository(session),
+                CustomerRepository(session),
+                RouteRepository(session),
+            ).list_by_customer(customer_id)
+            return [RecurringServiceResponse.model_validate(item) for item in items]
+        except Exception as exc:
+            raise ReadModelUnavailable(
+                "Recurring services are temporarily unavailable."
             ) from exc
         finally:
             session.rollback()

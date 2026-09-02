@@ -1,6 +1,6 @@
 """Bounded request and response contracts for the local AdvanCore API."""
 
-from datetime import date, datetime
+from datetime import date, datetime, time
 from decimal import Decimal
 from typing import Literal
 
@@ -73,6 +73,22 @@ class DriverResponse(BaseModel):
     status: str
 
 
+class DriverEmploymentResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    driver_id: int
+    effective_month: date
+    worker_category: Literal["local_pr", "foreign_levy"]
+    basic_salary: Decimal
+    employer_cpf_amount: Decimal | None
+    monthly_levy_amount: Decimal | None
+    monthly_allowance: Decimal | None
+    employment_status: Literal["active", "inactive"]
+    created_at: datetime
+    updated_at: datetime
+
+
 class CustomerResponse(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
@@ -140,6 +156,40 @@ class FinancialEntryResponse(BaseModel):
     description: str | None
     trip_id: int | None
     customer_id: int | None
+    created_at: datetime
+    updated_at: datetime
+
+
+class RecurringServiceDayResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    weekday: int
+
+
+class RecurringServiceStopResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    stop_order: int
+    location_name: str
+    scheduled_time: time
+
+
+class RecurringServiceResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    customer_id: int
+    route_id: int
+    service_reference: str
+    vehicle_requirement: str | None
+    monthly_amount: Decimal
+    currency_code: str
+    effective_start_date: date
+    effective_end_date: date | None
+    status: str
+    replaces_recurring_service_id: int | None
+    days: list[RecurringServiceDayResponse]
+    stops: list[RecurringServiceStopResponse]
     created_at: datetime
     updated_at: datetime
 
@@ -348,6 +398,17 @@ class DriverStatusRequest(ConfirmedRequest):
     status: Literal["active", "unavailable", "retired"]
 
 
+class DriverEmploymentCreateRequest(ConfirmedRequest):
+    driver_id: StrictInt
+    effective_month: date
+    worker_category: Literal["local_pr", "foreign_levy"]
+    basic_salary: Decimal = Field(ge=0, decimal_places=2)
+    employer_cpf_amount: Decimal | None = Field(default=None, ge=0, decimal_places=2)
+    monthly_levy_amount: Decimal | None = Field(default=None, ge=0, decimal_places=2)
+    monthly_allowance: Decimal | None = Field(default=None, ge=0, decimal_places=2)
+    employment_status: Literal["active", "inactive"]
+
+
 class CustomerCreateRequest(ConfirmedRequest):
     name: str = Field(min_length=1, max_length=160)
     customer_reference: str | None = Field(default=None, max_length=40)
@@ -399,6 +460,73 @@ class FinancialEntryCreateRequest(ConfirmedRequest):
     description: str | None = Field(default=None, max_length=200)
     trip_id: StrictInt | None = None
     customer_id: StrictInt | None = None
+
+
+class RecurringServiceStopRequest(StrictRequest):
+    stop_order: StrictInt
+    location_name: str = Field(min_length=1, max_length=160)
+    scheduled_time: time
+
+
+class RecurringServiceCreateRequest(ConfirmedRequest):
+    customer_id: StrictInt
+    route_id: StrictInt
+    service_reference: str = Field(min_length=1, max_length=40)
+    vehicle_requirement: str | None = Field(default=None, max_length=200)
+    monthly_amount: Decimal = Field(ge=0, decimal_places=2)
+    currency_code: str = Field(min_length=3, max_length=3)
+    effective_start_date: date
+    effective_end_date: date | None = None
+    weekdays: list[StrictInt] = Field(min_length=1)
+    stops: list[RecurringServiceStopRequest] = Field(min_length=1)
+
+    @field_validator("weekdays")
+    @classmethod
+    def _weekdays_in_range(cls, value: list[int]) -> list[int]:
+        if any(day < 0 or day > 6 for day in value):
+            raise ValueError("Weekday must be between 0 (Monday) and 6 (Sunday).")
+        return value
+
+    @field_validator("stops")
+    @classmethod
+    def _stop_orders_unique(cls, value: list[RecurringServiceStopRequest]) -> list[RecurringServiceStopRequest]:
+        orders = [stop.stop_order for stop in value]
+        if len(set(orders)) != len(orders):
+            raise ValueError("Stop order must be unique within a service.")
+        return value
+
+
+class RecurringServiceStatusRequest(ConfirmedRequest):
+    status: Literal["active", "paused", "archived"]
+
+
+class RecurringServiceReplaceRequest(ConfirmedRequest):
+    route_id: StrictInt
+    service_reference: str = Field(min_length=1, max_length=40)
+    vehicle_requirement: str | None = Field(default=None, max_length=200)
+    monthly_amount: Decimal = Field(ge=0, decimal_places=2)
+    currency_code: str = Field(min_length=3, max_length=3)
+    effective_start_date: date
+    effective_end_date: date | None = None
+    weekdays: list[StrictInt] = Field(min_length=1)
+    stops: list[RecurringServiceStopRequest] = Field(min_length=1)
+
+    @field_validator("weekdays")
+    @classmethod
+    def _weekdays_in_range(cls, value: list[int]) -> list[int]:
+        if len(set(value)) != len(value) or any(day < 0 or day > 6 for day in value):
+            raise ValueError("Weekdays must be unique values from 0 (Monday) to 6 (Sunday).")
+        return value
+
+    @field_validator("stops")
+    @classmethod
+    def _stop_orders_unique(
+        cls, value: list[RecurringServiceStopRequest]
+    ) -> list[RecurringServiceStopRequest]:
+        orders = [stop.stop_order for stop in value]
+        if len(set(orders)) != len(orders):
+            raise ValueError("Stop order must be unique within a service.")
+        return value
 
 
 class OwnerGoalRequest(StrictRequest):

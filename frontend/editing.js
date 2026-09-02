@@ -433,6 +433,208 @@
     customers: { title: "Customers", endpoint: "/api/customers", nameLabel: "Customer name", reference: "customer_reference", referenceLabel: "Customer reference (optional)", statuses: [["active", "Active"], ["inactive", "Inactive"]] },
   };
 
+  const weekdayOptions = [
+    [0, "Mon"], [1, "Tue"], [2, "Wed"], [3, "Thu"],
+    [4, "Fri"], [5, "Sat"], [6, "Sun"],
+  ];
+
+  const weekdayFields = (selected = []) => {
+    const wrapper = element("fieldset", { className: "manager-field manager-field-wide" });
+    wrapper.append(element("legend", { text: "Operating days" }));
+    const choices = element("div", { className: "manager-inline-options" });
+    weekdayOptions.forEach(([value, label]) => {
+      const input = element("input", { type: "checkbox", value: String(value) });
+      input.checked = selected.includes(value);
+      choices.append(element("label", {}, [input, document.createTextNode(label)]));
+    });
+    wrapper.append(choices);
+    return wrapper;
+  };
+
+  const parseTimedStops = (value) => {
+    const lines = value.split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
+    if (!lines.length) throw new Error("Enter at least one timed stop.");
+    return lines.map((line, index) => {
+      const match = line.match(/^([01]\d|2[0-3]):([0-5]\d)\s*\|\s*(.{1,160})$/);
+      if (!match) throw new Error(`Stop ${index + 1} must use HH:MM | Location.`);
+      return {
+        stop_order: index,
+        scheduled_time: `${match[1]}:${match[2]}:00`,
+        location_name: match[3].trim(),
+      };
+    });
+  };
+
+  const recurringServiceForm = (customer, routes, existing = null) => {
+    const section = formSection(
+      existing ? `Replace ${existing.service_reference}` : `New recurring service for ${customer.name}`,
+      "This is a fixed monthly tender service. It is never converted into a daily rate. Use one timed stop per line as HH:MM | Location."
+    );
+    const days = existing ? existing.days.map((item) => item.weekday) : [];
+    const stops = existing
+      ? existing.stops.map((stop) => `${String(stop.scheduled_time).slice(0, 5)} | ${stop.location_name}`).join("\n")
+      : "";
+    const form = element("form", { className: "manager-form" }, [
+      field("Service reference", "service_reference", { required: true, maxlength: "40", value: existing?.service_reference }),
+      field("Route", "route_id", { required: true, options: [["", "Select route"], ...routes.map((route) => [String(route.id), `${route.route_code}: ${route.origin} → ${route.destination}`])], value: existing?.route_id }),
+      field("Vehicle requirement (as stated)", "vehicle_requirement", { maxlength: "200", value: existing?.vehicle_requirement }),
+      field("Fixed monthly amount", "monthly_amount", { required: true, type: "number", min: "0", step: "0.01", value: existing?.monthly_amount }),
+      field("Currency", "currency_code", { required: true, maxlength: "3", value: existing?.currency_code || "SGD" }),
+      field("Effective start", "effective_start_date", { required: true, type: "date", value: existing ? "" : todayValue() }),
+      field("Effective end (optional)", "effective_end_date", { type: "date", value: existing?.effective_end_date }),
+      weekdayFields(days),
+      field("Timed stops", "stops_text", { required: true, type: "textarea", wide: true, rows: "6", maxlength: "4000", value: stops }),
+    ]);
+    const cancel = button("Back to customer");
+    const submit = button(existing ? "Review replacement" : "Review recurring service", "primary-button");
+    form.append(element("div", { className: "manager-form-actions" }, [cancel, submit]));
+    form.addEventListener("submit", (event) => event.preventDefault());
+    cancel.addEventListener("click", () => renderCustomerProfile(customer));
+    submit.addEventListener("click", () => {
+      if (!form.reportValidity()) return;
+      try {
+        const payload = toPayload(form, ["route_id"]);
+        delete payload.stops_text;
+        payload.weekdays = Array.from(form.querySelectorAll('input[type="checkbox"]:checked'), (node) => Number(node.value));
+        if (!payload.weekdays.length) throw new Error("Select at least one operating day.");
+        payload.stops = parseTimedStops(form.elements.stops_text.value);
+        if (!existing) payload.customer_id = customer.id;
+        perform({
+          message: existing ? "Create this forward replacement and archive the current service?" : "Create this recurring customer service?",
+          summary: [
+            ["Customer", customer.name], ["Reference", payload.service_reference],
+            ["Operating days", payload.weekdays.map((day) => weekdayOptions[day][1]).join(", ")],
+            ["Fixed monthly amount", `${payload.currency_code} ${payload.monthly_amount}`],
+            ["Effective start", payload.effective_start_date],
+          ],
+          url: existing ? `/api/recurring-services/${existing.id}/replacement` : "/api/recurring-services",
+          payload,
+          success: existing ? "Recurring service replaced." : "Recurring service created.",
+        });
+      } catch (error) {
+        setStatus(error.message, "error");
+      }
+    });
+    section.append(form);
+    content.replaceChildren(section);
+  };
+
+  async function renderCustomerProfile(customer) {
+    const [services, routes] = await Promise.all([
+      readJson(`/api/customers/${customer.id}/recurring-services`),
+      readJson("/api/routes"),
+    ]);
+    const routeById = indexedById(routes);
+    const section = formSection(
+      customer.name,
+      "Recurring Services stay inside this customer profile. Ad-hoc work remains in dated Trips."
+    );
+    const back = button("Back to customers");
+    const create = button("Add recurring service", "primary-button");
+    back.addEventListener("click", () => renderRegister("customers"));
+    create.addEventListener("click", () => recurringServiceForm(customer, routes));
+    section.append(element("div", { className: "manager-form-actions" }, [back, create]));
+
+    const list = element("div", { className: "manager-record-list" });
+    services.forEach((record) => {
+      const actions = [];
+      if (record.status === "active") {
+        const pause = button("Pause");
+        pause.addEventListener("click", () => perform({ message: "Pause this recurring service?", summary: [["Service", record.service_reference]], url: `/api/recurring-services/${record.id}/status`, payload: { status: "paused" }, success: "Recurring service paused." }));
+        const replace = button("Replace");
+        replace.addEventListener("click", () => recurringServiceForm(customer, routes, record));
+        actions.push(pause, replace);
+      } else if (record.status === "paused") {
+        const resume = button("Resume");
+        resume.addEventListener("click", () => perform({ message: "Resume this recurring service?", summary: [["Service", record.service_reference]], url: `/api/recurring-services/${record.id}/status`, payload: { status: "active" }, success: "Recurring service resumed." }));
+        actions.push(resume);
+      }
+      if (record.status !== "archived") {
+        const archive = button("Archive", "warning-button");
+        archive.addEventListener("click", () => perform({ message: "Archive this recurring service?", summary: [["Service", record.service_reference], ["Fixed monthly amount", `${record.currency_code} ${record.monthly_amount}`]], url: `/api/recurring-services/${record.id}/status`, payload: { status: "archived" }, success: "Recurring service archived." }));
+        actions.push(archive);
+      }
+      const route = routeById.get(record.route_id);
+      const dayNames = record.days.map((item) => weekdayOptions[item.weekday][1]).join(", ");
+      const card = recordCard(record.service_reference, record.status, actions);
+      card.insertBefore(element("p", { text: `${route?.route_code || `Route #${record.route_id}`} · ${dayNames} · ${record.currency_code} ${record.monthly_amount} monthly` }), card.lastChild);
+      card.insertBefore(element("p", { text: record.stops.map((stop) => `${String(stop.scheduled_time).slice(0, 5)} ${stop.location_name}`).join(" → ") }), card.lastChild);
+      card.insertBefore(element("p", { className: "micro-copy left-copy", text: `${displayValue(record.vehicle_requirement)} · Effective ${record.effective_start_date}${record.effective_end_date ? ` to ${record.effective_end_date}` : " onward"}` }), card.lastChild);
+      list.append(card);
+    });
+    section.append(services.length ? list : empty("No recurring services have been recorded for this customer."));
+    content.replaceChildren(section);
+  }
+
+  async function renderDriverProfile(driver) {
+    const records = await readJson(`/api/drivers/${driver.id}/employment-records`);
+    const section = formSection(
+      driver.name,
+      "Private Employment/Payroll history. These monthly SGD facts do not change operational driver availability."
+    );
+    const back = button("Back to drivers");
+    back.addEventListener("click", () => renderRegister("drivers"));
+    section.append(element("div", { className: "manager-form-actions" }, [back]));
+
+    const form = element("form", { className: "manager-form" }, [
+      field("Effective month", "effective_month", { required: true, type: "month", value: todayValue().slice(0, 7) }),
+      field("Worker category", "worker_category", { required: true, options: [["local_pr", "Local / PR — CPF"], ["foreign_levy", "Foreign worker — levy"]] }),
+      field("Monthly basic salary (SGD)", "basic_salary", { required: true, type: "number", min: "0", step: "0.01" }),
+      field("Employer CPF amount (SGD)", "employer_cpf_amount", { type: "number", min: "0", step: "0.01" }),
+      field("Monthly levy amount (SGD)", "monthly_levy_amount", { type: "number", min: "0", step: "0.01" }),
+      field("Monthly incentive allowance (SGD)", "monthly_allowance", { type: "number", min: "0", step: "0.01" }),
+      field("Employment status", "employment_status", { required: true, options: [["active", "Active"], ["inactive", "Inactive"]] }),
+    ]);
+    const category = form.elements.worker_category;
+    const cpf = form.elements.employer_cpf_amount;
+    const levy = form.elements.monthly_levy_amount;
+    const syncCategory = () => {
+      const local = category.value === "local_pr";
+      cpf.disabled = !local;
+      levy.disabled = local;
+      if (local) levy.value = "";
+      else cpf.value = "";
+    };
+    category.addEventListener("change", syncCategory);
+    syncCategory();
+    const submit = button("Review employment record", "primary-button");
+    form.append(element("div", { className: "manager-form-actions" }, [submit]));
+    form.addEventListener("submit", (event) => event.preventDefault());
+    submit.addEventListener("click", () => {
+      if (!form.reportValidity()) return;
+      const payload = toPayload(form);
+      payload.driver_id = driver.id;
+      payload.effective_month = `${payload.effective_month}-01`;
+      perform({
+        message: "Create this effective-month employment record? Existing history will not be overwritten.",
+        summary: [
+          ["Driver", driver.name], ["Effective month", payload.effective_month.slice(0, 7)],
+          ["Worker category", payload.worker_category], ["Basic salary", `SGD ${payload.basic_salary}`],
+          ["Employer CPF", payload.employer_cpf_amount], ["Monthly levy", payload.monthly_levy_amount],
+          ["Incentive allowance", payload.monthly_allowance], ["Employment status", payload.employment_status],
+        ],
+        url: "/api/driver-employment-records",
+        payload,
+        success: "Employment record created.",
+      });
+    });
+    section.append(form);
+
+    const list = element("div", { className: "manager-record-list" });
+    records.forEach((record) => {
+      const categoryLabel = record.worker_category === "local_pr" ? "Local / PR" : "Foreign worker with levy";
+      const statutoryCost = record.worker_category === "local_pr"
+        ? `Employer CPF SGD ${displayValue(record.employer_cpf_amount)}`
+        : `Levy SGD ${displayValue(record.monthly_levy_amount)}`;
+      const card = recordCard(record.effective_month.slice(0, 7), record.employment_status);
+      card.insertBefore(element("p", { text: `${categoryLabel} · Basic salary SGD ${record.basic_salary}` }), card.lastChild);
+      card.insertBefore(element("p", { text: `${statutoryCost} · Incentive allowance SGD ${displayValue(record.monthly_allowance)}` }), card.lastChild);
+      list.append(card);
+    });
+    section.append(records.length ? list : empty("No employment/payroll history has been recorded for this driver."));
+    content.replaceChildren(section);
+  }
+
   async function renderRegister(kind) {
     const config = registerConfig[kind];
     const records = await readJson(config.endpoint);
@@ -457,7 +659,17 @@
       select.value = record.status;
       const update = button("Review status");
       update.addEventListener("click", () => perform({ message: `Change ${record.name}'s status?`, summary: [["Name", record.name], ["New status", select.value]], url: `${config.endpoint}/${record.id}/status`, payload: { status: select.value }, success: "Status updated." }));
-      const card = recordCard(record.name, record.status, [select, update]);
+      const actions = [select, update];
+      if (kind === "customers") {
+        const profile = button("Open profile", "primary-button");
+        profile.addEventListener("click", () => renderCustomerProfile(record));
+        actions.unshift(profile);
+      } else if (kind === "drivers") {
+        const profile = button("Open private profile", "primary-button");
+        profile.addEventListener("click", () => renderDriverProfile(record));
+        actions.unshift(profile);
+      }
+      const card = recordCard(record.name, record.status, actions);
       card.insertBefore(element("p", { text: displayValue(record[config.reference]) }), card.lastChild);
       list.append(card);
     });
