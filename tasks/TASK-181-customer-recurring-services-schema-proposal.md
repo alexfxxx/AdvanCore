@@ -19,7 +19,7 @@ and queryable. Dated operational Trips remain separate.
   `tasks/module-briefs/customer-recurring-services.md`.
 - Existing Customers, Routes and dated Trips remain unchanged.
 - Monthly pricing has no per-day or per-trip calculation.
-- Real Eagles, TOS and other customer data must never enter GitHub.
+- Real customer or source-document data must never enter GitHub.
 
 ## In scope
 

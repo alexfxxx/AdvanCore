@@ -566,6 +566,75 @@
     content.replaceChildren(section);
   }
 
+  async function renderDriverProfile(driver) {
+    const records = await readJson(`/api/drivers/${driver.id}/employment-records`);
+    const section = formSection(
+      driver.name,
+      "Private Employment/Payroll history. These monthly SGD facts do not change operational driver availability."
+    );
+    const back = button("Back to drivers");
+    back.addEventListener("click", () => renderRegister("drivers"));
+    section.append(element("div", { className: "manager-form-actions" }, [back]));
+
+    const form = element("form", { className: "manager-form" }, [
+      field("Effective month", "effective_month", { required: true, type: "month", value: todayValue().slice(0, 7) }),
+      field("Worker category", "worker_category", { required: true, options: [["local_pr", "Local / PR — CPF"], ["foreign_levy", "Foreign worker — levy"]] }),
+      field("Monthly basic salary (SGD)", "basic_salary", { required: true, type: "number", min: "0", step: "0.01" }),
+      field("Employer CPF amount (SGD)", "employer_cpf_amount", { type: "number", min: "0", step: "0.01" }),
+      field("Monthly levy amount (SGD)", "monthly_levy_amount", { type: "number", min: "0", step: "0.01" }),
+      field("Monthly incentive allowance (SGD)", "monthly_allowance", { type: "number", min: "0", step: "0.01" }),
+      field("Employment status", "employment_status", { required: true, options: [["active", "Active"], ["inactive", "Inactive"]] }),
+    ]);
+    const category = form.elements.worker_category;
+    const cpf = form.elements.employer_cpf_amount;
+    const levy = form.elements.monthly_levy_amount;
+    const syncCategory = () => {
+      const local = category.value === "local_pr";
+      cpf.disabled = !local;
+      levy.disabled = local;
+      if (local) levy.value = "";
+      else cpf.value = "";
+    };
+    category.addEventListener("change", syncCategory);
+    syncCategory();
+    const submit = button("Review employment record", "primary-button");
+    form.append(element("div", { className: "manager-form-actions" }, [submit]));
+    form.addEventListener("submit", (event) => event.preventDefault());
+    submit.addEventListener("click", () => {
+      if (!form.reportValidity()) return;
+      const payload = toPayload(form);
+      payload.driver_id = driver.id;
+      payload.effective_month = `${payload.effective_month}-01`;
+      perform({
+        message: "Create this effective-month employment record? Existing history will not be overwritten.",
+        summary: [
+          ["Driver", driver.name], ["Effective month", payload.effective_month.slice(0, 7)],
+          ["Worker category", payload.worker_category], ["Basic salary", `SGD ${payload.basic_salary}`],
+          ["Employer CPF", payload.employer_cpf_amount], ["Monthly levy", payload.monthly_levy_amount],
+          ["Incentive allowance", payload.monthly_allowance], ["Employment status", payload.employment_status],
+        ],
+        url: "/api/driver-employment-records",
+        payload,
+        success: "Employment record created.",
+      });
+    });
+    section.append(form);
+
+    const list = element("div", { className: "manager-record-list" });
+    records.forEach((record) => {
+      const categoryLabel = record.worker_category === "local_pr" ? "Local / PR" : "Foreign worker with levy";
+      const statutoryCost = record.worker_category === "local_pr"
+        ? `Employer CPF SGD ${displayValue(record.employer_cpf_amount)}`
+        : `Levy SGD ${displayValue(record.monthly_levy_amount)}`;
+      const card = recordCard(record.effective_month.slice(0, 7), record.employment_status);
+      card.insertBefore(element("p", { text: `${categoryLabel} · Basic salary SGD ${record.basic_salary}` }), card.lastChild);
+      card.insertBefore(element("p", { text: `${statutoryCost} · Incentive allowance SGD ${displayValue(record.monthly_allowance)}` }), card.lastChild);
+      list.append(card);
+    });
+    section.append(records.length ? list : empty("No employment/payroll history has been recorded for this driver."));
+    content.replaceChildren(section);
+  }
+
   async function renderRegister(kind) {
     const config = registerConfig[kind];
     const records = await readJson(config.endpoint);
@@ -594,6 +663,10 @@
       if (kind === "customers") {
         const profile = button("Open profile", "primary-button");
         profile.addEventListener("click", () => renderCustomerProfile(record));
+        actions.unshift(profile);
+      } else if (kind === "drivers") {
+        const profile = button("Open private profile", "primary-button");
+        profile.addEventListener("click", () => renderDriverProfile(record));
         actions.unshift(profile);
       }
       const card = recordCard(record.name, record.status, actions);

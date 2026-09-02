@@ -41,6 +41,10 @@ def upgrade() -> None:
             "effective_start_date",
             name="uq_recurring_services_customer_reference_start",
         ),
+        sa.UniqueConstraint(
+            "replaces_recurring_service_id",
+            name="uq_recurring_services_single_successor",
+        ),
     )
     op.create_check_constraint(
         "ck_recurring_services_status",
@@ -62,6 +66,14 @@ def upgrade() -> None:
         "recurring_services",
         "effective_end_date IS NULL OR effective_end_date >= effective_start_date",
     )
+    op.create_index(
+        "uq_recurring_services_live_reference",
+        "recurring_services",
+        ["customer_id", "service_reference"],
+        unique=True,
+        postgresql_where=sa.text("status IN ('active', 'paused')"),
+        sqlite_where=sa.text("status IN ('active', 'paused')"),
+    )
 
     op.create_table(
         "recurring_service_days",
@@ -69,11 +81,6 @@ def upgrade() -> None:
         sa.Column("recurring_service_id", sa.Integer(), nullable=False),
         sa.Column("weekday", sa.Integer(), nullable=False),
         sa.ForeignKeyConstraint(["recurring_service_id"], ["recurring_services.id"], ondelete="CASCADE"),
-        sa.UniqueConstraint(
-            "recurring_service_id",
-            "stop_order",
-            name="uq_recurring_service_stops_service_order",
-        ),
         sa.UniqueConstraint("recurring_service_id", "weekday", name="uq_recurring_service_days_service_weekday"),
     )
     op.create_check_constraint(
@@ -90,6 +97,11 @@ def upgrade() -> None:
         sa.Column("location_name", sa.String(160), nullable=False),
         sa.Column("scheduled_time", sa.Time(), nullable=False),
         sa.ForeignKeyConstraint(["recurring_service_id"], ["recurring_services.id"], ondelete="CASCADE"),
+        sa.UniqueConstraint(
+            "recurring_service_id",
+            "stop_order",
+            name="uq_recurring_service_stops_service_order",
+        ),
     )
     op.create_check_constraint(
         "ck_recurring_service_stops_stop_order",

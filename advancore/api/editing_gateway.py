@@ -13,6 +13,8 @@ from typing import Iterator, Protocol
 from advancore.api.schemas import (
     CustomerResponse,
     DriverResponse,
+    DriverEmploymentCreateRequest,
+    DriverEmploymentResponse,
     FinancialEntryResponse,
     FuelEntryResponse,
     KnowledgeResponse,
@@ -89,6 +91,10 @@ class EditingGateway(Protocol):
     ) -> DriverResponse: ...
 
     def set_driver_status(self, identifier: int, value: str) -> DriverResponse: ...
+
+    def create_driver_employment_record(
+        self, payload: DriverEmploymentCreateRequest
+    ) -> DriverEmploymentResponse: ...
 
     def create_customer(
         self, name: str, customer_reference: str | None
@@ -464,6 +470,31 @@ class DatabaseEditingGateway:
             raise EditingValidationError(str(exc)) from exc
         except DriverNotFoundError as exc:
             raise EditingNotFoundError(str(exc)) from exc
+
+    def create_driver_employment_record(
+        self, payload: DriverEmploymentCreateRequest
+    ) -> DriverEmploymentResponse:
+        from advancore.repositories import DriverEmploymentRepository
+        from advancore.services.driver_employment_service import (
+            DriverEmploymentConflictError,
+            DriverEmploymentNotFoundError,
+            DriverEmploymentService,
+            DriverEmploymentValidationError,
+        )
+
+        values = payload.model_dump(exclude={"confirmed"})
+        try:
+            with self._session() as session:
+                item = DriverEmploymentService(
+                    DriverEmploymentRepository(session), self._activity(session)
+                ).create_record(**values)
+                return DriverEmploymentResponse.model_validate(item)
+        except DriverEmploymentValidationError as exc:
+            raise EditingValidationError(str(exc)) from exc
+        except DriverEmploymentNotFoundError as exc:
+            raise EditingNotFoundError(str(exc)) from exc
+        except DriverEmploymentConflictError as exc:
+            raise EditingConflictError(str(exc)) from exc
 
     def create_customer(
         self, name: str, customer_reference: str | None

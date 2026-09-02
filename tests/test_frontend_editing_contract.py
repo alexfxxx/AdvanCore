@@ -37,7 +37,7 @@ def test_editing_client_uses_same_origin_confirmation_and_action_token():
     assert "http://" not in javascript
     assert "https://" not in javascript
     assert "/api/orchestrations" not in javascript
-    assert "worker" not in javascript.lower()
+    assert "launch worker" not in javascript.lower()
 
 
 def test_editing_client_exposes_only_approved_existing_business_fields():
@@ -87,3 +87,15 @@ def test_customer_profile_contains_recurring_services_without_new_top_level_tab(
     assert "fixed monthly tender service" in javascript
     assert "Open profile" in javascript
     assert 'data-manager-tab="recurring-services"' not in html
+
+
+def test_driver_profile_contains_private_payroll_history_without_new_top_level_tab():
+    javascript = (ROOT / "frontend" / "editing.js").read_text(encoding="utf-8")
+    html = (ROOT / "frontend" / "index.html").read_text(encoding="utf-8")
+
+    assert "Private Employment/Payroll history" in javascript
+    assert "/api/driver-employment-records" in javascript
+    assert "Local / PR — CPF" in javascript
+    assert "Foreign worker — levy" in javascript
+    assert "Open private profile" in javascript
+    assert 'data-manager-tab="payroll"' not in html

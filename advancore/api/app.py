@@ -45,6 +45,7 @@ LOCAL_EDIT_PATH_PREFIXES = (
     "/api/legal-entities",
     "/api/vehicles",
     "/api/drivers",
+    "/api/driver-employment-records",
     "/api/customers",
     "/api/routes",
     "/api/trips",

@@ -5,11 +5,13 @@ from sqlalchemy import (
     CheckConstraint,
     Date,
     ForeignKey,
+    Index,
     Integer,
     Numeric,
     String,
     Time,
     UniqueConstraint,
+    text,
 )
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -33,6 +35,18 @@ class RecurringService(TimestampMixin, Base):
             "service_reference",
             "effective_start_date",
             name="uq_recurring_services_customer_reference_start",
+        ),
+        UniqueConstraint(
+            "replaces_recurring_service_id",
+            name="uq_recurring_services_single_successor",
+        ),
+        Index(
+            "uq_recurring_services_live_reference",
+            "customer_id",
+            "service_reference",
+            unique=True,
+            postgresql_where=text("status IN ('active', 'paused')"),
+            sqlite_where=text("status IN ('active', 'paused')"),
         ),
     )
 

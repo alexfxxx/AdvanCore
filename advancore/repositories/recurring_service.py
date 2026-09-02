@@ -31,6 +31,13 @@ class RecurringServiceRepository:
             .options(joinedload(RecurringService.days), joinedload(RecurringService.stops))
         ).unique().scalar_one_or_none()
 
+    def get_by_id_for_update(self, identifier: int) -> RecurringService | None:
+        return self._session.execute(
+            select(RecurringService)
+            .where(RecurringService.id == identifier)
+            .with_for_update()
+        ).scalar_one_or_none()
+
     def list_by_customer(self, customer_id: int) -> Sequence[RecurringService]:
         return self._session.execute(
             select(RecurringService)

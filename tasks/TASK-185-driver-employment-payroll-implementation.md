@@ -1,6 +1,6 @@
 # TASK-185 — Driver Employment and Payroll Implementation
 
-STATUS: READY
+STATUS: COMPLETE
 
 ## Objective
 
@@ -40,6 +40,7 @@ with no statutory calculation and no effect on operational availability.
 ## Allowed changed-file scope
 
 - `tasks/TASK-182-driver-employment-payroll-business-brief.md`
+- `tasks/TASK-183-customer-recurring-services-implementation.md`
 - `tasks/TASK-184-driver-employment-payroll-schema-proposal.md`
 - `tasks/TASK-185-driver-employment-payroll-implementation.md`
 - `tasks/module-briefs/driver-employment-payroll.md`
@@ -49,6 +50,7 @@ with no statutory calculation and no effect on operational availability.
 - `advancore/repositories/__init__.py`
 - `advancore/repositories/driver_employment.py`
 - `advancore/services/driver_employment_service.py`
+- `advancore/services/activity_service.py`
 - `advancore/api/app.py`
 - `advancore/api/dependencies.py`
 - `advancore/api/editing_gateway.py`
@@ -58,6 +60,7 @@ with no statutory calculation and no effect on operational availability.
 - `frontend/editing.js`
 - `tests/test_driver_employment_service.py`
 - `tests/test_api_driver_employment.py`
+- `tests/test_activity_service.py`
 - `tests/test_frontend_editing_contract.py`
 
 ## Database impact
@@ -67,14 +70,14 @@ operational records remain unchanged.
 
 ## Acceptance criteria
 
-- [ ] Records list newest effective month first under the selected driver.
-- [ ] Local/PR accepts employer CPF and rejects levy.
-- [ ] Foreign-worker-with-levy accepts levy and rejects CPF.
-- [ ] Salary, CPF, levy and allowance reject negative values.
-- [ ] Employment status never mutates Driver status.
-- [ ] Browser writes require loopback origin, action token and confirmation.
-- [ ] No real employee value appears in code, tests, logs or Git.
-- [ ] Relevant and full tests pass and completion evidence is recorded.
+- [x] Records list newest effective month first under the selected driver.
+- [x] Local/PR accepts employer CPF and rejects levy.
+- [x] Foreign-worker-with-levy accepts levy and rejects CPF.
+- [x] Salary, CPF, levy and allowance reject negative values.
+- [x] Employment status never mutates Driver status.
+- [x] Browser writes require loopback origin, action token and confirmation.
+- [x] No real employee value appears in code, tests, logs or Git.
+- [x] Relevant and full tests pass and completion evidence is recorded.
 
 ## Test requirements
 
@@ -103,27 +106,46 @@ None
 
 ### Implemented
 
-Pending.
+- Added effective-month Driver Employment/Payroll history with manual monthly
+  SGD employer-cost facts.
+- Added mutually exclusive local/PR CPF and foreign-worker levy validation.
+- Added loopback read/write API contracts, bounded activity evidence and a
+  private selected-driver profile surface.
+- Preserved operational Driver status independently.
 
 ### Files changed
 
-Pending.
+- This task and the approved payroll design records.
+- Driver employment model, repository, service and additive migration.
+- Shared API application, schemas, gateways and routes.
+- Activity action allow-list, primary frontend manager and synthetic tests.
 
 ### Database changes
 
-Migration created but not applied.
+Created revision `f5e185payroll` chained from `f4e183recurring`. It has not been
+applied to any database.
 
 ### Tests and results
 
-Pending.
+- Focused payroll/recurring/API/audit/frontend/migration tests: 70 passed.
+- Full isolated regression after bounded Bugbot repairs: 1,635 passed, 2
+  skipped across two complete alphabetical partitions, with one existing
+  FastAPI test-client deprecation warning.
+- JavaScript syntax: passed.
+- Alembic history: one head at `f5e185payroll`.
+- PostgreSQL offline compilation of both new migrations: passed.
+- Final independent Bugbot pass: clean.
+- `git diff --check`: passed.
 
 ### Assumptions
 
-None.
+An effective month is represented by its first calendar day; the browser month
+picker submits that day explicitly.
 
 ### Risks / unresolved issues
 
 Authentication remains deferred; private values remain local and single-owner.
+Automatic statutory calculations remain intentionally absent.
 
 ### Decisions required
 

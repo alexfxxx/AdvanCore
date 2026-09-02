@@ -73,6 +73,22 @@ class DriverResponse(BaseModel):
     status: str
 
 
+class DriverEmploymentResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    driver_id: int
+    effective_month: date
+    worker_category: Literal["local_pr", "foreign_levy"]
+    basic_salary: Decimal
+    employer_cpf_amount: Decimal | None
+    monthly_levy_amount: Decimal | None
+    monthly_allowance: Decimal | None
+    employment_status: Literal["active", "inactive"]
+    created_at: datetime
+    updated_at: datetime
+
+
 class CustomerResponse(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
@@ -380,6 +396,17 @@ class DriverCreateRequest(ConfirmedRequest):
 
 class DriverStatusRequest(ConfirmedRequest):
     status: Literal["active", "unavailable", "retired"]
+
+
+class DriverEmploymentCreateRequest(ConfirmedRequest):
+    driver_id: StrictInt
+    effective_month: date
+    worker_category: Literal["local_pr", "foreign_levy"]
+    basic_salary: Decimal = Field(ge=0, decimal_places=2)
+    employer_cpf_amount: Decimal | None = Field(default=None, ge=0, decimal_places=2)
+    monthly_levy_amount: Decimal | None = Field(default=None, ge=0, decimal_places=2)
+    monthly_allowance: Decimal | None = Field(default=None, ge=0, decimal_places=2)
+    employment_status: Literal["active", "inactive"]
 
 
 class CustomerCreateRequest(ConfirmedRequest):

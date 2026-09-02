@@ -98,7 +98,10 @@ None. TASK-185 may create, but not apply, the migration.
 
 ### Tests and results
 
-Pending documentation validation.
+- Approved payroll brief and TASK-184 business-module gate: passed.
+- Combined full regression after implementation: 1,628 passed, 2 skipped.
+- Alembic reports one head, `f5e185payroll`.
+- `git diff --check`: passed.
 
 ### Assumptions
 

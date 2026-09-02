@@ -2,6 +2,8 @@ from collections.abc import Sequence
 from datetime import date, time, timedelta
 from decimal import Decimal
 
+from sqlalchemy.exc import IntegrityError
+
 from advancore.models import Customer, RecurringService, RecurringServiceDay, RecurringServiceStop, Route
 from advancore.repositories import CustomerRepository, RecurringServiceRepository, RouteRepository
 from advancore.services.activity_service import ActivityLogService
@@ -161,7 +163,12 @@ class RecurringServiceService:
             )
             for stop in sorted(stops, key=lambda item: item["stop_order"])
         ]
-        saved = self._repo.add(service)
+        try:
+            saved = self._repo.add(service)
+        except IntegrityError as exc:
+            raise RecurringServiceConflictError(
+                "This customer already has a recurring service with that reference."
+            ) from exc
         if self._activity:
             self._activity.record_activity(
                 "recurring_service_created", "recurring_service", saved.id
@@ -174,7 +181,7 @@ class RecurringServiceService:
     def set_status(self, identifier: int, status: str) -> RecurringService:
         if status not in _RECURRING_SERVICE_STATUSES:
             raise RecurringServiceValidationError("Service status is invalid.")
-        item = self._repo.get_by_id_with_children(identifier)
+        item = self._repo.get_by_id_for_update(identifier)
         if item is None:
             raise RecurringServiceNotFoundError("The selected recurring service could not be found.")
         if item.status == "archived":
@@ -202,7 +209,7 @@ class RecurringServiceService:
         weekdays: Sequence[int],
         stops: Sequence[dict],
     ) -> RecurringService:
-        prior = self._repo.get_by_id_with_children(identifier)
+        prior = self._repo.get_by_id_for_update(identifier)
         if prior is None:
             raise RecurringServiceNotFoundError("The selected recurring service could not be found.")
         if prior.status != "active":
@@ -233,7 +240,12 @@ class RecurringServiceService:
             )
 
         prior.status = "archived"
-        prior.effective_end_date = effective_start_date - timedelta(days=1)
+        replacement_boundary = effective_start_date - timedelta(days=1)
+        if (
+            prior.effective_end_date is None
+            or prior.effective_end_date > replacement_boundary
+        ):
+            prior.effective_end_date = replacement_boundary
         self._repo.save(prior)
 
         replacement = RecurringService(
@@ -257,7 +269,12 @@ class RecurringServiceService:
             )
             for stop in sorted(stops, key=lambda item: item["stop_order"])
         ]
-        saved = self._repo.add(replacement)
+        try:
+            saved = self._repo.add(replacement)
+        except IntegrityError as exc:
+            raise RecurringServiceConflictError(
+                "This service already has a replacement. Refresh and review its history."
+            ) from exc
         if self._activity:
             self._activity.record_activity(
                 "recurring_service_replaced", "recurring_service", saved.id

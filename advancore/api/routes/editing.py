@@ -19,6 +19,8 @@ from advancore.api.schemas import (
     CustomerStatusRequest,
     DriverCreateRequest,
     DriverResponse,
+    DriverEmploymentCreateRequest,
+    DriverEmploymentResponse,
     DriverStatusRequest,
     FinancialEntryCreateRequest,
     FinancialEntryResponse,
@@ -217,6 +219,20 @@ def create_driver(payload: DriverCreateRequest, request: Request) -> DriverRespo
         lambda: request.app.state.edit_gateway.create_driver(
             payload.name, payload.employee_reference
         )
+    )
+
+
+@router.post(
+    "/driver-employment-records",
+    response_model=DriverEmploymentResponse,
+    status_code=201,
+)
+def create_driver_employment_record(
+    payload: DriverEmploymentCreateRequest, request: Request
+) -> DriverEmploymentResponse:
+    _confirmed(payload)
+    return _call(
+        lambda: request.app.state.edit_gateway.create_driver_employment_record(payload)
     )
 
 

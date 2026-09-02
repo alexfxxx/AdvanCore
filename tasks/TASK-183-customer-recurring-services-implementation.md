@@ -54,6 +54,7 @@ creating another top-level module.
 - `advancore/repositories/__init__.py`
 - `advancore/repositories/recurring_service.py`
 - `advancore/services/recurring_service_service.py`
+- `advancore/services/activity_service.py`
 - `advancore/api/app.py`
 - `advancore/api/dependencies.py`
 - `advancore/api/editing_gateway.py`
@@ -63,6 +64,8 @@ creating another top-level module.
 - `frontend/editing.js`
 - `tests/test_recurring_service_service.py`
 - `tests/test_api_recurring_services.py`
+- `tests/test_migrations.py`
+- `tests/test_activity_service.py`
 - `tests/test_frontend_editing_contract.py`
 
 ## Database impact
@@ -81,8 +84,7 @@ tables and leaves all existing tables and rows unchanged.
 - [x] All browser writes require loopback origin, action token and explicit
       confirmation.
 - [x] No real customer value appears in code, tests, logs or Git.
-- [x] Focused and surrounding tests pass; full regression remains part of the
-      combined TASK-183/TASK-185 quality gate before publication.
+- [x] Focused, surrounding and full regression tests pass.
 
 ## Test requirements
 
@@ -135,7 +137,11 @@ applied to any database.
 - Focused recurring service/API/frontend tests: 15 passed.
 - Surrounding API, customer, route, repository, model and cutover tests: 44
   passed with an isolated SQLite `DATABASE_URL`.
-- JavaScript syntax and final full regression are required before publication.
+- Combined full regression after bounded Bugbot repairs: 1,635 passed, 2
+  skipped across two complete alphabetical partitions.
+- JavaScript syntax, Alembic single-head chain and `git diff --check`: passed.
+- PostgreSQL offline compilation of both new migrations: passed.
+- Final independent Bugbot pass: clean.
 
 ### Assumptions
 
@@ -145,7 +151,9 @@ by the API and UI.
 ### Risks / unresolved issues
 
 Daily Trip generation remains deferred. The source-text vehicle requirement is
-not interpreted as exact or minimum seating.
+not interpreted as exact or minimum seating. Replacement and status transitions
+lock the predecessor row; database constraints prevent duplicate live references
+and multiple successors.
 
 ### Decisions required
 

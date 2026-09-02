@@ -46,14 +46,14 @@ class FakeEditingGateway:
         return _record(id=32, replaces_recurring_service_id=identifier, effective_start_date=payload.effective_start_date)
 
 
-def _client(tmp_path, read_gateway, edit_gateway):
+def _client(tmp_path, read_gateway, edit_gateway, *, peer="127.0.0.1"):
     frontend = tmp_path / "frontend"
     frontend.mkdir()
     (frontend / "index.html").write_text("<!doctype html>", encoding="utf-8")
     return TestClient(create_app(
         repo_root=tmp_path, frontend_dir=frontend, read_gateway=read_gateway,
         edit_gateway=edit_gateway, orchestration_service=SimpleNamespace(shutdown=lambda: None),
-    ), client=("127.0.0.1", 50000))
+    ), client=(peer, 50000))
 
 
 def _headers(client):
@@ -79,8 +79,21 @@ def test_customer_profile_reads_nested_recurring_services(tmp_path):
     with _client(tmp_path, read_gateway, FakeEditingGateway()) as client:
         response = client.get("/api/customers/7/recurring-services")
     assert response.status_code == 200
+    assert response.headers["cache-control"] == "no-store"
     assert response.json()[0]["monthly_amount"] == "1000.00"
     assert read_gateway.calls == [7]
+
+
+def test_non_loopback_peer_cannot_read_private_recurring_services(tmp_path):
+    gateway = FakeReadGateway()
+    with _client(
+        tmp_path, gateway, FakeEditingGateway(), peer="198.51.100.7"
+    ) as client:
+        response = client.get(
+            "/api/customers/7/recurring-services", headers={"Host": "localhost"}
+        )
+    assert response.status_code == 403
+    assert gateway.calls == []
 
 
 def test_confirmed_create_status_and_replacement_delegate_exact_payloads(tmp_path):

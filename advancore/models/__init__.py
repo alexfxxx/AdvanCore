@@ -1,6 +1,7 @@
 from advancore.models.activity import ActivityLog
 from advancore.models.customer import Customer
 from advancore.models.driver import Driver
+from advancore.models.driver_employment import DriverEmploymentRecord
 from advancore.models.fuel_entry import FuelEntry
 from advancore.models.financial_entry import FinancialEntry
 from advancore.models.base import Base
@@ -22,6 +23,7 @@ __all__ = [
     "Base",
     "Customer",
     "Driver",
+    "DriverEmploymentRecord",
     "FuelEntry",
     "FinancialEntry",
     "Project",

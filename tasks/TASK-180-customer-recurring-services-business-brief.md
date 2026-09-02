@@ -37,7 +37,7 @@ without repeated manual entry or loss of the tender-level meaning.
 
 - Models, repositories, services, APIs, frontend code or migrations.
 - Applying a migration or writing any operational record.
-- Importing the Eagles, TOS or any other customer source data.
+- Importing any real customer source data.
 - Daily-trip generation, driver or vehicle assignment, invoicing, GST treatment,
   public-holiday adjustments, service credits or payroll.
 - A new top-level navigation module, deployment, credentials or `main`.
