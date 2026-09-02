@@ -22,8 +22,9 @@ data.
 .venv/bin/python scripts/check-local-interfaces.py
 ```
 
-Open `http://127.0.0.1:8000` for the decoupled console. Streamlit on
-`http://127.0.0.1:8501` remains a transitional interface for workflows not yet
+Open `http://127.0.0.1:8000` for the decoupled console. The historical port
+`http://127.0.0.1:8501` redirects to it. Streamlit on
+`http://127.0.0.1:8502` remains a transitional interface for workflows not yet
 moved to the decoupled console.
 
 An unavailable check means unavailable; it does not trigger automatic repair or

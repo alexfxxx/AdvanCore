@@ -127,14 +127,15 @@ no POST, PUT, PATCH or DELETE route.
 
 After installing the pinned project requirements in an isolated environment,
 the normal launcher starts PostgreSQL, applies already-approved migrations, and
-starts both local interfaces:
+starts the primary app, compatibility redirect and temporary interface:
 
 ```bash
 ./scripts/start-advancore.sh
 ```
 
-Open `http://127.0.0.1:8000` as the primary AdvanCore app. Use
-`http://127.0.0.1:8501` only for temporary admin/editing workflows. Run
+Open `http://127.0.0.1:8000` as the primary AdvanCore app. Port 8501 redirects
+old local bookmarks to that primary app. Use `http://127.0.0.1:8502` only for
+temporary admin/editing workflows. Run
 `./scripts/check-local-interfaces.py` for a bounded readiness check. Binding to
 `0.0.0.0` remains outside scope.
 

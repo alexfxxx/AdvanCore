@@ -73,8 +73,9 @@ not reuse the example database password in production.
    ./scripts/start-advancore.sh
    ```
 
-Open `http://127.0.0.1:8000` as the main AdvanCore app. Use
-`http://127.0.0.1:8501` only for temporary admin/editing workflows that have not
+Open `http://127.0.0.1:8000` as the main AdvanCore app. The historical
+`http://127.0.0.1:8501` address redirects to that same primary app. Use
+`http://127.0.0.1:8502` only for temporary admin/editing workflows that have not
 yet transferred to the primary interface. The Settings page shows whether the
 database is configured and reachable without displaying its connection
 details. When finished, stop the local database with

@@ -3,7 +3,8 @@
 ## Decision
 
 FACT: `http://127.0.0.1:8000` is the main AdvanCore application and the normal
-owner starting point. `http://127.0.0.1:8501` is a temporary admin/editing
+owner starting point. The historical `http://127.0.0.1:8501` address redirects
+to that primary app. `http://127.0.0.1:8502` is the temporary admin/editing
 interface, not a competing main app.
 
 The two interfaces reuse the same Python services and PostgreSQL operational
@@ -72,6 +73,8 @@ remain outside this cutover.
 
 ## Retirement condition
 
-Port 8501 may be stopped by default only after every required inventory item
-has an equivalent verified primary-console workflow and the owner explicitly
-approves retirement. Until then it remains available but clearly secondary.
+The Streamlit interface on port 8502 may be stopped by default only after every
+required inventory item has an equivalent verified primary-console workflow
+and the owner explicitly approves retirement. Until then it remains available
+but clearly secondary. Port 8501 stays as a compatibility redirect so old local
+bookmarks lead to the primary app instead of the temporary interface.

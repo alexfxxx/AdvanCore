@@ -23,6 +23,14 @@ def _local_startup_fixture(tmp_path: Path) -> tuple[Path, Path, dict[str, str]]:
     (root / ".venv" / "bin").mkdir(parents=True)
     (root / "fake-bin").mkdir()
     shutil.copy2(START_SCRIPT, root / "scripts" / START_SCRIPT.name)
+    shutil.copy2(
+        REPOSITORY_ROOT / "scripts" / "redirect-legacy-interface.py",
+        root / "scripts" / "redirect-legacy-interface.py",
+    )
+    shutil.copy2(
+        REPOSITORY_ROOT / "scripts" / "check-local-interfaces.py",
+        root / "scripts" / "check-local-interfaces.py",
+    )
     shutil.copy2(REPOSITORY_ROOT / "docker-compose.yml", root / "docker-compose.yml")
     shutil.copy2(REPOSITORY_ROOT / ".env.example", root / ".env.example")
     (root / "app.py").write_text("", encoding="utf-8")
@@ -145,8 +153,14 @@ def test_start_stops_verified_legacy_and_runs_canonical_service(tmp_path):
     assert ".venv/bin/alembic upgrade head" in calls
     assert ".venv/bin/streamlit run" in calls
     assert "--server.address 127.0.0.1" in calls
+    assert "--server.port 8502" in calls
+    assert "redirect-legacy-interface.py" in calls
     assert "PRIMARY APP: http://127.0.0.1:8000" in result.stdout
-    assert "Temporary admin/editing interface: http://127.0.0.1:8501" in result.stdout
+    assert (
+        "Historical address redirects to the primary app: http://127.0.0.1:8501"
+        in result.stdout
+    )
+    assert "Temporary admin/editing interface: http://127.0.0.1:8502" in result.stdout
 
 
 def test_fresh_start_creates_shared_volume_before_compose(tmp_path):
