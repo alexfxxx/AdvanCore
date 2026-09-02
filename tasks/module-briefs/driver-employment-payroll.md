@@ -20,27 +20,48 @@ private employee data or inventing the meanings of source CSV columns.
   driver.
 - FACT: The source data headings include employment type, basic salary, CPF
   rate, levy amount, allowance and status.
+- FACT: The owner wants to choose a local/PR CPF category or a foreign-worker
+  levy category for each worker.
+- FACT: The first version records either the actual employer CPF amount or the
+  actual foreign-worker levy amount manually and does not calculate it.
+- FACT: Allowance is additional incentive pay from the company to the worker.
+- FACT: The inspected private employee workbook has no Date of Birth or Age
+  field and identifies the covered group as local employees, comprising
+  Singapore citizens and Permanent Residents.
+- FACT: Official CPF contribution rates vary by age, wage and citizenship or
+  Permanent Resident year; a flat 17% formula is not universally correct.
 - FACT: Real employee and payroll values must never be stored in GitHub.
 
 ## Required fields
 
-The source headings are candidates only until the owner confirms their exact
-meaning, unit, allowed values and history behavior.
+Approved first-slice fields are a worker category, basic salary, employer CPF
+amount, foreign-worker levy amount and incentive allowance. CPF and levy are
+mutually exclusive: the local/PR category permits employer CPF and the
+foreign-worker-with-levy category permits levy. Salary/allowance cadence,
+effective history and the source status meaning remain unresolved.
 
 ## Reference sources
 
-The owner's private July 2026 driver file and later owner-confirmed employment
-records are the sources. They remain local and are not copied into Git.
+The owner's private July 2026 driver file, the inspected private employee
+workbook and later owner-confirmed employment records are the sources. They
+remain local and are not copied into Git. CPF rules must be checked against CPF
+Board sources and levy treatment against Ministry of Manpower sources at the
+time of use.
 
 ## Calculations
 
-No calculation is approved. CPF, levy, allowance, gross pay and statutory
-obligations must not be inferred.
+No calculation is approved. The owner enters the actual employer CPF amount or
+monthly levy amount. The application must not multiply salary by 17%, derive age
+from an identifier, calculate employee CPF deductions, infer levy tiers or
+calculate gross pay.
 
 ## Workflows and approvals
 
-Private view and edit controls may be proposed only after field meanings and
-history rules are approved. Import remains preview-first and separately approved.
+The selected driver may show a private Employment/Payroll segment. Selecting
+local/PR permits employer CPF entry and clears or disables levy entry. Selecting
+foreign worker with levy permits levy entry and clears or disables CPF entry.
+Both must never be active for the same effective record. Import remains
+preview-first and separately approved.
 
 ## Imports
 
@@ -50,7 +71,8 @@ must not send any row to an external AI worker.
 ## Reports and filters
 
 No payroll report or cross-driver salary view is approved. The intended first
-surface is the selected-driver private detail segment.
+surface is the selected-driver private detail segment showing only the approved
+category and current employer-cost facts.
 
 ## Database impact
 
@@ -61,17 +83,29 @@ None at the brief stage. Any later proposal must be additive and remain local.
 Employment and payroll values are personal and financially sensitive. Until
 authentication is implemented, the surface remains local and single-owner.
 Singapore employment, CPF, levy and tax meanings require owner or professional
-verification and cannot be created by AI assumption.
+verification and cannot be created by AI assumption. In 2026 the 17% CPF rate is
+only the employer share for certain full-rate employees aged 55 and below and
+above the relevant wage band; other age, wage and PR-year cases differ. Foreign
+worker levy is an employer cost and must not be deducted from a worker's salary.
 
 ## Owner decisions
 
-Confirm employment-type values; the meaning and treatment of CPF rate; the unit
-and cadence of salary, levy and allowance; effective-date and history behavior;
-and whether source status is operational driver status or employment status.
+Confirm whether basic salary and allowance are monthly SGD amounts; whether
+changes create effective-month history; and whether source status is operational
+driver status or a distinct employment status.
 
 ## Acceptance examples
 
 - Normal: an approved private field is shown only inside the selected driver.
+- Normal: a local/PR worker has an owner-entered employer CPF amount and no levy
+  amount.
+- Normal: a levy-liable foreign worker has an owner-entered monthly levy amount
+  and no CPF amount.
 - Boundary: a missing approved value displays as not recorded, never zero.
+- Boundary: the absence of birth date prevents automatic CPF calculation but
+  does not prevent recording an actual paid CPF amount.
+- Invalid: the same employment record contains both CPF and levy amounts.
+- Invalid: AdvanCore applies 17% automatically without the required age, wage
+  and citizenship/PR-year facts.
 - Invalid: a worker attempts to place a real salary in a fixture or Git-tracked
   file and the change is rejected.
