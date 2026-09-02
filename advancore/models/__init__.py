@@ -7,6 +7,11 @@ from advancore.models.base import Base
 from advancore.models.knowledge import KnowledgeItem
 from advancore.models.legal_entity import LegalEntity
 from advancore.models.project import Project
+from advancore.models.recurring_service import (
+    RecurringService,
+    RecurringServiceDay,
+    RecurringServiceStop,
+)
 from advancore.models.route import Route
 from advancore.models.setting import SystemSetting
 from advancore.models.vehicle import Vehicle
@@ -20,6 +25,9 @@ __all__ = [
     "FuelEntry",
     "FinancialEntry",
     "Project",
+    "RecurringService",
+    "RecurringServiceDay",
+    "RecurringServiceStop",
     "Route",
     "KnowledgeItem",
     "LegalEntity",

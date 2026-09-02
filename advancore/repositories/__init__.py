@@ -12,6 +12,7 @@ from advancore.repositories.financial_entry import FinancialEntryRepository
 from advancore.repositories.knowledge import KnowledgeItemRepository
 from advancore.repositories.legal_entity import LegalEntityRepository
 from advancore.repositories.project import ProjectRepository
+from advancore.repositories.recurring_service import RecurringServiceRepository
 from advancore.repositories.route import RouteRepository
 from advancore.repositories.setting import SystemSettingRepository
 from advancore.repositories.vehicle import VehicleRepository
@@ -27,6 +28,7 @@ __all__ = [
     "KnowledgeItemRepository",
     "LegalEntityRepository",
     "ProjectRepository",
+    "RecurringServiceRepository",
     "RouteRepository",
     "SystemSettingRepository",
     "VehicleRepository",

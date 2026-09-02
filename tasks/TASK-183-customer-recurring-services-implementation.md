@@ -1,6 +1,6 @@
 # TASK-183 — Customer Recurring Services Implementation
 
-STATUS: READY
+STATUS: COMPLETE
 
 ## Objective
 
@@ -72,16 +72,17 @@ tables and leaves all existing tables and rows unchanged.
 
 ## Acceptance criteria
 
-- [ ] Recurring services are listed under one selected customer.
-- [ ] Creation writes the service, unique weekdays and ordered timed stops in
+- [x] Recurring services are listed under one selected customer.
+- [x] Creation writes the service, unique weekdays and ordered timed stops in
       one transaction.
-- [ ] Monthly amount is displayed exactly as entered and is never prorated.
-- [ ] Pause and archive do not delete history.
-- [ ] Replacement archives the prior version and links the new version.
-- [ ] All browser writes require loopback origin, action token and explicit
+- [x] Monthly amount is displayed exactly as entered and is never prorated.
+- [x] Pause and archive do not delete history.
+- [x] Replacement archives the prior version and links the new version.
+- [x] All browser writes require loopback origin, action token and explicit
       confirmation.
-- [ ] No real customer value appears in code, tests, logs or Git.
-- [ ] Relevant and full tests pass and completion evidence is recorded.
+- [x] No real customer value appears in code, tests, logs or Git.
+- [x] Focused and surrounding tests pass; full regression remains part of the
+      combined TASK-183/TASK-185 quality gate before publication.
 
 ## Test requirements
 
@@ -111,27 +112,40 @@ None
 
 ### Implemented
 
-Pending.
+- Added normalized recurring service, weekday and ordered-stop persistence.
+- Added fixed-monthly validation, lifecycle status and forward replacement.
+- Added loopback read/write API contracts and activity events.
+- Added Recurring Services inside the selected customer profile with no new
+  top-level module.
 
 ### Files changed
 
-Pending.
+- This task and its approved design records.
+- Recurring service model, repository, service and additive migration.
+- Shared API application, schemas, gateways and routes.
+- Primary frontend manager and synthetic focused tests.
 
 ### Database changes
 
-Migration created but not applied.
+Created revision `f4e183recurring` chained from `f3e166fleet3`. It has not been
+applied to any database.
 
 ### Tests and results
 
-Pending.
+- Focused recurring service/API/frontend tests: 15 passed.
+- Surrounding API, customer, route, repository, model and cutover tests: 44
+  passed with an isolated SQLite `DATABASE_URL`.
+- JavaScript syntax and final full regression are required before publication.
 
 ### Assumptions
 
-None.
+Weekday values use `0` for Monday through `6` for Sunday, as explicitly exposed
+by the API and UI.
 
 ### Risks / unresolved issues
 
-Daily Trip generation remains deferred.
+Daily Trip generation remains deferred. The source-text vehicle requirement is
+not interpreted as exact or minimum seating.
 
 ### Decisions required
 

@@ -76,3 +76,14 @@ def test_editing_client_exposes_only_approved_existing_business_fields():
     assert "diesel_invoice" not in javascript
     assert "electric_charging" not in javascript
     assert "password" not in javascript.lower()
+
+
+def test_customer_profile_contains_recurring_services_without_new_top_level_tab():
+    javascript = (ROOT / "frontend" / "editing.js").read_text(encoding="utf-8")
+    html = (ROOT / "frontend" / "index.html").read_text(encoding="utf-8")
+
+    assert "Recurring Services stay inside this customer profile" in javascript
+    assert "/api/recurring-services" in javascript
+    assert "fixed monthly tender service" in javascript
+    assert "Open profile" in javascript
+    assert 'data-manager-tab="recurring-services"' not in html

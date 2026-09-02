@@ -32,6 +32,10 @@ from advancore.api.schemas import (
     ProjectCreateRequest,
     ProjectEditRequest,
     ProjectResponse,
+    RecurringServiceCreateRequest,
+    RecurringServiceReplaceRequest,
+    RecurringServiceResponse,
+    RecurringServiceStatusRequest,
     RouteCreateRequest,
     RouteResponse,
     RouteStatusRequest,
@@ -355,5 +359,54 @@ def create_financial_entry(
             payload.description,
             payload.trip_id,
             payload.customer_id,
+        )
+    )
+
+
+@router.post(
+    "/recurring-services",
+    response_model=RecurringServiceResponse,
+    status_code=201,
+)
+def create_recurring_service(
+    payload: RecurringServiceCreateRequest, request: Request
+) -> RecurringServiceResponse:
+    _confirmed(payload)
+    return _call(
+        lambda: request.app.state.edit_gateway.create_recurring_service(payload)
+    )
+
+
+@router.post(
+    "/recurring-services/{identifier}/status",
+    response_model=RecurringServiceResponse,
+)
+def set_recurring_service_status(
+    identifier: int,
+    payload: RecurringServiceStatusRequest,
+    request: Request,
+) -> RecurringServiceResponse:
+    _confirmed(payload)
+    return _call(
+        lambda: request.app.state.edit_gateway.set_recurring_service_status(
+            identifier, payload
+        )
+    )
+
+
+@router.post(
+    "/recurring-services/{identifier}/replacement",
+    response_model=RecurringServiceResponse,
+    status_code=201,
+)
+def replace_recurring_service(
+    identifier: int,
+    payload: RecurringServiceReplaceRequest,
+    request: Request,
+) -> RecurringServiceResponse:
+    _confirmed(payload)
+    return _call(
+        lambda: request.app.state.edit_gateway.replace_recurring_service(
+            identifier, payload
         )
     )

@@ -2,7 +2,7 @@
 
 from datetime import date
 
-from fastapi import APIRouter, HTTPException, Query, Request, status
+from fastapi import APIRouter, HTTPException, Path, Query, Request, status
 
 from advancore.api.dependencies import ReadModelUnavailable
 from advancore.api.schemas import (
@@ -15,6 +15,7 @@ from advancore.api.schemas import (
     FuelEntryResponse,
     FuelIntelligenceResponse,
     FuelMarketBenchmarkResponse,
+    RecurringServiceResponse,
     RouteResponse,
     TripAssignmentResponse,
     TripResponse,
@@ -108,6 +109,23 @@ def financial_entries(request: Request) -> list[FinancialEntryResponse]:
 def activity_log(request: Request) -> list[ActivityLogResponse]:
     try:
         return list(request.app.state.read_gateway.list_activities())
+    except ReadModelUnavailable as exc:
+        raise _unavailable(exc) from exc
+
+
+@router.get(
+    "/customers/{customer_id}/recurring-services",
+    response_model=list[RecurringServiceResponse],
+)
+def customer_recurring_services(
+    request: Request, customer_id: int = Path(gt=0)
+) -> list[RecurringServiceResponse]:
+    try:
+        return list(
+            request.app.state.read_gateway.list_recurring_services_by_customer(
+                customer_id
+            )
+        )
     except ReadModelUnavailable as exc:
         raise _unavailable(exc) from exc
 

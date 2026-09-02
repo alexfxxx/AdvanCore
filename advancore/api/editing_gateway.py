@@ -18,6 +18,10 @@ from advancore.api.schemas import (
     KnowledgeResponse,
     LegalEntityResponse,
     ProjectResponse,
+    RecurringServiceCreateRequest,
+    RecurringServiceReplaceRequest,
+    RecurringServiceResponse,
+    RecurringServiceStatusRequest,
     RouteResponse,
     TripAssignmentResponse,
     TripResponse,
@@ -131,6 +135,18 @@ class EditingGateway(Protocol):
         trip_id: int | None,
         customer_id: int | None,
     ) -> FinancialEntryResponse: ...
+
+    def create_recurring_service(
+        self, payload: RecurringServiceCreateRequest
+    ) -> RecurringServiceResponse: ...
+
+    def set_recurring_service_status(
+        self, identifier: int, payload: RecurringServiceStatusRequest
+    ) -> RecurringServiceResponse: ...
+
+    def replace_recurring_service(
+        self, identifier: int, payload: RecurringServiceReplaceRequest
+    ) -> RecurringServiceResponse: ...
 
 
 class DatabaseEditingGateway:
@@ -666,3 +682,117 @@ class DatabaseEditingGateway:
                 return FinancialEntryResponse.model_validate(item)
         except FinancialEntryValidationError as exc:
             raise EditingValidationError(str(exc)) from exc
+
+    def create_recurring_service(
+        self, payload: RecurringServiceCreateRequest
+    ) -> RecurringServiceResponse:
+        from advancore.repositories import (
+            CustomerRepository,
+            RecurringServiceRepository,
+            RouteRepository,
+        )
+        from advancore.services.recurring_service_service import (
+            RecurringServiceConflictError,
+            RecurringServiceService,
+            RecurringServiceValidationError,
+        )
+
+        values = payload.model_dump(exclude={"confirmed"})
+        try:
+            with self._session() as session:
+                item = RecurringServiceService(
+                    RecurringServiceRepository(session),
+                    CustomerRepository(session),
+                    RouteRepository(session),
+                    self._activity(session),
+                ).create_service(
+                    customer_id=values["customer_id"],
+                    route_id=values["route_id"],
+                    service_reference=values["service_reference"],
+                    vehicle_requirement=values.get("vehicle_requirement"),
+                    monthly_amount=values["monthly_amount"],
+                    currency_code=values["currency_code"],
+                    effective_start_date=values["effective_start_date"],
+                    effective_end_date=values.get("effective_end_date"),
+                    weekdays=values["weekdays"],
+                    stops=values["stops"],
+                )
+                return RecurringServiceResponse.model_validate(item)
+        except RecurringServiceValidationError as exc:
+            raise EditingValidationError(str(exc)) from exc
+        except RecurringServiceConflictError as exc:
+            raise EditingConflictError(str(exc)) from exc
+
+    def set_recurring_service_status(
+        self, identifier: int, payload: RecurringServiceStatusRequest
+    ) -> RecurringServiceResponse:
+        from advancore.repositories import (
+            CustomerRepository,
+            RecurringServiceRepository,
+            RouteRepository,
+        )
+        from advancore.services.recurring_service_service import (
+            RecurringServiceConflictError,
+            RecurringServiceNotFoundError,
+            RecurringServiceService,
+            RecurringServiceValidationError,
+        )
+
+        try:
+            with self._session() as session:
+                item = RecurringServiceService(
+                    RecurringServiceRepository(session),
+                    CustomerRepository(session),
+                    RouteRepository(session),
+                    self._activity(session),
+                ).set_status(identifier, payload.status)
+                return RecurringServiceResponse.model_validate(item)
+        except RecurringServiceValidationError as exc:
+            raise EditingValidationError(str(exc)) from exc
+        except RecurringServiceNotFoundError as exc:
+            raise EditingNotFoundError(str(exc)) from exc
+        except RecurringServiceConflictError as exc:
+            raise EditingConflictError(str(exc)) from exc
+
+    def replace_recurring_service(
+        self, identifier: int, payload: RecurringServiceReplaceRequest
+    ) -> RecurringServiceResponse:
+        from advancore.repositories import (
+            CustomerRepository,
+            RecurringServiceRepository,
+            RouteRepository,
+        )
+        from advancore.services.recurring_service_service import (
+            RecurringServiceConflictError,
+            RecurringServiceNotFoundError,
+            RecurringServiceService,
+            RecurringServiceValidationError,
+        )
+
+        values = payload.model_dump(exclude={"confirmed"})
+        try:
+            with self._session() as session:
+                item = RecurringServiceService(
+                    RecurringServiceRepository(session),
+                    CustomerRepository(session),
+                    RouteRepository(session),
+                    self._activity(session),
+                ).replace_service(
+                    identifier,
+                    service_reference=values["service_reference"],
+                    route_id=values["route_id"],
+                    vehicle_requirement=values.get("vehicle_requirement"),
+                    monthly_amount=values["monthly_amount"],
+                    currency_code=values["currency_code"],
+                    effective_start_date=values["effective_start_date"],
+                    effective_end_date=values.get("effective_end_date"),
+                    weekdays=values["weekdays"],
+                    stops=values["stops"],
+                )
+                return RecurringServiceResponse.model_validate(item)
+        except RecurringServiceValidationError as exc:
+            raise EditingValidationError(str(exc)) from exc
+        except RecurringServiceNotFoundError as exc:
+            raise EditingNotFoundError(str(exc)) from exc
+        except RecurringServiceConflictError as exc:
+            raise EditingConflictError(str(exc)) from exc
