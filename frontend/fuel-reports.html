@@ -1,0 +1,156 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="description" content="AdvanCore local customer fuel reports" />
+    <title>Fuel Reports · AdvanCore</title>
+    <link rel="stylesheet" href="/assets/styles.css?v=task-189-1" />
+    <script src="/assets/fuel-reports.js?v=task-189-1" defer></script>
+  </head>
+  <body class="fuel-report-page">
+    <div class="ambient ambient-one" aria-hidden="true"></div>
+    <div class="ambient ambient-two" aria-hidden="true"></div>
+
+    <header class="shell header-row report-page-header">
+      <div>
+        <p class="eyebrow">LOCAL READ-ONLY WORKSPACE</p>
+        <h1>FUEL REPORTS</h1>
+        <p class="subtitle">Verified market evidence and saved customer contract terms.</p>
+      </div>
+      <div class="header-status report-header-actions">
+        <span class="boundary-badge">DRAFT ONLY</span>
+        <a class="secondary-action-button button-link" href="/">Back to dashboard</a>
+      </div>
+    </header>
+
+    <main class="shell fuel-report-layout">
+      <section class="panel fuel-report-controls" aria-labelledby="report-controls-title">
+        <div class="panel-heading">
+          <div>
+            <p class="section-code">01 / SELECT FACTS</p>
+            <h2 id="report-controls-title">Build customer report</h2>
+          </div>
+          <span class="boundary-badge muted">NO DATABASE WRITES</span>
+        </div>
+        <p class="supporting-copy">
+          Select a saved customer service. Missing contract terms or an unverified benchmark will stop the calculation.
+        </p>
+        <form id="fuel-report-form" class="report-filter-form">
+          <label>Customer
+            <select id="report-customer" required disabled>
+              <option value="">Loading customers…</option>
+            </select>
+          </label>
+          <label>Recurring service
+            <select id="report-service" required disabled>
+              <option value="">Select a customer first</option>
+            </select>
+          </label>
+          <div class="report-date-grid">
+            <label>Evidence from
+              <input id="report-date-from" type="date" />
+            </label>
+            <label>Evidence to
+              <input id="report-date-to" type="date" />
+            </label>
+          </div>
+          <button id="generate-fuel-report" class="primary-button" type="submit" disabled>Generate report</button>
+        </form>
+        <p id="fuel-report-status" class="manager-status" role="status" aria-live="polite">Preparing the local report workspace…</p>
+        <div class="report-safety-note">
+          <strong>Safe boundary</strong>
+          <p>This page cannot invoice, email, approve, or change a customer record. Print/PDF and CSV happen only when you press a button.</p>
+        </div>
+      </section>
+
+      <section class="panel fuel-report-preview-shell" aria-labelledby="report-preview-title">
+        <div class="panel-heading report-preview-heading">
+          <div>
+            <p class="section-code">02 / REVIEW</p>
+            <h2 id="report-preview-title">Report preview</h2>
+          </div>
+          <div class="report-actions">
+            <button id="print-fuel-report" class="secondary-action-button" type="button" disabled>Print / Save PDF</button>
+            <button id="download-fuel-csv" class="secondary-action-button" type="button" disabled>Download CSV</button>
+          </div>
+        </div>
+
+        <div id="fuel-report-empty" class="report-empty-state">
+          <span aria-hidden="true">◌</span>
+          <h3>No report generated</h3>
+          <p>Select an existing customer and recurring service. AdvanCore will not fill missing information with estimates.</p>
+        </div>
+
+        <article id="fuel-report-document" class="fuel-report-document" hidden>
+          <header class="report-document-header">
+            <div>
+              <p class="report-brand">ADVANCORE</p>
+              <h2>Customer Fuel Adjustment Report</h2>
+              <p class="report-draft-label">DRAFT INDICATION — NOT AN INVOICE</p>
+            </div>
+            <dl class="report-reference-list">
+              <div><dt>Report date</dt><dd id="report-generated-on">—</dd></div>
+              <div><dt>Benchmark date</dt><dd id="report-benchmark-date">—</dd></div>
+            </dl>
+          </header>
+
+          <section class="report-identity-grid">
+            <div><span>Customer</span><strong id="report-customer-name">—</strong></div>
+            <div><span>Service reference</span><strong id="report-service-reference">—</strong></div>
+            <div><span>Service status</span><strong id="report-service-status">—</strong></div>
+            <div><span>Fixed monthly contract</span><strong id="report-monthly-contract">—</strong></div>
+          </section>
+
+          <section class="report-result-block">
+            <p class="section-code">CURRENT DRAFT INDICATION</p>
+            <div class="report-result-grid">
+              <div><span>Shell–SPC midpoint</span><strong id="report-benchmark-price">—</strong></div>
+              <div><span>Price variance</span><strong id="report-price-variance">—</strong></div>
+              <div><span>Draft adjustment</span><strong id="report-adjustment">—</strong></div>
+              <div class="report-total"><span>Indicated monthly total</span><strong id="report-adjusted-total">—</strong></div>
+            </div>
+            <p id="report-calculation-status" class="report-calculation-status"></p>
+          </section>
+
+          <section class="report-detail-section">
+            <h3>Saved contract inputs</h3>
+            <dl class="report-detail-grid">
+              <div><dt>Effective from</dt><dd id="report-rule-effective">—</dd></div>
+              <div><dt>Contract baseline</dt><dd id="report-baseline">—</dd></div>
+              <div><dt>Fuel share</dt><dd id="report-fuel-share">—</dd></div>
+              <div><dt>Contract tolerance</dt><dd id="report-tolerance">—</dd></div>
+            </dl>
+          </section>
+
+          <section class="report-detail-section">
+            <h3>Calculation method</h3>
+            <p id="report-formula" class="report-formula"></p>
+          </section>
+
+          <section class="report-detail-section">
+            <h3>Official source evidence</h3>
+            <p id="report-evidence-window" class="micro-copy left-copy"></p>
+            <div id="report-source-list" class="report-source-list"></div>
+            <div class="report-table-wrap">
+              <table class="report-history-table">
+                <thead><tr><th>Date</th><th>Shell diesel</th><th>SPC diesel</th><th>Midpoint</th></tr></thead>
+                <tbody id="report-history-body"></tbody>
+              </table>
+            </div>
+            <p id="report-history-empty" class="micro-copy left-copy" hidden>No verified benchmark evidence falls within the selected date range.</p>
+          </section>
+
+          <footer class="report-document-footer">
+            <p>Generated locally from saved AdvanCore facts. Verify contract interpretation before sharing externally.</p>
+          </footer>
+        </article>
+      </section>
+    </main>
+
+    <footer class="shell app-footer">
+      <span>Primary app: 127.0.0.1:8000 · build task-189-1</span>
+      <span>Verified facts only · no automatic customer delivery</span>
+    </footer>
+  </body>
+</html>
