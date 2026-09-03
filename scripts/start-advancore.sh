@@ -118,6 +118,13 @@ if [ ! -f "$PROJECT_ROOT/.env.example" ]; then
     echo "The safe local environment template is missing." >&2
     exit 1
 fi
+if [ -L "$PROJECT_ROOT/scripts/redirect-legacy-interface.py" ] || \
+   [ ! -f "$PROJECT_ROOT/scripts/redirect-legacy-interface.py" ] || \
+   [ -L "$PROJECT_ROOT/scripts/check-local-interfaces.py" ] || \
+   [ ! -f "$PROJECT_ROOT/scripts/check-local-interfaces.py" ]; then
+    echo "A required local interface helper is unsafe or missing." >&2
+    exit 1
+fi
 
 ENV_TARGET="$PROJECT_ROOT/.env"
 if [ -L "$ENV_TARGET" ]; then
@@ -193,6 +200,7 @@ if ! "$PROJECT_ROOT/.venv/bin/alembic" upgrade head; then
     exit 1
 fi
 API_PID=
+REDIRECT_PID=
 STREAMLIT_PID=
 cleanup_interfaces() {
     if [ -n "$API_PID" ] && kill -0 "$API_PID" >/dev/null 2>&1; then
@@ -201,7 +209,11 @@ cleanup_interfaces() {
     if [ -n "$STREAMLIT_PID" ] && kill -0 "$STREAMLIT_PID" >/dev/null 2>&1; then
         kill "$STREAMLIT_PID" >/dev/null 2>&1 || true
     fi
+    if [ -n "$REDIRECT_PID" ] && kill -0 "$REDIRECT_PID" >/dev/null 2>&1; then
+        kill "$REDIRECT_PID" >/dev/null 2>&1 || true
+    fi
     [ -z "$API_PID" ] || wait "$API_PID" >/dev/null 2>&1 || true
+    [ -z "$REDIRECT_PID" ] || wait "$REDIRECT_PID" >/dev/null 2>&1 || true
     [ -z "$STREAMLIT_PID" ] || wait "$STREAMLIT_PID" >/dev/null 2>&1 || true
 }
 trap cleanup_interfaces EXIT INT TERM
@@ -209,14 +221,18 @@ trap cleanup_interfaces EXIT INT TERM
 "$PROJECT_ROOT/.venv/bin/python" -m uvicorn main:app \
     --host 127.0.0.1 --port 8000 &
 API_PID=$!
+"$PROJECT_ROOT/.venv/bin/python" "$PROJECT_ROOT/scripts/redirect-legacy-interface.py" &
+REDIRECT_PID=$!
 "$PROJECT_ROOT/.venv/bin/streamlit" run "$PROJECT_ROOT/app.py" \
-    --server.address 127.0.0.1 --server.port 8501 &
+    --server.address 127.0.0.1 --server.port 8502 &
 STREAMLIT_PID=$!
 
 attempt=0
 until "$PROJECT_ROOT/.venv/bin/python" "$PROJECT_ROOT/scripts/check-local-interfaces.py" >/dev/null 2>&1; do
     attempt=$((attempt + 1))
-    if ! kill -0 "$API_PID" >/dev/null 2>&1 || ! kill -0 "$STREAMLIT_PID" >/dev/null 2>&1; then
+    if ! kill -0 "$API_PID" >/dev/null 2>&1 || \
+       ! kill -0 "$REDIRECT_PID" >/dev/null 2>&1 || \
+       ! kill -0 "$STREAMLIT_PID" >/dev/null 2>&1; then
         break
     fi
     if [ "$attempt" -ge 30 ]; then
@@ -233,22 +249,28 @@ fi
 
 echo "AdvanCore is ready. Keep this window open while using the apps."
 echo "PRIMARY APP: http://127.0.0.1:8000"
-echo "Temporary admin/editing interface: http://127.0.0.1:8501"
-while kill -0 "$API_PID" >/dev/null 2>&1 && kill -0 "$STREAMLIT_PID" >/dev/null 2>&1; do
+echo "Historical address redirects to the primary app: http://127.0.0.1:8501"
+echo "Temporary admin/editing interface: http://127.0.0.1:8502"
+while kill -0 "$API_PID" >/dev/null 2>&1 && \
+      kill -0 "$REDIRECT_PID" >/dev/null 2>&1 && \
+      kill -0 "$STREAMLIT_PID" >/dev/null 2>&1; do
     sleep 1
 done
-# Give a clean, paired shutdown one brief grace period before terminating a survivor.
+# Give a clean grouped shutdown one brief grace period before terminating survivors.
 sleep 1
 if kill -0 "$API_PID" >/dev/null 2>&1; then kill "$API_PID" >/dev/null 2>&1 || true; fi
+if kill -0 "$REDIRECT_PID" >/dev/null 2>&1; then kill "$REDIRECT_PID" >/dev/null 2>&1 || true; fi
 if kill -0 "$STREAMLIT_PID" >/dev/null 2>&1; then kill "$STREAMLIT_PID" >/dev/null 2>&1 || true; fi
 set +e
 wait "$API_PID"
 api_status=$?
+wait "$REDIRECT_PID"
+redirect_status=$?
 wait "$STREAMLIT_PID"
 streamlit_status=$?
 set -e
 trap - EXIT INT TERM
-if [ "$api_status" -eq 0 ] && [ "$streamlit_status" -eq 0 ]; then
+if [ "$api_status" -eq 0 ] && [ "$redirect_status" -eq 0 ] && [ "$streamlit_status" -eq 0 ]; then
     exit 0
 fi
 echo "A local interface stopped. The other interface was closed safely." >&2

@@ -14,10 +14,15 @@ def test_port_8000_is_the_primary_app_and_streamlit_is_secondary():
     assert "PRIMARY LOCAL APP" in html
     assert "Your main AdvanCore workspace" in html
     assert "Temporary admin/editing" in html
-    assert "http://127.0.0.1:8501/" in html
+    assert "http://127.0.0.1:8502/" in html
     assert "PRIMARY APP: http://127.0.0.1:8000" in startup
-    assert "Temporary admin/editing interface: http://127.0.0.1:8501" in startup
+    assert (
+        "Historical address redirects to the primary app: http://127.0.0.1:8501"
+        in startup
+    )
+    assert "Temporary admin/editing interface: http://127.0.0.1:8502" in startup
     assert 'InterfaceCheck("Primary AdvanCore app"' in health
+    assert '"Canonical legacy-port redirect"' in health
     assert "Open `http://127.0.0.1:8000` as the main AdvanCore app" in readme
 
 
@@ -50,4 +55,5 @@ def test_cutover_inventory_is_bounded_and_keeps_streamlit_until_transfer():
         assert transfer in cutover
     assert "Business rules must stay in services" in cutover
     assert "owner explicitly" in cutover
-    assert "Port 8501 may be stopped by default only after" in cutover
+    assert "The Streamlit interface on port 8502 may be stopped by default only after" in cutover
+    assert "Port 8501 stays as a compatibility redirect" in cutover

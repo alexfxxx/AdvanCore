@@ -31,7 +31,8 @@ workspace, governed Owner Goal controls, readiness, bounded Projects and
 Knowledge summaries, Fleet overview and details, Dispatch exceptions, and Fuel
 benchmark intelligence.
 
-The Streamlit interface at `http://127.0.0.1:8501` is temporary admin/editing
+The historical address `http://127.0.0.1:8501` redirects to the primary app.
+The Streamlit interface at `http://127.0.0.1:8502` is temporary admin/editing
 support while the following existing forms transfer into the primary app:
 
 - Executive Command Center: light responsive layout, real platform counts,

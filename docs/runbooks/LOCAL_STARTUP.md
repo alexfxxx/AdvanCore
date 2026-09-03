@@ -17,7 +17,9 @@ container and starts the canonical service against the same saved volume. If
 canonical startup fails, it attempts to restart the previously running legacy
 container. A same-name container with any unexpected identity fails closed.
 
-The canonical PostgreSQL port and Streamlit app are bound to `127.0.0.1` only.
+The canonical PostgreSQL port, primary app, compatibility redirect and
+Streamlit app are bound to `127.0.0.1` only. Port 8000 is the primary app, port
+8501 redirects old bookmarks to it, and temporary Streamlit runs on port 8502.
 The preserved external data volume is
 `advancore_advancore_postgres_data`. A fresh local installation creates that
 volume before starting Compose.
