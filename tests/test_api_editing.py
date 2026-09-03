@@ -407,4 +407,13 @@ def test_minimal_register_reads_are_get_only_and_use_existing_fields(tmp_path):
         routes = client.get("/api/routes")
     assert drivers.json() == [{"id": 1, "name": "Driver A", "employee_reference": "D1", "status": "active"}]
     assert customers.json()[0]["customer_reference"] == "C1"
+    assert customers.headers["cache-control"] == "no-store"
     assert routes.json()[0] == {"id": 3, "route_code": "R1", "origin": "Depot", "destination": "School", "status": "active"}
+
+
+def test_non_loopback_peer_cannot_read_customer_register(tmp_path):
+    gateway = FakeReadGateway()
+    with _client(tmp_path, read_gateway=gateway, peer="198.51.100.7") as client:
+        response = client.get("/api/customers", headers={"Host": "localhost"})
+
+    assert response.status_code == 403

@@ -77,8 +77,13 @@ def driver_employment_records(
         raise _unavailable(exc) from exc
 
 
-@router.get("/customers", response_model=list[CustomerResponse])
-def customers(request: Request) -> list[CustomerResponse]:
+@router.get(
+    "/customers",
+    response_model=list[CustomerResponse],
+    dependencies=[Depends(require_loopback_peer)],
+)
+def customers(request: Request, response: Response) -> list[CustomerResponse]:
+    response.headers["Cache-Control"] = "no-store"
     try:
         return list(request.app.state.read_gateway.list_customers())
     except ReadModelUnavailable as exc:
@@ -168,8 +173,15 @@ def fuel_intelligence(request: Request) -> FuelIntelligenceResponse:
         raise _unavailable(exc) from exc
 
 
-@router.get("/fuel/market-benchmark", response_model=FuelMarketBenchmarkResponse)
-def fuel_market_benchmark(request: Request) -> FuelMarketBenchmarkResponse:
+@router.get(
+    "/fuel/market-benchmark",
+    response_model=FuelMarketBenchmarkResponse,
+    dependencies=[Depends(require_loopback_peer)],
+)
+def fuel_market_benchmark(
+    request: Request, response: Response
+) -> FuelMarketBenchmarkResponse:
+    response.headers["Cache-Control"] = "no-store"
     try:
         return request.app.state.read_gateway.fuel_market_benchmark()
     except ReadModelUnavailable as exc:

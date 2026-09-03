@@ -69,11 +69,15 @@ class FakeGoalPreviewer:
         )
 
 
-def _client(tmp_path: Path) -> TestClient:
+def _client(tmp_path: Path, *, peer: str = "127.0.0.1") -> TestClient:
     frontend = tmp_path / "frontend"
     frontend.mkdir()
     (frontend / "index.html").write_text(
         "<!doctype html><title>AdvanCore test console</title>",
+        encoding="utf-8",
+    )
+    (frontend / "fuel-reports.html").write_text(
+        "<!doctype html><title>AdvanCore fuel reports</title>",
         encoding="utf-8",
     )
     return TestClient(
@@ -82,7 +86,8 @@ def _client(tmp_path: Path) -> TestClient:
             frontend_dir=frontend,
             read_gateway=FakeReadGateway(),
             goal_previewer=FakeGoalPreviewer(),
-        )
+        ),
+        client=(peer, 50000),
     )
 
 
@@ -107,6 +112,24 @@ def test_fastapi_serves_static_console_and_bounded_status(tmp_path):
         "governance_mode": "fail_closed",
         "voice_state": "disabled",
     }
+
+
+def test_fastapi_serves_dedicated_fuel_reports_with_same_security_headers(tmp_path):
+    with _client(tmp_path) as client:
+        page = client.get("/fuel-reports")
+
+    assert page.status_code == 200
+    assert "AdvanCore fuel reports" in page.text
+    assert page.headers["cache-control"] == "no-store"
+    assert "script-src 'self'" in page.headers["content-security-policy"]
+    assert "connect-src 'self'" in page.headers["content-security-policy"]
+
+
+def test_non_loopback_peer_cannot_open_dedicated_fuel_reports(tmp_path):
+    with _client(tmp_path, peer="198.51.100.7") as client:
+        page = client.get("/fuel-reports", headers={"Host": "localhost"})
+
+    assert page.status_code == 403
 
 
 def test_read_only_project_and_knowledge_contracts(tmp_path):

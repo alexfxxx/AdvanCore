@@ -205,6 +205,10 @@ class FuelMarketService:
         recurring = self._recurring.get_by_id(recurring_service_id)
         if recurring is None:
             raise FuelMarketNotFoundError("The selected recurring service could not be found.")
+        if recurring.status == "archived":
+            raise FuelMarketValidationError(
+                "An archived recurring service cannot produce a current fuel adjustment."
+            )
         local_day = on_date or datetime.now(timezone.utc).astimezone(SINGAPORE).date()
         rule = self._repo.applicable_rule(recurring_service_id, local_day)
         rules = tuple(self._repo.list_rules(recurring_service_id))

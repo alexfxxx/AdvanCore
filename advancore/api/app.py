@@ -5,7 +5,7 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Awaitable, Callable
 
-from fastapi import FastAPI, Request, status as fastapi_status
+from fastapi import Depends, FastAPI, Request, status as fastapi_status
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.trustedhost import TrustedHostMiddleware
@@ -240,10 +240,9 @@ def create_app(
         name="frontend-assets",
     )
 
-    @app.get("/", include_in_schema=False, response_class=FileResponse)
-    def index() -> FileResponse:
+    def frontend_file(filename: str) -> FileResponse:
         return FileResponse(
-            resolved_frontend / "index.html",
+            resolved_frontend / filename,
             headers={
                 "Cache-Control": "no-store",
                 "Content-Security-Policy": (
@@ -253,5 +252,18 @@ def create_app(
                 )
             },
         )
+
+    @app.get("/", include_in_schema=False, response_class=FileResponse)
+    def index() -> FileResponse:
+        return frontend_file("index.html")
+
+    @app.get(
+        "/fuel-reports",
+        include_in_schema=False,
+        response_class=FileResponse,
+        dependencies=[Depends(orchestration.require_loopback_peer)],
+    )
+    def fuel_reports() -> FileResponse:
+        return frontend_file("fuel-reports.html")
 
     return app

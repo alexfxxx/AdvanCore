@@ -142,3 +142,14 @@ def test_new_rule_is_forward_only_and_closes_prior_rule(session):
             fuel_cost_share_percent=Decimal("20"),
             tolerance_percent=Decimal("5"),
         )
+
+
+def test_archived_recurring_service_cannot_produce_current_adjustment(session):
+    recurring = _recurring_service(session)
+    recurring.status = "archived"
+    service = FuelMarketService(
+        FuelMarketRepository(session), RecurringServiceRepository(session)
+    )
+
+    with pytest.raises(FuelMarketValidationError, match="archived recurring service"):
+        service.adjustment_draft(recurring.id, date(2026, 9, 3))
