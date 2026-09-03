@@ -109,6 +109,8 @@ without a fresh verified backup and separate approval.
 - `tests/test_api_fuel_market.py`
 - `tests/test_api_fuel_benchmark.py`
 - `tests/test_frontend_fuel_contract.py`
+- `tests/test_frontend_editing_contract.py`
+- `tests/test_frontend_workspace_contract.py`
 - `tests/test_activity_service.py`
 - `tests/test_migrations.py`
 
@@ -147,6 +149,10 @@ compiled for PostgreSQL but was not applied to the local database.
   guard: the lowercase provider field name contained the word used by that
   guard for command-shell detection. The chart now constructs that approved
   data key without changing behavior; the bounded repair was retested.
+- Post-activation browser inspection found the prior asset-version query still
+  pointed to `task-179-1`, allowing cached JavaScript to mask the new status
+  and trend behavior. The bounded activation repair advances all static asset
+  queries and visible build labels to `task-188-1`.
 
 ### Safety outcome
 
