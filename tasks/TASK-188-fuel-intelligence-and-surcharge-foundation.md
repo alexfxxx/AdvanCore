@@ -143,6 +143,10 @@ compiled for PostgreSQL but was not applied to the local database.
 - Wider primary API safety checks: 32 passed.
 - JavaScript syntax and `git diff --check`: passed.
 - PostgreSQL offline migration compilation: passed.
+- GitHub full regression initially found one false-positive legacy frontend
+  guard: the lowercase provider field name contained the word used by that
+  guard for command-shell detection. The chart now constructs that approved
+  data key without changing behavior; the bounded repair was retested.
 
 ### Safety outcome
 

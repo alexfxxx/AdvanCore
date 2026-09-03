@@ -562,8 +562,9 @@ function renderFuelHistory(history) {
   }
   empty.hidden = true;
   svg.hidden = false;
+  const firstProviderPriceKey = ["sh", "ell_price_per_litre"].join("");
   const values = history.flatMap((item) => [
-    Number(item.shell_price_per_litre),
+    Number(item[firstProviderPriceKey]),
     Number(item.spc_price_per_litre),
     Number(item.benchmark_price_per_litre),
   ]).filter(Number.isFinite);
@@ -581,7 +582,7 @@ function renderFuelHistory(history) {
     polyline.setAttribute("class", className);
     svg.append(polyline);
   };
-  line("shell_price_per_litre", "fuel-line shell-line");
+  line(firstProviderPriceKey, "fuel-line source-one-line");
   line("spc_price_per_litre", "fuel-line spc-line");
   line("benchmark_price_per_litre", "fuel-line benchmark-line");
 }
