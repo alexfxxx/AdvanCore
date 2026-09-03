@@ -519,12 +519,57 @@
     content.replaceChildren(section);
   };
 
+  const fuelRuleForm = (customer, service, currentRule = null) => {
+    const section = formSection(
+      `Fuel terms · ${service.service_reference}`,
+      "Enter only the terms written in this customer's contract. No default is assumed. The result is a draft indication and never creates an invoice."
+    );
+    const form = element("form", { className: "manager-form" }, [
+      field("Effective from", "effective_from", { required: true, type: "date", value: todayValue() }),
+      field("Contract baseline diesel price (SGD/L)", "baseline_price_per_litre", { required: true, type: "number", min: "0.0001", step: "0.0001", value: currentRule?.baseline_price_per_litre }),
+      field("Fuel share of monthly contract (%)", "fuel_cost_share_percent", { required: true, type: "number", min: "0", max: "100", step: "0.0001", value: currentRule?.fuel_cost_share_percent }),
+      field("Contract tolerance (%)", "tolerance_percent", { required: true, type: "number", min: "0", max: "100", step: "0.0001", value: currentRule?.tolerance_percent }),
+    ]);
+    const back = button("Back to customer");
+    const save = button("Review contract fuel terms", "primary-button");
+    form.append(element("div", { className: "manager-form-actions" }, [back, save]));
+    form.addEventListener("submit", (event) => event.preventDefault());
+    back.addEventListener("click", () => renderCustomerProfile(customer));
+    save.addEventListener("click", () => {
+      if (!form.reportValidity()) return;
+      const payload = toPayload(form);
+      perform({
+        message: "Save these contract-specific fuel terms as a new effective record?",
+        summary: [
+          ["Service", service.service_reference],
+          ["Effective from", payload.effective_from],
+          ["Baseline", `${payload.baseline_price_per_litre} SGD/L`],
+          ["Fuel share", `${payload.fuel_cost_share_percent}%`],
+          ["Tolerance", `${payload.tolerance_percent}%`],
+        ],
+        url: `/api/recurring-services/${service.id}/fuel-rules`,
+        payload,
+        success: "Contract fuel terms saved.",
+      });
+    });
+    section.append(form);
+    content.replaceChildren(section);
+  };
+
   async function renderCustomerProfile(customer) {
     const [services, routes] = await Promise.all([
       readJson(`/api/customers/${customer.id}/recurring-services`),
       readJson("/api/routes"),
     ]);
     const routeById = indexedById(routes);
+    const draftResults = await Promise.allSettled(
+      services.map((record) => readJson(`/api/recurring-services/${record.id}/fuel-adjustment`))
+    );
+    const fuelDraftByService = new Map(
+      draftResults.flatMap((result, index) => result.status === "fulfilled"
+        ? [[services[index].id, result.value]]
+        : [])
+    );
     const section = formSection(
       customer.name,
       "Recurring Services stay inside this customer profile. Ad-hoc work remains in dated Trips."
@@ -553,6 +598,10 @@
         const archive = button("Archive", "warning-button");
         archive.addEventListener("click", () => perform({ message: "Archive this recurring service?", summary: [["Service", record.service_reference], ["Fixed monthly amount", `${record.currency_code} ${record.monthly_amount}`]], url: `/api/recurring-services/${record.id}/status`, payload: { status: "archived" }, success: "Recurring service archived." }));
         actions.push(archive);
+        const fuelDraft = fuelDraftByService.get(record.id);
+        const fuelTerms = button(fuelDraft?.current_rule ? "New fuel terms" : "Add fuel terms");
+        fuelTerms.addEventListener("click", () => fuelRuleForm(customer, record, fuelDraft?.current_rule));
+        actions.push(fuelTerms);
       }
       const route = routeById.get(record.route_id);
       const dayNames = record.days.map((item) => weekdayOptions[item.weekday][1]).join(", ");
@@ -560,6 +609,23 @@
       card.insertBefore(element("p", { text: `${route?.route_code || `Route #${record.route_id}`} · ${dayNames} · ${record.currency_code} ${record.monthly_amount} monthly` }), card.lastChild);
       card.insertBefore(element("p", { text: record.stops.map((stop) => `${String(stop.scheduled_time).slice(0, 5)} ${stop.location_name}`).join(" → ") }), card.lastChild);
       card.insertBefore(element("p", { className: "micro-copy left-copy", text: `${displayValue(record.vehicle_requirement)} · Effective ${record.effective_start_date}${record.effective_end_date ? ` to ${record.effective_end_date}` : " onward"}` }), card.lastChild);
+      const fuelDraft = fuelDraftByService.get(record.id);
+      if (fuelDraft?.calculation_status === "draft_ready") {
+        card.insertBefore(element("p", {
+          className: "fuel-draft-copy",
+          text: `Draft fuel adjustment: ${fuelDraft.currency_code} ${fuelDraft.draft_adjustment_amount} · indicated monthly total ${fuelDraft.currency_code} ${fuelDraft.adjusted_monthly_amount} · benchmark ${fuelDraft.benchmark_price_per_litre}/L`,
+        }), card.lastChild);
+      } else if (fuelDraft) {
+        const messages = {
+          contract_terms_not_configured: "Fuel adjustment: contract terms not configured.",
+          benchmark_stale: "Fuel adjustment paused: the last benchmark is stale.",
+          benchmark_unavailable: "Fuel adjustment paused: no verified benchmark is available.",
+        };
+        card.insertBefore(element("p", {
+          className: "micro-copy left-copy",
+          text: messages[fuelDraft.calculation_status] || "Fuel adjustment is unavailable.",
+        }), card.lastChild);
+      }
       list.append(card);
     });
     section.append(services.length ? list : empty("No recurring services have been recorded for this customer."));

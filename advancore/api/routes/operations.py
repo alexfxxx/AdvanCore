@@ -17,6 +17,7 @@ from advancore.api.schemas import (
     FuelEntryResponse,
     FuelIntelligenceResponse,
     FuelMarketBenchmarkResponse,
+    FuelAdjustmentDraftResponse,
     RecurringServiceResponse,
     RouteResponse,
     TripAssignmentResponse,
@@ -171,5 +172,24 @@ def fuel_intelligence(request: Request) -> FuelIntelligenceResponse:
 def fuel_market_benchmark(request: Request) -> FuelMarketBenchmarkResponse:
     try:
         return request.app.state.read_gateway.fuel_market_benchmark()
+    except ReadModelUnavailable as exc:
+        raise _unavailable(exc) from exc
+
+
+@router.get(
+    "/recurring-services/{recurring_service_id}/fuel-adjustment",
+    response_model=FuelAdjustmentDraftResponse,
+    dependencies=[Depends(require_loopback_peer)],
+)
+def recurring_service_fuel_adjustment(
+    request: Request,
+    response: Response,
+    recurring_service_id: int = Path(gt=0),
+) -> FuelAdjustmentDraftResponse:
+    response.headers["Cache-Control"] = "no-store"
+    try:
+        return request.app.state.read_gateway.recurring_service_fuel_adjustment(
+            recurring_service_id
+        )
     except ReadModelUnavailable as exc:
         raise _unavailable(exc) from exc

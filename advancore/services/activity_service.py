@@ -30,6 +30,7 @@ _APPROVED_ACTION_ENTITIES = {
     "recurring_service_created": "recurring_service",
     "recurring_service_status_changed": "recurring_service",
     "recurring_service_replaced": "recurring_service",
+    "recurring_service_fuel_rule_created": "recurring_service_fuel_rule",
     "driver_employment_record_created": "driver_employment_record",
 }
 

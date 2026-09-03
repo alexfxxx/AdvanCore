@@ -1113,6 +1113,71 @@ body.workspace-editing .workspace-segment::after {
   max-height: 150px;
 }
 
+.fuel-status-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin: 12px 0;
+}
+
+.fuel-market-status {
+  border: 1px solid rgba(112, 245, 255, 0.35);
+  border-radius: 999px;
+  padding: 6px 10px;
+  color: var(--cyan);
+  font-size: 0.68rem;
+  font-weight: 800;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.fuel-market-status[data-state="stale"],
+.fuel-market-status[data-state="unavailable"] {
+  border-color: rgba(255, 184, 77, 0.55);
+  color: #ffbf69;
+}
+
+.fuel-trend-panel {
+  border: 1px solid rgba(126, 249, 255, 0.13);
+  border-radius: 14px;
+  padding: 12px;
+  background: rgba(1, 7, 16, 0.34);
+}
+
+.fuel-trend-panel h3 { margin: 0 0 4px; }
+
+.fuel-history-chart {
+  width: 100%;
+  min-height: 130px;
+  margin-top: 8px;
+  overflow: visible;
+}
+
+.fuel-line {
+  fill: none;
+  stroke-width: 3;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  vector-effect: non-scaling-stroke;
+}
+
+.source-one-line { stroke: #ffd447; }
+.spc-line { stroke: #ff5f73; }
+.benchmark-line {
+  stroke: var(--cyan);
+  stroke-width: 4;
+  filter: drop-shadow(0 0 5px rgba(112, 245, 255, 0.75));
+}
+
+.fuel-draft-copy {
+  margin: 10px 0;
+  border-left: 3px solid var(--cyan);
+  padding-left: 10px;
+  color: var(--cyan);
+  font-weight: 700;
+}
+
 .text-action {
   margin-top: 10px;
   padding: 7px 0;

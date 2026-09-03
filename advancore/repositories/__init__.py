@@ -9,6 +9,7 @@ from advancore.repositories.customer import CustomerRepository
 from advancore.repositories.driver import DriverRepository
 from advancore.repositories.driver_employment import DriverEmploymentRepository
 from advancore.repositories.fuel_entry import FuelEntryRepository
+from advancore.repositories.fuel_market import FuelMarketRepository
 from advancore.repositories.financial_entry import FinancialEntryRepository
 from advancore.repositories.knowledge import KnowledgeItemRepository
 from advancore.repositories.legal_entity import LegalEntityRepository
@@ -26,6 +27,7 @@ __all__ = [
     "DriverRepository",
     "DriverEmploymentRepository",
     "FuelEntryRepository",
+    "FuelMarketRepository",
     "FinancialEntryRepository",
     "KnowledgeItemRepository",
     "LegalEntityRepository",

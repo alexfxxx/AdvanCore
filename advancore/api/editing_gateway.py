@@ -17,6 +17,8 @@ from advancore.api.schemas import (
     DriverEmploymentResponse,
     FinancialEntryResponse,
     FuelEntryResponse,
+    RecurringServiceFuelRuleCreateRequest,
+    RecurringServiceFuelRuleResponse,
     KnowledgeResponse,
     LegalEntityResponse,
     ProjectResponse,
@@ -153,6 +155,12 @@ class EditingGateway(Protocol):
     def replace_recurring_service(
         self, identifier: int, payload: RecurringServiceReplaceRequest
     ) -> RecurringServiceResponse: ...
+
+    def create_recurring_service_fuel_rule(
+        self,
+        identifier: int,
+        payload: RecurringServiceFuelRuleCreateRequest,
+    ) -> RecurringServiceFuelRuleResponse: ...
 
 
 class DatabaseEditingGateway:
@@ -827,3 +835,32 @@ class DatabaseEditingGateway:
             raise EditingNotFoundError(str(exc)) from exc
         except RecurringServiceConflictError as exc:
             raise EditingConflictError(str(exc)) from exc
+
+    def create_recurring_service_fuel_rule(
+        self,
+        identifier: int,
+        payload: RecurringServiceFuelRuleCreateRequest,
+    ) -> RecurringServiceFuelRuleResponse:
+        from advancore.repositories import FuelMarketRepository, RecurringServiceRepository
+        from advancore.services.fuel_market_service import (
+            FuelMarketNotFoundError,
+            FuelMarketService,
+            FuelMarketValidationError,
+        )
+
+        values = payload.model_dump(exclude={"confirmed"})
+        try:
+            with self._session() as session:
+                item = FuelMarketService(
+                    FuelMarketRepository(session), RecurringServiceRepository(session)
+                ).configure_rule(identifier, **values)
+                self._activity(session).record_activity(
+                    "recurring_service_fuel_rule_created",
+                    "recurring_service_fuel_rule",
+                    item.id,
+                )
+                return RecurringServiceFuelRuleResponse.model_validate(item)
+        except FuelMarketValidationError as exc:
+            raise EditingValidationError(str(exc)) from exc
+        except FuelMarketNotFoundError as exc:
+            raise EditingNotFoundError(str(exc)) from exc

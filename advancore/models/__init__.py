@@ -3,6 +3,11 @@ from advancore.models.customer import Customer
 from advancore.models.driver import Driver
 from advancore.models.driver_employment import DriverEmploymentRecord
 from advancore.models.fuel_entry import FuelEntry
+from advancore.models.fuel_market import (
+    FuelMarketRefreshState,
+    FuelMarketSnapshot,
+    RecurringServiceFuelRule,
+)
 from advancore.models.financial_entry import FinancialEntry
 from advancore.models.base import Base
 from advancore.models.knowledge import KnowledgeItem
@@ -25,9 +30,12 @@ __all__ = [
     "Driver",
     "DriverEmploymentRecord",
     "FuelEntry",
+    "FuelMarketRefreshState",
+    "FuelMarketSnapshot",
     "FinancialEntry",
     "Project",
     "RecurringService",
+    "RecurringServiceFuelRule",
     "RecurringServiceDay",
     "RecurringServiceStop",
     "Route",

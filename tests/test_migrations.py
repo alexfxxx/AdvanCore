@@ -266,6 +266,28 @@ def test_recurring_service_migration_constraints_reference_real_columns():
     assert "active" in str(live_index.kwargs["postgresql_where"])
 
 
+def test_fuel_intelligence_migration_is_additive_and_chained_from_payroll():
+    migration_path = _migration_file("f6e188_fuel_intelligence_surcharge.py")
+    spec = importlib.util.spec_from_file_location("fuel_market_migration", migration_path)
+    migration = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(migration)
+    assert migration.down_revision == "f5e185payroll"
+    mock_op = MagicMock()
+    migration.op = mock_op
+
+    migration.upgrade()
+
+    assert [call.args[0] for call in mock_op.create_table.call_args_list] == [
+        "fuel_market_snapshots",
+        "fuel_market_refresh_state",
+        "recurring_service_fuel_rules",
+    ]
+    mock_op.add_column.assert_not_called()
+    mock_op.alter_column.assert_not_called()
+    mock_op.drop_table.assert_not_called()
+    mock_op.execute.assert_not_called()
+
+
 def test_fleet_hire_purchase_migration_is_additive_nullable_and_new_head():
     migration_path = _migration_file("*_fleet_hire_purchase.py")
     spec = importlib.util.spec_from_file_location(

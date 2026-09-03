@@ -317,21 +317,28 @@
         <div class="metric-grid operation-metrics">
           <div class="metric-card"><span>Recorded entries</span><strong id="fuel-entry-count">—</strong></div>
           <div class="metric-card"><span>Recorded litres</span><strong id="fuel-total-litres">—</strong></div>
-          <div class="metric-card"><span>Diesel market median</span><strong id="fuel-market-median">—</strong></div>
-          <div class="metric-card"><span>Market range</span><strong id="fuel-market-range">—</strong></div>
+          <div class="metric-card"><span>Shell–SPC midpoint</span><strong id="fuel-market-median">—</strong></div>
+          <div class="metric-card"><span>Source range</span><strong id="fuel-market-range">—</strong></div>
+        </div>
+        <div class="fuel-status-row">
+          <span id="fuel-market-status" class="fuel-market-status" data-state="loading">Checking daily benchmark…</span>
+          <span class="micro-copy">Automatic refresh: once per Singapore day</span>
+        </div>
+        <div class="fuel-trend-panel">
+          <div>
+            <h3>Verified benchmark trend</h3>
+            <p class="micro-copy left-copy">Only stored Shell/SPC daily figures are plotted.</p>
+          </div>
+          <svg id="fuel-history-chart" class="fuel-history-chart" viewBox="0 0 640 180" role="img" aria-label="Shell and SPC diesel benchmark history"></svg>
+          <p id="fuel-history-empty" class="micro-copy left-copy">History will appear after verified daily refreshes.</p>
         </div>
         <details class="segment-details">
-          <summary>View dated fuel sources</summary>
-        <div class="split-grid">
+          <summary>View source evidence</summary>
+        <div>
           <div>
             <h3>Current comparison</h3>
-            <p id="fuel-market-date" class="micro-copy left-copy">Loading dated reference…</p>
+            <p id="fuel-market-date" class="micro-copy left-copy">Loading verified reference…</p>
             <div id="fuel-market-list" class="record-list"></div>
-          </div>
-          <div>
-            <h3>Official checks</h3>
-            <p class="micro-copy left-copy">Dated reference only—not live pricing. SPC and Shell source timestamps are kept with every rate.</p>
-            <div id="fuel-official-list" class="record-list"></div>
           </div>
         </div>
         </details>
