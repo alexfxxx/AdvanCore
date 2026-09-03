@@ -551,6 +551,41 @@ function fuelPriceRow(observation) {
   return row;
 }
 
+function renderFuelHistory(history) {
+  const svg = byId("fuel-history-chart");
+  const empty = byId("fuel-history-empty");
+  svg.replaceChildren();
+  if (!Array.isArray(history) || history.length < 2) {
+    empty.hidden = false;
+    svg.hidden = true;
+    return;
+  }
+  empty.hidden = true;
+  svg.hidden = false;
+  const values = history.flatMap((item) => [
+    Number(item.shell_price_per_litre),
+    Number(item.spc_price_per_litre),
+    Number(item.benchmark_price_per_litre),
+  ]).filter(Number.isFinite);
+  const low = Math.min(...values);
+  const high = Math.max(...values);
+  const range = Math.max(high - low, 0.01);
+  const point = (value, index) => {
+    const x = 26 + (index / (history.length - 1)) * 588;
+    const y = 154 - ((Number(value) - low) / range) * 126;
+    return `${x.toFixed(1)},${y.toFixed(1)}`;
+  };
+  const line = (key, className) => {
+    const polyline = document.createElementNS("http://www.w3.org/2000/svg", "polyline");
+    polyline.setAttribute("points", history.map((item, index) => point(item[key], index)).join(" "));
+    polyline.setAttribute("class", className);
+    svg.append(polyline);
+  };
+  line("shell_price_per_litre", "fuel-line shell-line");
+  line("spc_price_per_litre", "fuel-line spc-line");
+  line("benchmark_price_per_litre", "fuel-line benchmark-line");
+}
+
 async function loadFuel() {
   try {
     const [intelligence, benchmark] = await Promise.all([
@@ -559,15 +594,27 @@ async function loadFuel() {
     ]);
     setText("fuel-entry-count", intelligence.entry_count);
     setText("fuel-total-litres", `${Number(intelligence.total_litres).toLocaleString("en-SG")} L`);
-    setText("fuel-market-median", `${formatMoney(benchmark.median)}/L`);
-    setText("fuel-market-range", `${formatMoney(benchmark.low)}–${formatMoney(benchmark.high)}/L`);
-    setText("fuel-market-date", `${benchmark.benchmark_grade} · ${benchmark.basis} · retrieved ${benchmark.retrieved_on}`);
+    setText("fuel-market-median", benchmark.median === null ? "Unavailable" : `${formatMoney(benchmark.median)}/L`);
+    setText("fuel-market-range", benchmark.low === null ? "Unavailable" : `${formatMoney(benchmark.low)}–${formatMoney(benchmark.high)}/L`);
+    setText("fuel-market-date", benchmark.retrieved_on
+      ? `${benchmark.benchmark_grade} · ${benchmark.basis} · observed ${benchmark.retrieved_on}`
+      : "No verified Shell/SPC benchmark has been saved yet.");
+    const status = byId("fuel-market-status");
+    status.dataset.state = benchmark.status;
+    status.textContent = benchmark.status === "current"
+      ? "Current verified benchmark"
+      : benchmark.status === "stale"
+        ? `STALE — ${benchmark.failure_summary || "today's refresh is not verified"}`
+        : "Unavailable — no verified benchmark";
     renderRecords("fuel-market-list", benchmark.market_observations, fuelPriceRow, "No market observations recorded.");
-    renderRecords("fuel-official-list", benchmark.official_confirmations, fuelPriceRow, "No official confirmations recorded.");
+    renderFuelHistory(benchmark.history);
   } catch (error) {
     setText("fuel-market-date", error.message);
     renderRecords("fuel-market-list", [], recordRow, "Fuel market reference is unavailable.");
-    renderRecords("fuel-official-list", [], recordRow, "Official price checks are unavailable.");
+    const status = byId("fuel-market-status");
+    status.dataset.state = "unavailable";
+    status.textContent = "Unavailable — benchmark read failed safely";
+    renderFuelHistory([]);
   }
 }
 

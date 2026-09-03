@@ -143,18 +143,38 @@ def create_app(
     goal_previewer: OwnerGoalPreviewer | None = None,
     orchestration_service: GovernedOrchestrationService | None = None,
     edit_gateway: EditingGateway | None = None,
+    fuel_refresher: object | None = None,
 ) -> FastAPI:
     resolved_root = (repo_root or Path(__file__).resolve().parents[2]).resolve()
     resolved_frontend = (frontend_dir or resolved_root / "frontend").resolve()
     resolved_orchestration = (
         orchestration_service or GovernedOrchestrationService(resolved_root)
     )
+    if fuel_refresher is None:
+        from advancore.services.fuel_market_service import (
+            DailyFuelMarketRefresher,
+            daily_refresh_enabled,
+        )
+
+        resolved_fuel_refresher = (
+            DailyFuelMarketRefresher() if daily_refresh_enabled() else None
+        )
+    else:
+        resolved_fuel_refresher = fuel_refresher
 
     @asynccontextmanager
     async def lifespan(_app: FastAPI):
+        if resolved_fuel_refresher is not None:
+            start = getattr(resolved_fuel_refresher, "start", None)
+            if callable(start):
+                start()
         try:
             yield
         finally:
+            if resolved_fuel_refresher is not None:
+                stop = getattr(resolved_fuel_refresher, "shutdown", None)
+                if callable(stop):
+                    stop()
             shutdown = getattr(resolved_orchestration, "shutdown", None)
             if callable(shutdown):
                 shutdown()

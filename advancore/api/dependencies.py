@@ -3,11 +3,9 @@
 from __future__ import annotations
 
 import os
-import json
 from datetime import date
-from decimal import Decimal, InvalidOperation
+from decimal import Decimal
 from pathlib import Path
-from statistics import median
 from typing import Protocol, Sequence
 
 from advancore.agent_runner.goal_task import generate_goal_task
@@ -27,11 +25,14 @@ from advancore.api.schemas import (
     FuelDailyTotalResponse,
     FuelIntelligenceResponse,
     FuelMarketBenchmarkResponse,
+    FuelMarketHistoryResponse,
+    FuelAdjustmentDraftResponse,
     FuelPriceObservationResponse,
     LegalEntityResponse,
     OwnerGoalPreviewResponse,
     ProjectResponse,
     RecurringServiceResponse,
+    RecurringServiceFuelRuleResponse,
     RouteResponse,
     SystemStatusResponse,
     TripAssignmentResponse,
@@ -87,6 +88,10 @@ class ReadModelGateway(Protocol):
     def fuel_intelligence(self) -> FuelIntelligenceResponse: ...
 
     def fuel_market_benchmark(self) -> FuelMarketBenchmarkResponse: ...
+
+    def recurring_service_fuel_adjustment(
+        self, recurring_service_id: int
+    ) -> FuelAdjustmentDraftResponse: ...
 
 
 class OwnerGoalPreviewer(Protocol):
@@ -464,56 +469,106 @@ class DatabaseReadModelGateway:
             session.rollback()
             session.close()
 
-    @staticmethod
-    def _price_observation(value: object) -> FuelPriceObservationResponse:
-        if not isinstance(value, dict):
-            raise ValueError("Fuel reference observation is invalid.")
-        try:
-            price = Decimal(str(value["price_per_litre"]))
-        except (KeyError, InvalidOperation, ValueError) as exc:
-            raise ValueError("Fuel reference price is invalid.") from exc
-        if not price.is_finite() or price <= 0:
-            raise ValueError("Fuel reference price is invalid.")
-        return FuelPriceObservationResponse(
-            provider=str(value["provider"]),
-            grade=str(value["grade"]),
-            price_per_litre=price,
-            source_name=str(value["source_name"]),
-            source_url=str(value["source_url"]),
-            source_updated_at=str(value["source_updated_at"]),
-        )
-
     def fuel_market_benchmark(self) -> FuelMarketBenchmarkResponse:
-        path = self._repo_root / "advancore" / "reference_data" / "fuel_market_sg_2026-08-28.json"
+        from advancore.repositories import FuelMarketRepository
+        from advancore.services.fuel_market_service import FuelMarketService
+
+        session = self._open_session()
         try:
-            payload = json.loads(path.read_text(encoding="utf-8"))
-            market = [
-                self._price_observation(item)
-                for item in payload["market_observations"]
+            view = FuelMarketService(FuelMarketRepository(session)).market_view()
+            snapshot = view.snapshot
+            observations = [] if snapshot is None else [
+                FuelPriceObservationResponse(
+                    provider="Shell",
+                    grade="FuelSave Diesel",
+                    price_per_litre=snapshot.shell_price_per_litre,
+                    source_name="Shell Singapore official price board",
+                    source_url="https://www.shell.com.sg/fuels-oils-and-coolants/shell-fuels/shell-station-price-board.html",
+                    source_updated_at=snapshot.shell_source_updated_at,
+                ),
+                FuelPriceObservationResponse(
+                    provider="SPC",
+                    grade="Diesel",
+                    price_per_litre=snapshot.spc_price_per_litre,
+                    source_name="SPC official pump price",
+                    source_url="https://www.spc.com.sg/",
+                    source_updated_at=snapshot.spc_source_updated_at,
+                ),
             ]
-            official = [
-                self._price_observation(item)
-                for item in payload["official_confirmations"]
-            ]
-            prices = [item.price_per_litre for item in market]
-            if not prices:
-                raise ValueError("Fuel reference market is empty.")
+            prices = [item.price_per_litre for item in observations]
             return FuelMarketBenchmarkResponse(
-                retrieved_on=date.fromisoformat(payload["retrieved_on"]),
-                currency=payload["currency"],
-                unit=payload["unit"],
-                basis=payload["basis"],
-                benchmark_grade=payload["benchmark_grade"],
-                low=min(prices),
-                median=median(prices),
-                high=max(prices),
-                market_observations=market,
-                official_confirmations=official,
+                retrieved_on=snapshot.observed_on if snapshot else None,
+                currency="SGD",
+                unit="litre",
+                basis="Gross pump price before discounts",
+                benchmark_grade="Diesel — Shell/SPC midpoint",
+                low=min(prices) if prices else None,
+                median=snapshot.benchmark_price_per_litre if snapshot else None,
+                high=max(prices) if prices else None,
+                market_observations=observations,
+                official_confirmations=[],
+                status=view.status,
+                stale=view.stale,
+                last_attempt_at=view.last_attempt_at,
+                last_success_at=view.last_success_at,
+                failure_summary=view.failure_summary,
+                history=[
+                    FuelMarketHistoryResponse(
+                        observed_on=item.observed_on,
+                        shell_price_per_litre=item.shell_price_per_litre,
+                        spc_price_per_litre=item.spc_price_per_litre,
+                        benchmark_price_per_litre=item.benchmark_price_per_litre,
+                    )
+                    for item in view.history
+                ],
             )
-        except (OSError, KeyError, TypeError, ValueError, json.JSONDecodeError) as exc:
-            raise ReadModelUnavailable(
-                "The dated fuel-market reference is unavailable."
-            ) from exc
+        except Exception as exc:
+            raise ReadModelUnavailable("The fuel-market benchmark is unavailable.") from exc
+        finally:
+            session.rollback()
+            session.close()
+
+    def recurring_service_fuel_adjustment(
+        self, recurring_service_id: int
+    ) -> FuelAdjustmentDraftResponse:
+        from advancore.repositories import FuelMarketRepository, RecurringServiceRepository
+        from advancore.services.fuel_market_service import FuelMarketService
+
+        session = self._open_session()
+        try:
+            recurring = RecurringServiceRepository(session).get_by_id(recurring_service_id)
+            if recurring is None:
+                raise ValueError("Recurring service not found.")
+            draft = FuelMarketService(
+                FuelMarketRepository(session), RecurringServiceRepository(session)
+            ).adjustment_draft(recurring_service_id)
+            return FuelAdjustmentDraftResponse(
+                recurring_service_id=recurring_service_id,
+                calculation_status=draft.calculation_status,
+                stale=draft.stale,
+                benchmark_observed_on=draft.benchmark.observed_on if draft.benchmark else None,
+                benchmark_price_per_litre=draft.benchmark.benchmark_price_per_litre if draft.benchmark else None,
+                monthly_contract_amount=recurring.monthly_amount,
+                currency_code=recurring.currency_code,
+                price_variance_percent=draft.price_variance_percent,
+                draft_adjustment_amount=draft.draft_adjustment_amount,
+                adjusted_monthly_amount=draft.adjusted_monthly_amount,
+                current_rule=(
+                    RecurringServiceFuelRuleResponse.model_validate(draft.rule)
+                    if draft.rule else None
+                ),
+                rule_history=[
+                    RecurringServiceFuelRuleResponse.model_validate(item)
+                    for item in draft.rules
+                ],
+            )
+        except ValueError as exc:
+            raise ReadModelUnavailable(str(exc)) from exc
+        except Exception as exc:
+            raise ReadModelUnavailable("Fuel adjustment is temporarily unavailable.") from exc
+        finally:
+            session.rollback()
+            session.close()
 
 
 class ControllerOwnerGoalPreviewer:

@@ -35,6 +35,8 @@ from advancore.api.schemas import (
     ProjectEditRequest,
     ProjectResponse,
     RecurringServiceCreateRequest,
+    RecurringServiceFuelRuleCreateRequest,
+    RecurringServiceFuelRuleResponse,
     RecurringServiceReplaceRequest,
     RecurringServiceResponse,
     RecurringServiceStatusRequest,
@@ -423,6 +425,24 @@ def replace_recurring_service(
     _confirmed(payload)
     return _call(
         lambda: request.app.state.edit_gateway.replace_recurring_service(
+            identifier, payload
+        )
+    )
+
+
+@router.post(
+    "/recurring-services/{identifier}/fuel-rules",
+    response_model=RecurringServiceFuelRuleResponse,
+    status_code=201,
+)
+def create_recurring_service_fuel_rule(
+    identifier: int,
+    payload: RecurringServiceFuelRuleCreateRequest,
+    request: Request,
+) -> RecurringServiceFuelRuleResponse:
+    _confirmed(payload)
+    return _call(
+        lambda: request.app.state.edit_gateway.create_recurring_service_fuel_rule(
             identifier, payload
         )
     )

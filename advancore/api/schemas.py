@@ -301,16 +301,58 @@ class FuelPriceObservationResponse(BaseModel):
 
 
 class FuelMarketBenchmarkResponse(BaseModel):
-    retrieved_on: date
+    retrieved_on: date | None
     currency: str
     unit: str
     basis: str
     benchmark_grade: str
-    low: Decimal
-    median: Decimal
-    high: Decimal
+    low: Decimal | None
+    median: Decimal | None
+    high: Decimal | None
     market_observations: list[FuelPriceObservationResponse]
     official_confirmations: list[FuelPriceObservationResponse]
+    status: Literal["current", "stale", "unavailable"] = "current"
+    stale: bool = False
+    last_attempt_at: datetime | None = None
+    last_success_at: datetime | None = None
+    failure_summary: str | None = None
+    history: list["FuelMarketHistoryResponse"] = Field(default_factory=list)
+
+
+class FuelMarketHistoryResponse(BaseModel):
+    observed_on: date
+    shell_price_per_litre: Decimal
+    spc_price_per_litre: Decimal
+    benchmark_price_per_litre: Decimal
+
+
+class RecurringServiceFuelRuleResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    recurring_service_id: int
+    effective_from: date
+    effective_to: date | None
+    baseline_price_per_litre: Decimal
+    fuel_cost_share_percent: Decimal
+    tolerance_percent: Decimal
+    created_at: datetime
+    updated_at: datetime
+
+
+class FuelAdjustmentDraftResponse(BaseModel):
+    recurring_service_id: int
+    calculation_status: str
+    stale: bool
+    benchmark_observed_on: date | None
+    benchmark_price_per_litre: Decimal | None
+    monthly_contract_amount: Decimal
+    currency_code: str
+    price_variance_percent: Decimal | None
+    draft_adjustment_amount: Decimal | None
+    adjusted_monthly_amount: Decimal | None
+    current_rule: RecurringServiceFuelRuleResponse | None
+    rule_history: list[RecurringServiceFuelRuleResponse]
 
 
 class StrictRequest(BaseModel):
@@ -498,6 +540,13 @@ class RecurringServiceCreateRequest(ConfirmedRequest):
 
 class RecurringServiceStatusRequest(ConfirmedRequest):
     status: Literal["active", "paused", "archived"]
+
+
+class RecurringServiceFuelRuleCreateRequest(ConfirmedRequest):
+    effective_from: date
+    baseline_price_per_litre: Decimal = Field(gt=0, decimal_places=4)
+    fuel_cost_share_percent: Decimal = Field(ge=0, le=100, decimal_places=4)
+    tolerance_percent: Decimal = Field(ge=0, le=100, decimal_places=4)
 
 
 class RecurringServiceReplaceRequest(ConfirmedRequest):
