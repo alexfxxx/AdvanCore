@@ -191,7 +191,7 @@ def test_daily_operations_frontend_uses_existing_fields_and_review_actions():
 
     for endpoint in ("/api/trips", "/api/trip-assignments", "/api/fuel-entries", "/api/financial-entries", "/api/activity-log"):
         assert endpoint in source
-    for tab in ("trips", "assignments", "fuel-entries", "finance", "activity"):
+    for tab in ("dashboard", "customers", "routes", "drivers", "fleet", "subcontractors", "maintenance", "finance"):
         assert f'data-manager-tab="{tab}"' in html
     assert "Recurring customer schedules are not inferred" in source
     assert 'url: "/api/activity-log"' not in source

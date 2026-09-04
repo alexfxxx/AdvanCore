@@ -13,7 +13,7 @@
     <script src="/assets/editing.js?v=task-189-1" defer></script>
     <script src="/assets/audio.js?v=task-189-1" defer></script>
   </head>
-  <body>
+  <body class="operations-mode">
     <div class="ambient ambient-one" aria-hidden="true"></div>
     <div class="ambient ambient-two" aria-hidden="true"></div>
 
@@ -414,30 +414,26 @@
     </aside>
 
     <div class="drawer-backdrop" id="record-manager-backdrop" hidden></div>
-    <aside class="record-manager" id="record-manager" role="dialog" aria-modal="true" aria-labelledby="record-manager-title" hidden>
+    <aside class="record-manager" id="record-manager" aria-labelledby="record-manager-title">
       <div class="drawer-heading">
         <div>
-          <p class="section-code">CONFIRMED LOCAL EDITING</p>
-          <h2 id="record-manager-title">Manage records</h2>
+          <p class="section-code">LOCAL OPERATIONS</p>
+          <h2 id="record-manager-title">AdvanCore</h2>
         </div>
-        <button id="close-record-manager" class="secondary-action-button" type="button">Close</button>
+        <button id="close-record-manager" class="secondary-action-button" type="button" hidden>Close</button>
       </div>
       <p class="supporting-copy manager-intro">
-        Review every change before confirming. Existing services validate and
-        save the record; this browser cannot run SQL or bypass lifecycle rules.
+        Select a workspace. Every saved change still requires review and confirmation.
       </p>
       <nav class="manager-tabs" aria-label="Record manager sections">
-        <button type="button" data-manager-tab="projects">Projects</button>
-        <button type="button" data-manager-tab="knowledge">Knowledge</button>
-        <button type="button" data-manager-tab="fleet">Fleet</button>
-        <button type="button" data-manager-tab="drivers">Drivers</button>
+        <button type="button" data-manager-tab="dashboard">Dashboard</button>
         <button type="button" data-manager-tab="customers">Customers</button>
         <button type="button" data-manager-tab="routes">Routes</button>
-        <button type="button" data-manager-tab="trips">Trips</button>
-        <button type="button" data-manager-tab="assignments">Assignments</button>
-        <button type="button" data-manager-tab="fuel-entries">Fuel entries</button>
+        <button type="button" data-manager-tab="drivers">Drivers</button>
+        <button type="button" data-manager-tab="fleet">Fleet</button>
+        <button type="button" data-manager-tab="subcontractors">Subcontractors</button>
+        <button type="button" data-manager-tab="maintenance">Maintenance</button>
         <button type="button" data-manager-tab="finance">Finance</button>
-        <button type="button" data-manager-tab="activity">Activity Log</button>
       </nav>
       <p id="record-manager-status" class="manager-status" role="status"></p>
       <div id="record-manager-content" class="manager-content" aria-live="polite"></div>

@@ -156,6 +156,12 @@ class FinancialEntryResponse(BaseModel):
     description: str | None
     trip_id: int | None
     customer_id: int | None
+    vehicle_id: int | None = None
+    accounting_month: date | None = None
+    expected_payment_date: date | None = None
+    payment_status: str = "unpaid"
+    payment_date: date | None = None
+    category: str | None = None
     created_at: datetime
     updated_at: datetime
 
@@ -502,6 +508,12 @@ class FinancialEntryCreateRequest(ConfirmedRequest):
     description: str | None = Field(default=None, max_length=200)
     trip_id: StrictInt | None = None
     customer_id: StrictInt | None = None
+    vehicle_id: StrictInt | None = None
+    accounting_month: date | None = None
+    expected_payment_date: date | None = None
+    payment_status: Literal["unpaid", "paid"] = "unpaid"
+    payment_date: date | None = None
+    category: str | None = Field(default=None, max_length=40)
 
 
 class RecurringServiceStopRequest(StrictRequest):

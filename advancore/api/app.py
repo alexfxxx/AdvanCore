@@ -27,6 +27,7 @@ from advancore.api.routes import (
     orchestration,
     owner_goals,
     read_models,
+    local_business,
     status,
     voice,
 )
@@ -53,6 +54,9 @@ LOCAL_EDIT_PATH_PREFIXES = (
     "/api/fuel-entries",
     "/api/financial-entries",
     "/api/recurring-services",
+    "/api/subcontractors",
+    "/api/maintenance-entries",
+    "/api/recurring-route-assignments",
 )
 
 
@@ -232,6 +236,7 @@ def create_app(
     app.include_router(owner_goals.router)
     app.include_router(orchestration.router)
     app.include_router(editing.router)
+    app.include_router(local_business.router)
     app.include_router(voice.router)
 
     app.mount(

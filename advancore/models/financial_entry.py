@@ -39,3 +39,9 @@ class FinancialEntry(TimestampMixin, Base):
     customer_id: Mapped[int | None] = mapped_column(
         ForeignKey("customers.id", ondelete="RESTRICT"), nullable=True
     )
+    vehicle_id: Mapped[int | None] = mapped_column(ForeignKey("vehicles.id", ondelete="RESTRICT"), nullable=True)
+    accounting_month: Mapped[date] = mapped_column(Date, nullable=False)
+    expected_payment_date: Mapped[date | None] = mapped_column(Date, nullable=True)
+    payment_status: Mapped[str] = mapped_column(String(16), nullable=False, default="unpaid")
+    payment_date: Mapped[date | None] = mapped_column(Date, nullable=True)
+    category: Mapped[str | None] = mapped_column(String(40), nullable=True)

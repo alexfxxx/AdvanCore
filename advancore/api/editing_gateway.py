@@ -142,6 +142,12 @@ class EditingGateway(Protocol):
         description: str | None,
         trip_id: int | None,
         customer_id: int | None,
+        vehicle_id: int | None = None,
+        accounting_month: date | None = None,
+        expected_payment_date: date | None = None,
+        payment_status: str = "unpaid",
+        payment_date: date | None = None,
+        category: str | None = None,
     ) -> FinancialEntryResponse: ...
 
     def create_recurring_service(
@@ -698,6 +704,12 @@ class DatabaseEditingGateway:
         description: str | None,
         trip_id: int | None,
         customer_id: int | None,
+        vehicle_id: int | None = None,
+        accounting_month: date | None = None,
+        expected_payment_date: date | None = None,
+        payment_status: str = "unpaid",
+        payment_date: date | None = None,
+        category: str | None = None,
     ) -> FinancialEntryResponse:
         from advancore.repositories import FinancialEntryRepository
         from advancore.services.financial_entry_service import (
@@ -717,6 +729,12 @@ class DatabaseEditingGateway:
                     description,
                     trip_id,
                     customer_id,
+                    vehicle_id,
+                    accounting_month,
+                    expected_payment_date,
+                    payment_status,
+                    payment_date,
+                    category,
                 )
                 return FinancialEntryResponse.model_validate(item)
         except FinancialEntryValidationError as exc:
