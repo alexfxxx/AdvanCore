@@ -8,8 +8,7 @@
   const statusLine = byId("record-manager-status");
   const confirmation = byId("edit-confirmation");
   const summaryList = byId("edit-confirmation-summary");
-  let activeTab = "projects";
-  let previouslyFocused = null;
+  let activeTab = "dashboard";
   let pendingConfirmation = null;
 
   const element = (tag, options = {}, children = []) => {
@@ -196,6 +195,152 @@
   };
 
   const empty = (message) => element("p", { className: "manager-empty", text: message });
+
+  const money = (value, currency = "SGD") => `${currency} ${Number(value || 0).toLocaleString("en-SG", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+
+  const summaryMetric = (label, value, note = "") => element("article", { className: "operations-metric" }, [
+    element("span", { text: label }),
+    element("strong", { text: value }),
+    note ? element("small", { text: note }) : null,
+  ]);
+
+  async function renderDashboard() {
+    const [customers, fleet, drivers, financialEntries] = await Promise.all([
+      readJson("/api/customers"), readJson("/api/fleet"), readJson("/api/drivers"), readJson("/api/financial-entries"),
+    ]);
+    const serviceResults = await Promise.allSettled(customers.map((customer) =>
+      readJson(`/api/customers/${customer.id}/recurring-services`)
+    ));
+    const services = serviceResults.flatMap((result) => result.status === "fulfilled" ? result.value : []);
+    const activeServices = services.filter((service) => service.status === "active");
+    const monthlyIncome = activeServices.reduce((sum, service) => sum + Number(service.monthly_amount || 0), 0);
+    const section = formSection("Dashboard", "A live summary of records stored on this laptop.");
+    section.append(element("div", { className: "operations-metrics" }, [
+      summaryMetric("Active customers", String(customers.filter((record) => record.status === "active").length), `${customers.length} total`),
+      summaryMetric("Active routes", String(activeServices.length), money(monthlyIncome) + " monthly"),
+      summaryMetric("Active drivers", String(drivers.filter((record) => record.status === "active").length), `${drivers.length} total`),
+      summaryMetric("Fleet vehicles", String(fleet.length)),
+      summaryMetric("Financial entries", String(financialEntries.length), "Recorded transactions"),
+    ]));
+    content.replaceChildren(section);
+  }
+
+  async function renderRouteWorkspace() {
+    const customers = await readJson("/api/customers");
+    const section = formSection("Routes", "Choose a customer to view and maintain all recurring routes and monthly values.");
+    const selector = field("Customer", "customer_id", {
+      options: [["", "Choose customer…"], ...customers.map((customer) => [String(customer.id), customer.name])],
+    });
+    const open = button("View customer routes", "primary-button");
+    open.disabled = true;
+    selector.querySelector("select").addEventListener("change", (event) => { open.disabled = !event.target.value; });
+    open.addEventListener("click", () => {
+      const customer = customers.find((record) => String(record.id) === selector.querySelector("select").value);
+      if (customer) renderCustomerProfile(customer);
+    });
+    section.append(element("div", { className: "route-customer-picker" }, [selector, open]));
+    const rows = element("div", { className: "manager-record-list" });
+    const results = await Promise.all(customers.map(async (customer) => ({
+      customer,
+      services: await readJson(`/api/customers/${customer.id}/recurring-services`),
+    })));
+    results.forEach(({ customer, services }) => {
+      const active = services.filter((service) => service.status === "active");
+      const total = active.reduce((sum, service) => sum + Number(service.monthly_amount || 0), 0);
+      const view = button("View routes");
+      view.addEventListener("click", () => renderCustomerProfile(customer));
+      const card = recordCard(customer.name, `${active.length} active`, [view]);
+      card.insertBefore(element("p", { text: `${money(total)} monthly contract value` }), card.lastChild);
+      rows.append(card);
+    });
+    section.append(rows);
+    content.replaceChildren(section);
+  }
+
+  async function renderSubcontractors() {
+    const records = await readJson("/api/subcontractors");
+    const section = formSection("Subcontractors", "Maintain each company, its drivers and its vehicles. Archive preserves history.");
+    const form = element("form", { className: "manager-form" }, [field("Company name", "company_name", { required: true, maxlength: "160" })]);
+    const create = button("Review new subcontractor", "primary-button");
+    form.append(element("div", { className: "manager-form-actions" }, [create]));
+    form.addEventListener("submit", (event) => event.preventDefault());
+    create.addEventListener("click", () => {
+      if (!form.reportValidity()) return;
+      const payload = toPayload(form);
+      perform({ message: "Create this subcontractor?", summary: [["Company", payload.company_name]], url: "/api/subcontractors", payload, success: "Subcontractor created." });
+    });
+    section.append(form);
+    const list = element("div", { className: "manager-record-list" });
+    records.forEach((record) => {
+      const addDriver = button("Add driver");
+      const addVehicle = button("Add vehicle");
+      const archive = button("Archive", "warning-button");
+      addDriver.addEventListener("click", () => renderSubcontractorMemberForm(record, "driver"));
+      addVehicle.addEventListener("click", () => renderSubcontractorMemberForm(record, "vehicle"));
+      archive.addEventListener("click", () => perform({ message: "Archive this subcontractor?", summary: [["Company", record.company_name]], url: `/api/subcontractors/${record.id}/archive`, payload: {}, success: "Subcontractor archived." }));
+      const actions = record.status === "active" ? [addDriver, addVehicle, archive] : [];
+      const card = recordCard(record.company_name, record.status, actions);
+      card.insertBefore(element("p", { text: `Drivers: ${record.drivers.map((item) => `${item.name}${item.contact_number ? ` (${item.contact_number})` : ""}`).join(", ") || "None recorded"}` }), card.lastChild);
+      card.insertBefore(element("p", { text: `Vehicles: ${record.vehicles.map((item) => `${item.vehicle_number}${item.capacity ? ` · ${item.capacity} seats` : ""}`).join(", ") || "None recorded"}` }), card.lastChild);
+      list.append(card);
+    });
+    section.append(records.length ? list : empty("No subcontractors recorded."));
+    content.replaceChildren(section);
+  }
+
+  function renderSubcontractorMemberForm(contractor, kind) {
+    const driver = kind === "driver";
+    const section = formSection(`Add ${kind} · ${contractor.company_name}`);
+    const form = element("form", { className: "manager-form" }, driver ? [
+      field("Driver name", "name", { required: true, maxlength: "120" }),
+      field("Contact number (optional)", "contact_number", { maxlength: "40" }),
+    ] : [
+      field("Vehicle number", "vehicle_number", { required: true, maxlength: "32" }),
+      field("Capacity / seaters (optional)", "capacity", { type: "number", min: "1" }),
+    ]);
+    const back = button("Cancel");
+    const save = button(`Review ${kind}`, "primary-button");
+    back.addEventListener("click", renderSubcontractors);
+    save.addEventListener("click", () => {
+      if (!form.reportValidity()) return;
+      const payload = toPayload(form, driver ? [] : ["capacity"]);
+      perform({ message: `Add this ${kind} to ${contractor.company_name}?`, summary: driver ? [["Driver", payload.name], ["Contact", payload.contact_number]] : [["Vehicle", payload.vehicle_number], ["Capacity", payload.capacity]], url: `/api/subcontractors/${contractor.id}/${driver ? "drivers" : "vehicles"}`, payload, success: `Subcontractor ${kind} added.` });
+    });
+    form.addEventListener("submit", (event) => event.preventDefault());
+    form.append(element("div", { className: "manager-form-actions" }, [back, save]));
+    section.append(form); content.replaceChildren(section);
+  }
+
+  async function renderMaintenance() {
+    const [entries, fleet] = await Promise.all([readJson("/api/maintenance-entries"), readJson("/api/fleet")]);
+    const section = formSection("Maintenance", "Every cost is linked to a vehicle for monthly profitability.");
+    const form = element("form", { className: "manager-form" }, [
+      field("Date", "service_date", { required: true, type: "date", value: todayValue() }),
+      field("Vehicle", "vehicle_id", { required: true, options: [["", "Choose vehicle…"], ...fleet.map((item) => [String(item.id), item.registration_number])] }),
+      field("Vendor", "vendor", { required: true, maxlength: "160" }),
+      field("Type of service", "service_type", { required: true, maxlength: "120" }),
+      field("Amount (SGD)", "amount", { required: true, type: "number", min: "0.01", step: "0.01" }),
+      field("Remarks (optional)", "remarks", { maxlength: "300", wide: true }),
+    ]);
+    const create = button("Review maintenance expense", "primary-button");
+    form.append(element("div", { className: "manager-form-actions" }, [create]));
+    form.addEventListener("submit", (event) => event.preventDefault());
+    create.addEventListener("click", () => {
+      if (!form.reportValidity()) return;
+      const payload = toPayload(form, ["vehicle_id"]);
+      const vehicle = fleet.find((item) => item.id === payload.vehicle_id);
+      perform({ message: "Record this vehicle maintenance expense?", summary: [["Date", payload.service_date], ["Vehicle", vehicle?.registration_number], ["Vendor", payload.vendor], ["Service", payload.service_type], ["Amount", money(payload.amount)]], url: "/api/maintenance-entries", payload, success: "Maintenance expense recorded." });
+    });
+    section.append(form);
+    const list = element("div", { className: "manager-record-list" });
+    entries.forEach((record) => {
+      const card = recordCard(`${record.vehicle_number} · ${record.service_type}`, record.service_date);
+      card.insertBefore(element("p", { text: `${record.vendor} · ${money(record.amount)}${record.remarks ? ` · ${record.remarks}` : ""}` }), card.lastChild);
+      list.append(card);
+    });
+    section.append(entries.length ? list : empty("No maintenance expenses recorded."));
+    content.replaceChildren(section);
+  }
 
   async function renderProjects() {
     const records = await readJson("/api/projects");
@@ -438,14 +583,23 @@
     [4, "Fri"], [5, "Sat"], [6, "Sun"],
   ];
 
+  const schedulePresets = [
+    { value: "mon-fri", label: "Monday to Friday", weekdays: [0, 1, 2, 3, 4], remarks: "Excludes public holidays" },
+    { value: "mon-sat", label: "Monday to Saturday", weekdays: [0, 1, 2, 3, 4, 5], remarks: "Monday to Saturday" },
+    { value: "mon-sun", label: "Monday to Sunday", weekdays: [0, 1, 2, 3, 4, 5, 6], remarks: "Includes public holidays" },
+    { value: "weekend-ph", label: "Saturday, Sunday & public holidays", weekdays: [5, 6], remarks: "Weekend / public holiday service" },
+  ];
+  const matchingSchedulePreset = (selected = []) => schedulePresets.find((preset) => preset.weekdays.length === selected.length && preset.weekdays.every((day) => selected.includes(day)));
+
   const weekdayFields = (selected = []) => {
     const wrapper = element("fieldset", { className: "manager-field manager-field-wide" });
-    wrapper.append(element("legend", { text: "Operating days" }));
+    wrapper.append(element("legend", { text: "Operating schedule" }));
     const choices = element("div", { className: "manager-inline-options" });
-    weekdayOptions.forEach(([value, label]) => {
-      const input = element("input", { type: "checkbox", value: String(value) });
-      input.checked = selected.includes(value);
-      choices.append(element("label", {}, [input, document.createTextNode(label)]));
+    const selectedPreset = matchingSchedulePreset(selected);
+    schedulePresets.forEach((preset) => {
+      const input = element("input", { type: "radio", name: "schedule_preset", value: preset.value, required: true });
+      input.checked = selectedPreset?.value === preset.value;
+      choices.append(element("label", {}, [input, document.createTextNode(preset.label)]));
     });
     wrapper.append(choices);
     return wrapper;
@@ -495,15 +649,16 @@
       try {
         const payload = toPayload(form, ["route_id"]);
         delete payload.stops_text;
-        payload.weekdays = Array.from(form.querySelectorAll('input[type="checkbox"]:checked'), (node) => Number(node.value));
-        if (!payload.weekdays.length) throw new Error("Select at least one operating day.");
+        const preset = schedulePresets.find((item) => item.value === form.elements.schedule_preset.value);
+        if (!preset) throw new Error("Select one operating schedule.");
+        payload.weekdays = [...preset.weekdays];
         payload.stops = parseTimedStops(form.elements.stops_text.value);
         if (!existing) payload.customer_id = customer.id;
         perform({
           message: existing ? "Create this forward replacement and archive the current service?" : "Create this recurring customer service?",
           summary: [
             ["Customer", customer.name], ["Reference", payload.service_reference],
-            ["Operating days", payload.weekdays.map((day) => weekdayOptions[day][1]).join(", ")],
+            ["Operating schedule", preset.label], ["Trip remarks", preset.remarks],
             ["Fixed monthly amount", `${payload.currency_code} ${payload.monthly_amount}`],
             ["Effective start", payload.effective_start_date],
           ],
@@ -557,11 +712,16 @@
   };
 
   async function renderCustomerProfile(customer) {
-    const [services, routes] = await Promise.all([
+    const [services, routes, assignments, fleet, drivers, subcontractors] = await Promise.all([
       readJson(`/api/customers/${customer.id}/recurring-services`),
       readJson("/api/routes"),
+      readJson("/api/recurring-route-assignments"),
+      readJson("/api/fleet"),
+      readJson("/api/drivers"),
+      readJson("/api/subcontractors"),
     ]);
     const routeById = indexedById(routes);
+    const assignmentByService = new Map(assignments.filter((item) => item.status === "active").map((item) => [item.recurring_service_id, item]));
     const draftResults = await Promise.allSettled(
       services.map((record) => readJson(`/api/recurring-services/${record.id}/fuel-adjustment`))
     );
@@ -602,12 +762,26 @@
         const fuelTerms = button(fuelDraft?.current_rule ? "New fuel terms" : "Add fuel terms");
         fuelTerms.addEventListener("click", () => fuelRuleForm(customer, record, fuelDraft?.current_rule));
         actions.push(fuelTerms);
+        const assign = button(assignmentByService.has(record.id) ? "Change assignment" : "Assign");
+        assign.addEventListener("click", () => renderRecurringAssignmentForm(customer, record, fleet, drivers, subcontractors));
+        actions.push(assign);
       }
       const route = routeById.get(record.route_id);
-      const dayNames = record.days.map((item) => weekdayOptions[item.weekday][1]).join(", ");
+      const selectedDays = record.days.map((item) => item.weekday);
+      const preset = matchingSchedulePreset(selectedDays);
+      const dayNames = preset?.label || selectedDays.map((day) => weekdayOptions[day][1]).join(", ");
+      const tripTime = record.stops.length ? String(record.stops[0].scheduled_time).slice(0, 5) : "Not recorded";
       const card = recordCard(record.service_reference, record.status, actions);
-      card.insertBefore(element("p", { text: `${route?.route_code || `Route #${record.route_id}`} · ${dayNames} · ${record.currency_code} ${record.monthly_amount} monthly` }), card.lastChild);
+      card.insertBefore(element("p", { text: `${route?.route_code || `Route #${record.route_id}`} · Trip time ${tripTime} · ${dayNames} · ${record.currency_code} ${record.monthly_amount} monthly` }), card.lastChild);
       card.insertBefore(element("p", { text: record.stops.map((stop) => `${String(stop.scheduled_time).slice(0, 5)} ${stop.location_name}`).join(" → ") }), card.lastChild);
+      if (preset) card.insertBefore(element("p", { className: "micro-copy left-copy", text: `Trip remarks: ${preset.remarks}` }), card.lastChild);
+      const assignment = assignmentByService.get(record.id);
+      if (assignment) {
+        const provider = assignment.assignment_type === "own_fleet" ? "Own fleet" : assignment.subcontractor_name;
+        card.insertBefore(element("p", { className: "assignment-summary", text: `Assigned: ${provider} · ${assignment.vehicle_number || "Vehicle not recorded"} · ${assignment.driver_name || "Driver not recorded"}${assignment.contact_number ? ` · ${assignment.contact_number}` : ""}${assignment.monthly_subcontractor_cost !== null ? ` · Cost ${money(assignment.monthly_subcontractor_cost)} monthly` : ""}` }), card.lastChild);
+      } else {
+        card.insertBefore(element("p", { className: "assignment-warning", text: "Unassigned route — needs attention" }), card.lastChild);
+      }
       card.insertBefore(element("p", { className: "micro-copy left-copy", text: `${displayValue(record.vehicle_requirement)} · Effective ${record.effective_start_date}${record.effective_end_date ? ` to ${record.effective_end_date}` : " onward"}` }), card.lastChild);
       const fuelDraft = fuelDraftByService.get(record.id);
       if (fuelDraft?.calculation_status === "draft_ready") {
@@ -630,6 +804,45 @@
     });
     section.append(services.length ? list : empty("No recurring services have been recorded for this customer."));
     content.replaceChildren(section);
+  }
+
+  function renderRecurringAssignmentForm(customer, service, fleet, drivers, subcontractors) {
+    const activeContractors = subcontractors.filter((contractor) => contractor.status === "active");
+    const subVehicles = activeContractors.flatMap((contractor) => contractor.vehicles.map((vehicle) => ({ ...vehicle, contractor })));
+    const subDrivers = activeContractors.flatMap((contractor) => contractor.drivers.map((driver) => ({ ...driver, contractor })));
+    const section = formSection(`Assign · ${service.service_reference}`, "Choose either an Advan vehicle or a subcontractor. A new assignment ends the prior active assignment but preserves its history.");
+    const form = element("form", { className: "manager-form" }, [
+      field("Assignment type", "assignment_type", { required: true, options: [["own_fleet", "Own driver and vehicle"], ["subcontractor", "Subcontractor"]] }),
+      field("Effective start", "effective_start_date", { required: true, type: "date", value: todayValue() }),
+      field("Own vehicle", "vehicle_id", { options: [["", "Choose vehicle…"], ...fleet.map((item) => [String(item.id), item.registration_number])] }),
+      field("Own driver (optional)", "driver_id", { options: [["", "No driver recorded"], ...drivers.map((item) => [String(item.id), item.name])] }),
+      field("Subcontractor vehicle", "subcontractor_vehicle_id", { options: [["", "Choose vehicle…"], ...subVehicles.map((item) => [String(item.id), `${item.contractor.company_name} · ${item.vehicle_number}`])] }),
+      field("Subcontractor driver (optional)", "subcontractor_driver_id", { options: [["", "No driver recorded"], ...subDrivers.map((item) => [String(item.id), `${item.contractor.company_name} · ${item.name}`])] }),
+      field("Fixed monthly subcontractor cost (SGD)", "monthly_subcontractor_cost", { type: "number", min: "0", step: "0.01" }),
+      field("Remarks (optional)", "remarks", { maxlength: "300", wide: true }),
+    ]);
+    const type = form.elements.assignment_type;
+    const sync = () => {
+      const own = type.value === "own_fleet";
+      [form.elements.vehicle_id, form.elements.driver_id].forEach((node) => { node.disabled = !own; });
+      [form.elements.subcontractor_vehicle_id, form.elements.subcontractor_driver_id, form.elements.monthly_subcontractor_cost].forEach((node) => { node.disabled = own; });
+      form.elements.vehicle_id.required = own;
+      form.elements.subcontractor_vehicle_id.required = !own;
+      form.elements.monthly_subcontractor_cost.required = !own;
+    };
+    type.addEventListener("change", sync); sync();
+    const back = button("Cancel");
+    const save = button("Review assignment", "primary-button");
+    back.addEventListener("click", () => renderCustomerProfile(customer));
+    form.addEventListener("submit", (event) => event.preventDefault());
+    save.addEventListener("click", () => {
+      if (!form.reportValidity()) return;
+      const payload = toPayload(form, ["vehicle_id", "driver_id", "subcontractor_vehicle_id", "subcontractor_driver_id"]);
+      payload.recurring_service_id = service.id;
+      perform({ message: "Activate this route assignment?", summary: [["Route", service.service_reference], ["Type", payload.assignment_type], ["Effective start", payload.effective_start_date], ["Monthly subcontractor cost", payload.monthly_subcontractor_cost]], url: "/api/recurring-route-assignments", payload, success: "Route assignment activated." });
+    });
+    form.append(element("div", { className: "manager-form-actions" }, [back, save]));
+    section.append(form); content.replaceChildren(section);
   }
 
   async function renderDriverProfile(driver) {
@@ -704,7 +917,15 @@
   async function renderRegister(kind) {
     const config = registerConfig[kind];
     const records = await readJson(config.endpoint);
+    const detailResults = kind === "drivers"
+      ? await Promise.allSettled(records.map((record) => readJson(`/api/drivers/${record.id}/employment-records`)))
+      : kind === "customers"
+        ? await Promise.allSettled(records.map((record) => readJson(`/api/customers/${record.id}/recurring-services`)))
+        : [];
+    const detailsById = new Map(records.map((record, index) => [record.id, detailResults[index]?.status === "fulfilled" ? detailResults[index].value : []]));
     const section = formSection(config.title, `Only the existing ${config.title.toLowerCase()} register fields are exposed.`);
+    const search = field(`Search ${config.title.toLowerCase()}`, "search", { maxlength: "120" });
+    section.append(search);
     const form = element("form", { className: "manager-form" }, [
       field(config.nameLabel, "name", { required: true, maxlength: kind === "drivers" ? "120" : "160" }),
       field(config.referenceLabel, config.reference, { maxlength: "40" }),
@@ -736,8 +957,22 @@
         actions.unshift(profile);
       }
       const card = recordCard(record.name, record.status, actions);
-      card.insertBefore(element("p", { text: displayValue(record[config.reference]) }), card.lastChild);
+      if (kind === "drivers") {
+        const latest = [...detailsById.get(record.id)].sort((a, b) => b.effective_month.localeCompare(a.effective_month))[0];
+        const category = latest?.worker_category === "local_pr" ? "Local / PR" : latest?.worker_category === "foreign_levy" ? "Foreigner" : "Category not recorded";
+        const cost = (value) => value === null || value === undefined ? "Not recorded" : money(value);
+        card.insertBefore(element("p", { text: latest ? `${category} · Basic ${cost(latest.basic_salary)} · CPF ${cost(latest.employer_cpf_amount)} · Levy ${cost(latest.monthly_levy_amount)} · Allowance ${cost(latest.monthly_allowance)}` : "Employment costs not recorded" }), card.lastChild);
+      } else if (kind === "customers") {
+        const active = detailsById.get(record.id).filter((item) => item.status === "active");
+        const total = active.reduce((sum, item) => sum + Number(item.monthly_amount || 0), 0);
+        card.insertBefore(element("p", { text: `${money(total)} monthly contract value · ${active.length} active routes` }), card.lastChild);
+      } else card.insertBefore(element("p", { text: displayValue(record[config.reference]) }), card.lastChild);
+      card.dataset.searchText = card.textContent.toLowerCase();
       list.append(card);
+    });
+    search.querySelector("input").addEventListener("input", (event) => {
+      const query = event.target.value.trim().toLowerCase();
+      list.querySelectorAll(".manager-record").forEach((card) => { card.hidden = query && !card.dataset.searchText.includes(query); });
     });
     section.append(records.length ? list : empty(`No ${kind} have been recorded.`));
     content.replaceChildren(section);
@@ -907,37 +1142,60 @@
   }
 
   async function renderFinance() {
-    const [entries, trips, customers] = await Promise.all([readJson("/api/financial-entries"), readJson("/api/trips"), readJson("/api/customers")]);
+    const [entries, trips, customers, fleet, assignments] = await Promise.all([readJson("/api/financial-entries"), readJson("/api/trips"), readJson("/api/customers"), readJson("/api/fleet"), readJson("/api/recurring-route-assignments")]);
     const tripById = indexedById(trips);
     const customerById = indexedById(customers);
-    const section = formSection("Finance", "Financial entries are append-only facts. This screen does not infer accounting or GST treatment.");
+    const vehicleById = indexedById(fleet);
+    const serviceResults = await Promise.all(customers.map((customer) => readJson(`/api/customers/${customer.id}/recurring-services`)));
+    const activeServices = serviceResults.flat().filter((item) => item.status === "active");
+    const monthlyIncome = activeServices.reduce((sum, item) => sum + Number(item.monthly_amount || 0), 0);
+    const monthlyLoans = fleet.reduce((sum, item) => sum + Number(item.monthly_instalment || 0), 0);
+    const monthlySubcontractors = assignments.filter((item) => item.status === "active").reduce((sum, item) => sum + Number(item.monthly_subcontractor_cost || 0), 0);
+    const knownMonthlyNet = monthlyIncome - monthlyLoans - monthlySubcontractors;
+    const floating = entries.filter((item) => item.payment_status !== "paid" && !item.expected_payment_date);
+    const section = formSection("Finance", "Management P&L uses the accounting month. Optional payment timing controls cash forecasts; missing timing stays floating and needs attention.");
+    section.append(element("div", { className: "operations-metrics" }, [
+      summaryMetric("Predictable monthly income", money(monthlyIncome), "Active customer routes"),
+      summaryMetric("Monthly vehicle instalments", money(monthlyLoans), "Known fleet commitments"),
+      summaryMetric("Monthly subcontractors", money(monthlySubcontractors), "Fixed recurring assignments"),
+      summaryMetric("Known monthly balance", money(knownMonthlyNet), "Before fuel, payroll and other costs"),
+      summaryMetric("Floating timing", String(floating.length), "Needs user attention"),
+    ]));
     const form = element("form", { className: "manager-form" }, [
       field("Entry date", "entry_date", { required: true, type: "date", value: todayValue() }),
+      field("Accounting / service month", "accounting_month", { required: true, type: "month", value: todayValue().slice(0, 7) }),
+      field("Expected payment date (optional)", "expected_payment_date", { type: "date" }),
+      field("Payment status", "payment_status", { required: true, options: [["unpaid", "Unpaid"], ["paid", "Paid"]] }),
+      field("Actual payment date (optional)", "payment_date", { type: "date" }),
       field("Entry type", "entry_type", { required: true, options: [["income", "Income"], ["expense", "Expense"]] }),
+      field("Category (optional)", "category", { maxlength: "40" }),
       field("Amount", "amount", { required: true, type: "number", min: "0.01", step: "0.01" }),
       field("Currency", "currency_code", { required: true, maxlength: "3", value: "SGD" }),
       field("Description (optional)", "description", { maxlength: "200", wide: true }),
       field("Trip (optional)", "trip_id", { options: [["", "Not linked"], ...trips.map((item) => [String(item.id), `${item.trip_reference} · ${item.service_date}`])] }),
       field("Customer (optional)", "customer_id", { options: [["", "Not linked"], ...customers.map((item) => [String(item.id), item.name])] }),
+      field("Vehicle (optional)", "vehicle_id", { options: [["", "Not linked"], ...fleet.map((item) => [String(item.id), item.registration_number])] }),
     ]);
     const create = button("Review financial entry", "primary-button");
     form.append(element("div", { className: "manager-form-actions" }, [create]));
     form.addEventListener("submit", (event) => event.preventDefault());
     create.addEventListener("click", () => {
       if (!form.reportValidity()) return;
-      const payload = toPayload(form, ["trip_id", "customer_id"]);
+      const payload = toPayload(form, ["trip_id", "customer_id", "vehicle_id"]);
+      payload.accounting_month = `${payload.accounting_month}-01`;
       perform({
         message: "Record this immutable financial entry?",
-        summary: [["Date", payload.entry_date], ["Type", payload.entry_type], ["Amount", `${payload.currency_code} ${payload.amount}`], ["Description", payload.description], ["Trip", tripById.get(payload.trip_id)?.trip_reference], ["Customer", customerById.get(payload.customer_id)?.name]],
+        summary: [["Accounting month", payload.accounting_month.slice(0, 7)], ["Expected payment", payload.expected_payment_date || "Floating — needs attention"], ["Type", payload.entry_type], ["Amount", `${payload.currency_code} ${payload.amount}`], ["Description", payload.description], ["Customer", customerById.get(payload.customer_id)?.name], ["Vehicle", vehicleById.get(payload.vehicle_id)?.registration_number]],
         url: "/api/financial-entries", payload, success: "Financial entry recorded.",
       });
     });
     section.append(form);
     const list = element("div", { className: "manager-record-list" });
     entries.forEach((record) => {
-      const links = [tripById.get(record.trip_id)?.trip_reference, customerById.get(record.customer_id)?.name].filter(Boolean).join(" · ");
-      const card = recordCard(`${record.currency_code} ${record.amount}`, record.entry_type);
-      card.insertBefore(element("p", { text: `${record.entry_date} · ${displayValue(record.description)}${links ? ` · ${links}` : ""}` }), card.lastChild);
+      const links = [tripById.get(record.trip_id)?.trip_reference, customerById.get(record.customer_id)?.name, vehicleById.get(record.vehicle_id)?.registration_number].filter(Boolean).join(" · ");
+      const timing = record.payment_status === "paid" ? `Paid ${record.payment_date}` : (record.expected_payment_date || "Floating — needs attention");
+      const card = recordCard(`${record.currency_code} ${record.amount}`, `${record.entry_type} · ${record.accounting_month.slice(0, 7)}`);
+      card.insertBefore(element("p", { text: `${timing} · ${displayValue(record.category)} · ${displayValue(record.description)}${links ? ` · ${links}` : ""}` }), card.lastChild);
       list.append(card);
     });
     section.append(entries.length ? list : empty("No financial entries have been recorded."));
@@ -962,14 +1220,17 @@
     content.replaceChildren(element("p", { className: "manager-loading", text: "Loading local records…" }));
     setStatus("");
     try {
-      if (activeTab === "projects") await renderProjects();
+      if (activeTab === "dashboard") await renderDashboard();
+      else if (activeTab === "projects") await renderProjects();
       else if (activeTab === "knowledge") await renderKnowledge();
       else if (activeTab === "fleet") await renderFleet();
-      else if (activeTab === "routes") await renderRoutes();
+      else if (activeTab === "routes") await renderRouteWorkspace();
       else if (activeTab === "trips") await renderTrips();
       else if (activeTab === "assignments") await renderAssignments();
       else if (activeTab === "fuel-entries") await renderFuelEntries();
       else if (activeTab === "finance") await renderFinance();
+      else if (activeTab === "subcontractors") await renderSubcontractors();
+      else if (activeTab === "maintenance") await renderMaintenance();
       else if (activeTab === "activity") await renderActivity();
       else await renderRegister(activeTab);
     } catch (error) {
@@ -988,22 +1249,18 @@
     renderActiveTab();
   };
 
-  const openManager = (tab = "projects") => {
-    previouslyFocused = document.activeElement;
+  const openManager = (tab = "dashboard") => {
     manager.hidden = false;
-    backdrop.hidden = false;
+    backdrop.hidden = true;
     document.body.classList.add("record-manager-open");
     byId("manage-records").setAttribute("aria-expanded", "true");
     setActiveTab(tab);
-    byId("close-record-manager").focus();
   };
 
   const closeManager = () => {
-    manager.hidden = true;
+    manager.hidden = false;
     backdrop.hidden = true;
-    document.body.classList.remove("record-manager-open");
-    byId("manage-records").setAttribute("aria-expanded", "false");
-    if (previouslyFocused) previouslyFocused.focus();
+    setActiveTab("dashboard");
   };
 
   byId("manage-records").setAttribute("aria-expanded", "false");
@@ -1015,7 +1272,5 @@
   byId("cancel-edit-confirmation").addEventListener("click", () => resolveConfirmation(false));
   byId("confirm-edit-action").addEventListener("click", () => resolveConfirmation(true));
   confirmation.addEventListener("cancel", (event) => { event.preventDefault(); resolveConfirmation(false); });
-  document.addEventListener("keydown", (event) => {
-    if (event.key === "Escape" && !manager.hidden && !confirmation.open) closeManager();
-  });
+  openManager("dashboard");
 })();

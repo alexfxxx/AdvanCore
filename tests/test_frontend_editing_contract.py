@@ -15,7 +15,16 @@ def test_primary_console_has_one_confirmed_record_manager():
         "confirm-edit-action",
     ):
         assert f'id="{identifier}"' in html
-    for tab in ("projects", "knowledge", "fleet", "drivers", "customers", "routes"):
+    for tab in (
+        "dashboard",
+        "customers",
+        "routes",
+        "drivers",
+        "fleet",
+        "subcontractors",
+        "maintenance",
+        "finance",
+    ):
         assert f'data-manager-tab="{tab}"' in html
     assert "/assets/editing.js?v=task-189-1" in html
 

@@ -368,8 +368,7 @@ def create_financial_entry(
     payload: FinancialEntryCreateRequest, request: Request
 ) -> FinancialEntryResponse:
     _confirmed(payload)
-    return _call(
-        lambda: request.app.state.edit_gateway.create_financial_entry(
+    base_args = (
             payload.entry_date,
             payload.entry_type,
             payload.amount,
@@ -377,7 +376,18 @@ def create_financial_entry(
             payload.description,
             payload.trip_id,
             payload.customer_id,
-        )
+    )
+    extended = any((payload.vehicle_id, payload.accounting_month, payload.expected_payment_date, payload.payment_date, payload.category)) or payload.payment_status != "unpaid"
+    return _call(
+        lambda: request.app.state.edit_gateway.create_financial_entry(
+            *base_args,
+            payload.vehicle_id,
+            payload.accounting_month,
+            payload.expected_payment_date,
+            payload.payment_status,
+            payload.payment_date,
+            payload.category,
+        ) if extended else request.app.state.edit_gateway.create_financial_entry(*base_args)
     )
 
 

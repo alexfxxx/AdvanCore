@@ -23,6 +23,13 @@ from advancore.models.setting import SystemSetting
 from advancore.models.vehicle import Vehicle
 from advancore.models.trip import Trip
 from advancore.models.trip_assignment import TripAssignment
+from advancore.models.local_business import (
+    MaintenanceEntry,
+    RecurringRouteAssignment,
+    Subcontractor,
+    SubcontractorDriver,
+    SubcontractorVehicle,
+)
 
 __all__ = [
     "Base",
@@ -46,4 +53,9 @@ __all__ = [
     "Vehicle",
     "Trip",
     "TripAssignment",
+    "MaintenanceEntry",
+    "RecurringRouteAssignment",
+    "Subcontractor",
+    "SubcontractorDriver",
+    "SubcontractorVehicle",
 ]
