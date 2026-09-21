@@ -8,12 +8,25 @@
       content="AdvanCore local governed operations console"
     />
     <title>AdvanCore Main App</title>
-    <link rel="stylesheet" href="/assets/styles.css?v=task-189-1" />
-    <script src="/assets/app.js?v=task-189-1" defer></script>
-    <script src="/assets/editing.js?v=task-189-1" defer></script>
+    <link rel="stylesheet" href="/assets/styles.css?v=platform-knowledge-1" />
+    <script src="/assets/app.js?v=platform-knowledge-1" defer></script>
+    <script src="/assets/editing.js?v=platform-knowledge-1" defer></script>
     <script src="/assets/audio.js?v=task-189-1" defer></script>
   </head>
-  <body class="operations-mode">
+  <body class="platform-mode">
+    <aside class="platform-sidebar" aria-label="AdvanCore platform navigation">
+      <strong>AdvanCore</strong>
+      <nav>
+        <a href="#workspace">Dashboard</a>
+        <button type="button" data-open-manager="knowledge">Knowledge Hub</button>
+        <button type="button" data-open-manager="projects">Projects</button>
+        <button type="button" data-open-manager="dashboard">Transport Operations</button>
+        <a href="#controller-console">AI Center</a>
+        <a href="#boundary-title">Activity &amp; Governance</a>
+        <a href="#preferences-console">Settings</a>
+      </nav>
+      <p>Business records stay local.</p>
+    </aside>
     <div class="ambient ambient-one" aria-hidden="true"></div>
     <div class="ambient ambient-two" aria-hidden="true"></div>
 
@@ -414,13 +427,13 @@
     </aside>
 
     <div class="drawer-backdrop" id="record-manager-backdrop" hidden></div>
-    <aside class="record-manager" id="record-manager" aria-labelledby="record-manager-title">
+    <aside class="record-manager" id="record-manager" aria-labelledby="record-manager-title" hidden>
       <div class="drawer-heading">
         <div>
           <p class="section-code">LOCAL OPERATIONS</p>
           <h2 id="record-manager-title">AdvanCore</h2>
         </div>
-        <button id="close-record-manager" class="secondary-action-button" type="button" hidden>Close</button>
+        <button id="close-record-manager" class="secondary-action-button" type="button">← Platform</button>
       </div>
       <p class="supporting-copy manager-intro">
         Select a workspace. Every saved change still requires review and confirmation.
