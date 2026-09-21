@@ -26,7 +26,7 @@ def test_primary_console_has_one_confirmed_record_manager():
         "finance",
     ):
         assert f'data-manager-tab="{tab}"' in html
-    assert "/assets/editing.js?v=task-189-1" in html
+    assert "/assets/editing.js?v=platform-knowledge-1" in html
 
 
 def test_editing_client_uses_same_origin_confirmation_and_action_token():

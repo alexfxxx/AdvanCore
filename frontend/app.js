@@ -982,7 +982,7 @@ function recentActiveRecords(records) {
 }
 
 function renderProjectSummary() {
-  const ordered = recentActiveRecords(currentProjects);
+  const ordered = recentActiveRecords(currentProjects).filter(record => record.status === "active");
   const records = projectsExpanded ? ordered : ordered.slice(0, SUMMARY_RECORD_LIMIT);
     renderRecords(
       "projects-list",
@@ -991,8 +991,8 @@ function renderProjectSummary() {
       "No projects recorded.",
     );
   const toggle = byId("toggle-projects");
-  toggle.hidden = currentProjects.length <= SUMMARY_RECORD_LIMIT;
-  toggle.textContent = projectsExpanded ? "Show summary" : `View all ${currentProjects.length} projects`;
+  toggle.hidden = ordered.length <= SUMMARY_RECORD_LIMIT;
+  toggle.textContent = projectsExpanded ? "Show summary" : `View all ${ordered.length} projects`;
 }
 
 async function loadKnowledge() {
@@ -1005,7 +1005,7 @@ async function loadKnowledge() {
 }
 
 function renderKnowledgeSummary() {
-  const ordered = recentActiveRecords(currentKnowledge);
+  const ordered = recentActiveRecords(currentKnowledge).filter(record => record.status === "approved");
   const records = knowledgeExpanded ? ordered : ordered.slice(0, SUMMARY_RECORD_LIMIT);
     renderRecords(
       "knowledge-list",
@@ -1014,8 +1014,8 @@ function renderKnowledgeSummary() {
       "No Knowledge items recorded.",
     );
   const toggle = byId("toggle-knowledge");
-  toggle.hidden = currentKnowledge.length <= SUMMARY_RECORD_LIMIT;
-  toggle.textContent = knowledgeExpanded ? "Show summary" : `View all ${currentKnowledge.length} Knowledge items`;
+  toggle.hidden = ordered.length <= SUMMARY_RECORD_LIMIT;
+  toggle.textContent = knowledgeExpanded ? "Show summary" : `View all ${ordered.length} knowledge items`;
 }
 
 function showGoalResult(message, isError = false) {

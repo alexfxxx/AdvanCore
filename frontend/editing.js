@@ -342,9 +342,20 @@
     content.replaceChildren(section);
   }
 
+  function appendCompactForm(section, form, label) {
+    const toggle = button(label, "primary-button");
+    form.hidden = true;
+    toggle.setAttribute("aria-expanded", "false");
+    toggle.addEventListener("click", () => {
+      form.hidden = !form.hidden;
+      toggle.setAttribute("aria-expanded", String(!form.hidden));
+    });
+    section.append(toggle, form);
+  }
+
   async function renderProjects() {
-    const records = await readJson("/api/projects");
-    const section = formSection("Projects", "Create, edit or archive through ProjectService.");
+    const records = (await readJson("/api/projects")).filter(record => record.status === "active");
+    const section = formSection("Business initiatives", "Company projects and strategic improvements. Archived records are hidden.");
     const createForm = element("form", { className: "manager-form" }, [
       field("Project name", "name", { required: true, maxlength: "200" }),
       field("Description (optional)", "description", { type: "textarea", wide: true }),
@@ -361,7 +372,7 @@
         url: "/api/projects", payload, success: "Project created.",
       });
     });
-    section.append(createForm);
+    appendCompactForm(section, createForm, "Add business initiative");
 
     const list = element("div", { className: "manager-record-list" });
     records.forEach((record) => {
@@ -406,9 +417,13 @@
     content.replaceChildren(section);
   }
 
-  async function renderKnowledge() {
-    const records = await readJson("/api/knowledge");
-    const section = formSection("Knowledge", "Drafts can be edited or approved. Approved items are replaced forward, never edited in place.");
+  async function renderKnowledge(view = "approved") {
+    if (!["approved", "draft"].includes(view)) view = "approved";
+    const records = (await readJson("/api/knowledge")).filter(record => record.status === view);
+    const section = formSection("Company Knowledge", "Verified policies, procedures and business rules. Only approved items are authoritative; drafts require owner review.");
+    const selector = field("Knowledge view", "knowledge_view", {options: [["approved", "Approved business knowledge"], ["draft", "Drafts awaiting approval"]], value: view});
+    selector.querySelector("select").addEventListener("change", event => renderKnowledge(event.target.value));
+    section.append(selector);
     const form = element("form", { className: "manager-form" }, [
       field("Title", "title", { required: true, maxlength: "300" }),
       field("Content", "content", { required: true, type: "textarea", wide: true, maxlength: "100000", rows: "6" }),
@@ -421,7 +436,7 @@
       const payload = toPayload(form);
       perform({ message: "Create this knowledge draft?", summary: [["Title", payload.title], ["Content", payload.content]], url: "/api/knowledge", payload, success: "Knowledge draft created." });
     });
-    section.append(form);
+    appendCompactForm(section, form, "Add business knowledge draft");
 
     const list = element("div", { className: "manager-record-list" });
     records.forEach((record) => {
@@ -456,7 +471,7 @@
       card.insertBefore(element("p", { className: "manager-record-preview", text: record.content }), card.lastChild);
       list.append(card);
     });
-    section.append(records.length ? list : empty("No knowledge items have been recorded."));
+    section.append(records.length ? list : empty(view === "approved" ? "No approved company knowledge yet." : "No drafts awaiting approval."));
     content.replaceChildren(section);
   }
 
@@ -1241,6 +1256,11 @@
 
   const setActiveTab = (tab) => {
     activeTab = tab;
+    const platformWorkspace = ["projects", "knowledge", "activity"].includes(tab);
+    document.body.classList.toggle("platform-workspace", platformWorkspace);
+    document.body.classList.toggle("operations-mode", !platformWorkspace);
+    document.body.classList.toggle("platform-mode", platformWorkspace);
+    document.querySelectorAll(".platform-sidebar [data-open-manager]").forEach(node => node.classList.toggle("active", node.dataset.openManager === tab));
     document.querySelectorAll("[data-manager-tab]").forEach((node) => {
       const active = node.dataset.managerTab === tab;
       node.classList.toggle("active", active);
@@ -1258,9 +1278,12 @@
   };
 
   const closeManager = () => {
-    manager.hidden = false;
+    manager.hidden = true;
     backdrop.hidden = true;
-    setActiveTab("dashboard");
+    document.body.classList.remove("record-manager-open", "operations-mode", "platform-workspace");
+    document.body.classList.add("platform-mode");
+    byId("manage-records").setAttribute("aria-expanded", "false");
+    document.querySelectorAll(".platform-sidebar .active").forEach(node => node.classList.remove("active"));
   };
 
   byId("manage-records").setAttribute("aria-expanded", "false");
@@ -1268,9 +1291,10 @@
   document.querySelectorAll("[data-open-manager]").forEach((node) => node.addEventListener("click", () => openManager(node.dataset.openManager)));
   document.querySelectorAll("[data-manager-tab]").forEach((node) => node.addEventListener("click", () => setActiveTab(node.dataset.managerTab)));
   byId("close-record-manager").addEventListener("click", closeManager);
+  document.querySelectorAll(".platform-sidebar a").forEach(node => node.addEventListener("click", closeManager));
   backdrop.addEventListener("click", closeManager);
   byId("cancel-edit-confirmation").addEventListener("click", () => resolveConfirmation(false));
   byId("confirm-edit-action").addEventListener("click", () => resolveConfirmation(true));
   confirmation.addEventListener("cancel", (event) => { event.preventDefault(); resolveConfirmation(false); });
-  openManager("dashboard");
+  closeManager();
 })();
