@@ -36,6 +36,12 @@ class Vehicle(TimestampMixin, Base):
         CheckConstraint("original_loan_amount IS NULL OR original_loan_amount >= 0", name="ck_vehicles_original_loan_amount"),
         CheckConstraint("monthly_instalment IS NULL OR monthly_instalment >= 0", name="ck_vehicles_monthly_instalment"),
         CheckConstraint("loan_term_months IS NULL OR loan_term_months > 0", name="ck_vehicles_loan_term_months"),
+        CheckConstraint("confirmed_remaining_instalments IS NULL OR confirmed_remaining_instalments >= 0", name="ck_vehicles_confirmed_remaining_instalments"),
+        CheckConstraint("confirmed_instalments_paid IS NULL OR confirmed_instalments_paid >= 0", name="ck_vehicles_confirmed_instalments_paid"),
+        CheckConstraint("confirmed_remaining_balance IS NULL OR confirmed_remaining_balance >= 0", name="ck_vehicles_confirmed_remaining_balance"),
+        CheckConstraint("tyre_cost IS NULL OR tyre_cost >= 0", name="ck_vehicles_tyre_cost"),
+        CheckConstraint("tyre_lifespan_km IS NULL OR tyre_lifespan_km > 0", name="ck_vehicles_tyre_lifespan"),
+        CheckConstraint("fuel_consumption_km_per_liter IS NULL OR fuel_consumption_km_per_liter > 0", name="ck_vehicles_fuel_consumption"),
         CheckConstraint(
             "(road_tax_amount IS NULL AND road_tax_period_months IS NULL) OR "
             "(road_tax_amount IS NOT NULL AND road_tax_period_months IN (6, 12))",
@@ -75,3 +81,9 @@ class Vehicle(TimestampMixin, Base):
     monthly_instalment: Mapped[Decimal | None] = mapped_column(Numeric(12, 2), nullable=True)
     loan_start_date: Mapped[date | None] = mapped_column(Date, nullable=True)
     loan_term_months: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    confirmed_remaining_instalments: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    confirmed_instalments_paid: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    confirmed_remaining_balance: Mapped[Decimal | None] = mapped_column(Numeric(12, 2), nullable=True)
+    tyre_cost: Mapped[Decimal | None] = mapped_column(Numeric(12, 2), nullable=True)
+    tyre_lifespan_km: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    fuel_consumption_km_per_liter: Mapped[Decimal | None] = mapped_column(Numeric(8, 3), nullable=True)

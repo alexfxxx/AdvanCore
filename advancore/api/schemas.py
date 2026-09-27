@@ -133,6 +133,7 @@ class TripAssignmentResponse(BaseModel):
 
 
 class FuelEntryResponse(BaseModel):
+    product: str = 'diesel'
     model_config = ConfigDict(from_attributes=True)
 
     id: int

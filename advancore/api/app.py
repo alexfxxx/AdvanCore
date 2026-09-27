@@ -240,6 +240,8 @@ def create_app(
     app.include_router(voice.router)
     from advancore.api.routes import supplier_credentials
     app.include_router(supplier_credentials.router)
+    from advancore.api.routes import diesel
+    app.include_router(diesel.router)
 
     app.mount(
         "/assets",
@@ -267,6 +269,10 @@ def create_app(
     @app.get('/supplier-connection', include_in_schema=False, dependencies=[Depends(orchestration.require_loopback_peer)])
     def supplier_connection_page() -> FileResponse:
         return frontend_file('supplier-connection.html')
+
+    @app.get('/diesel-import', include_in_schema=False, dependencies=[Depends(orchestration.require_loopback_peer)])
+    def diesel_import_page() -> FileResponse:
+        return frontend_file('diesel-import.html')
 
     @app.get(
         "/fuel-reports",
