@@ -114,6 +114,6 @@ class RecurringServiceStop(Base):
     )
     stop_order: Mapped[int] = mapped_column(Integer, nullable=False)
     location_name: Mapped[str] = mapped_column(String(160), nullable=False)
-    scheduled_time: Mapped[time] = mapped_column(Time, nullable=False)
+    scheduled_time: Mapped[time | None] = mapped_column(Time, nullable=True)
 
     service: Mapped["RecurringService"] = relationship("RecurringService", back_populates="stops")

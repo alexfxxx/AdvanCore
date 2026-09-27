@@ -1,7 +1,7 @@
 from datetime import date
 from decimal import Decimal
 
-from sqlalchemy import CheckConstraint, Date, ForeignKey, Numeric
+from sqlalchemy import CheckConstraint, Date, ForeignKey, Numeric, String
 from sqlalchemy.orm import Mapped, mapped_column
 
 from advancore.models.base import Base, TimestampMixin
@@ -24,6 +24,7 @@ class FuelEntry(TimestampMixin, Base):
     )
 
     id: Mapped[int] = mapped_column(primary_key=True)
+    product: Mapped[str] = mapped_column(String(16), nullable=False, default='diesel', server_default='diesel')
     vehicle_id: Mapped[int] = mapped_column(
         ForeignKey("vehicles.id", ondelete="RESTRICT"), nullable=False
     )

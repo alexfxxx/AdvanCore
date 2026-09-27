@@ -1,6 +1,7 @@
 from advancore.models.activity import ActivityLog
 from advancore.models.customer import Customer
 from advancore.models.driver import Driver
+from advancore.models.driver_vehicle_link import DriverVehicleLink
 from advancore.models.driver_employment import DriverEmploymentRecord
 from advancore.models.fuel_entry import FuelEntry
 from advancore.models.fuel_market import (
@@ -29,12 +30,17 @@ from advancore.models.local_business import (
     Subcontractor,
     SubcontractorDriver,
     SubcontractorVehicle,
+    SubcontractorPayment,
+    VehicleDocument,
 )
 
 __all__ = [
     "Base",
     "Customer",
     "Driver",
+    "DriverVehicleLink",
+    "SubcontractorPayment",
+    "VehicleDocument",
     "DriverEmploymentRecord",
     "FuelEntry",
     "FuelMarketRefreshState",
